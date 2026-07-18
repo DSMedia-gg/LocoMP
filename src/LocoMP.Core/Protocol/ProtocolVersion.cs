@@ -10,6 +10,9 @@ public static class ProtocolVersion
     /// <summary>Current wire protocol version. Bump on any incompatible protocol change.</summary>
     /// <remarks>v2 (M2): train sync — trainset transactions/snapshots, junctions, turntables,
     /// ownership, control grants (MessageType 9–28). A v1 peer cannot interpret train state, so this
-    /// is a deliberate incompatible bump (hard rule 6).</remarks>
-    public const int Current = 2;
+    /// is a deliberate incompatible bump (hard rule 6).
+    /// v3 (M3): career — JoinRequest gains the stable player key (profiles/reconnect need identity
+    /// that outlives peer ids), career messages (MessageType 29–38). The JoinRequest format change
+    /// makes this incompatible by construction.</remarks>
+    public const int Current = 3;
 }

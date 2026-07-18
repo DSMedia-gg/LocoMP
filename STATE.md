@@ -1,11 +1,59 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-18 (M2.2 extractor code half) · This is the **implementation** memory (burst cadence, D8).
+**Updated:** 2026-07-18 (M3.1 career core built) · This is the **implementation** memory (burst cadence, D8).
 The **planning corpus** lives one level up at `../` (00–09, INDEX, research/) — strategic, kept private.
 Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current milestone in `../07-ROADMAP.md`.
 
 ## Where things stand
 
+- **Milestone: M3 — Career: IN PROGRESS. M3.1 (game-free career core) BUILT + COMMITTED 2026-07-18,
+  100/100 tests, full sln 0 warnings.** What exists now, all game-free (03 §11 posture — the whole
+  economy fuzzes headless):
+  - **Protocol v3**: `JoinRequest` gains a stable **player key** (client → server ONLY — it doubles
+    as the reconnect credential, so it is never broadcast; other players are identified by session
+    peer id + display name on the wire). Career messages 29–39 appended. v2 clients get the proper
+    "protocol mismatch" reject (defensive tail read in HandleJoin).
+  - **`Career/` domain**: `CareerRegistry` (ALL career rules in one place, mirroring
+    TrainsetRegistry's role) + `EconomyLedger` (integer cents; money ONLY minted [payouts, starting
+    grants] or burned [fees]; `ConservationHolds` = the oracle: sum(balances) == minted − burned,
+    exact) + `ProgressionPolicy` (D3/O2: PerPlayer default / SharedCareer preset — every wallet and
+    license touch routes through it; shared account is `@shared`, and keys starting with `@` are
+    rejected at the door) + deterministic job generation (**hand-rolled xorshift32, NOT
+    System.Random — its algorithm differs between net48/Mono and net8**, which would silently break
+    same-seed determinism between host-embedded and dedicated) driven by host-supplied
+    `CareerConfig` data (stations + `JobTypeSpec`s + license prices; empty config = empty board,
+    M3.3 feeds the real map). Claims: exclusive, TTL'd, license-gated at claim time, per-player
+    limit; task steps strictly sequential; final step mints the payout and the job leaves the board.
+  - **Session wiring**: `ServerCareer`/`ClientCareer` beside the trains modules; career burst after
+    the trains burst; `NetServer.Poll` now also `Career.Tick()`s (TTL/grace expiry + deterministic
+    board refill). Rejections go back to the requester as `CareerRejected` ("missing license: X" is
+    UX, not just a host log). **Reconnect grace (10 min default)**: claims are held on disconnect
+    and rebind to the new peer id on rejoin (JobState re-broadcast on BOTH leave and rejoin — a
+    bug the session tests caught: others' boards showed the dead peer id).
+  - **Persistence v1**: `SaveCodec` ("LMPS" magic + schema version, hand-rolled over
+    PacketWriter/Reader like LMPW, reusing the wire codecs so store and wire can't drift).
+    **Deliberate deviation from 03 §7's "MessagePack" sketch — flag for Cody**: zero new deps in
+    the payload, proven infra; MessagePack stays reserved for bulk-channel join snapshots if sizes
+    demand it later. `FileSaveStorage` (atomic temp+rename, rotating .1..N backups), `Autosaver`
+    (clock-driven, both frontends), `NetServer.CaptureSave()` / ctor-restore. **Deadlines persist
+    as REMAINING ms** (monotonic clock restarts with the process); players online at save time get
+    a fresh grace hold on restore (a restart IS their disconnect). Restore refuses a preset
+    mismatch loudly (wallet migration between presets is undefined). Trains half: defs (restored
+    PARKED, ids/epochs preserved), **last admitted snapshot per set** (also now sent reliable in
+    the join burst as a position baseline — restored/parked consists were previously nowhere until
+    the owner streamed), junctions, turntables, id counters.
+  - **Tests 70 → 100**: registry rules (grants/determinism/gates/order/TTL/grace, both presets),
+    session e2e (burst, claim mirror w/ peer identity, full loop pays only the claimant,
+    shared-wallet broadcast, rejection UX, duplicate/invalid key rejects, **rejoin-mid-job restores
+    exactly and continues**, grace expiry releases for everyone, hard-disconnect grace), persistence
+    (codec round-trip, foreign-bytes/future-schema rejects, rotation, autosaver, **cold restart
+    resumes world + a rejoin finishes a job across it**, preset-mismatch throw), and a **2,000-op
+    career fuzz × both presets with the conservation oracle asserted after every op and a
+    save/restore round-trip every 250 ops** (persistence proven under arbitrary mid-flight state).
+- **M3 remaining**: M3.2 — late-join phased snapshot + join queue (03 §7; current join burst is
+  fine at this scale, phases/compression when the world grows) · M3.3 — Shim career integration
+  (the game half: real station/job/license data into `CareerConfig`, job generation interception
+  [02 verification item 4], booklet/board UI, money/license application in-game) · M3 exit run.
 - **Milestone:** **M2 — Trains: COMPLETE 2026-07-18** (one-PC exit wording; friend session upgrades
   to official). M2.1 core + M2.2 extractor + M2.3 Shim integration all verified in-game; the exit
   scenario (couple → merge → uncouple → derail → rerail, no snap-back) passed on run №5 with every
@@ -159,6 +207,20 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
 - None. M2.1 verified headless; M2.2/M2.3 need the game (Cody at the PC), M2 exit ideally a friend session.
 
 ## Session log
+- **2026-07-18** — **M3.1 built (game-free career core), committed.** Protocol v3 (stable player
+  key in the handshake — reconnect credential, never broadcast; career messages 29–39),
+  `CareerRegistry`/`EconomyLedger`/`ProgressionPolicy` (both D3 presets behind one switch; exact
+  integer-cents conservation), deterministic server-side job board (xorshift32 — System.Random
+  differs net48 vs net8), claim TTL + license gates + claim limits + strict task order, reconnect
+  grace w/ exact restore, persistence v1 (LMPS store — deliberate hand-rolled deviation from 03
+  §7's MessagePack sketch, FLAGGED for Cody; atomic write + rotation; cold restart resumes world
+  incl. parked consists w/ position baselines; deadlines saved as remaining-ms). ServerTrains now
+  keeps the last admitted snapshot per set (join-burst baseline + save). Session-test catch:
+  JobState must re-broadcast on claimant leave AND rejoin or others' boards hold a dead peer id.
+  **Tests 70 → 100** (registry, session e2e incl. rejoin-mid-job, persistence incl. cold-restart
+  e2e, 2,000-op × 2-preset conservation fuzz with mid-flight save/restore). Stable ×3, full sln
+  0 warnings. Next: M3.2 (join queue/phases — may defer), M3.3 Shim career integration (needs
+  game + the 02 item-4 job-generation recon).
 - **2026-07-18** — **M2 EXIT PASSED (run №5) — MILESTONE 2 CLOSED.** Couple→merge (set 20)→split,
   derail report + rerail request, grants, ghost — all with log-line evidence, zero exceptions.
   5 in-game runs today flushed 8 real bugs (worth it — 3 were world-lifecycle classes M3 needs).

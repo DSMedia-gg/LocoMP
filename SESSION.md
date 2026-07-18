@@ -5,6 +5,52 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-18 — M3.1 BUILT: game-free career core — jobs, economy, policy layer, persistence v1 💰
+
+The M2 pattern repeats: the milestone's hard logic lands game-free first, fuzzed headless, before
+any Shim work. Everything below runs in `pr.yml` with no game install.
+
+**Protocol v3.** The handshake now carries a stable **player key** — profiles, wallets, and
+reconnect grace need identity that outlives peer ids. Design rule worth remembering: the key
+travels client → server ONLY. Within the grace window it IS the reclaim credential, so broadcasting
+it would hand out impersonation; other players only ever see session peer ids + display names
+(JobState re-broadcasts on claimant leave/rejoin keep those bindings fresh — a real bug the session
+tests caught). Career messages 29–39; v2 clients still get a proper "protocol mismatch" reject.
+
+**Career core (02 §4/§6).** `CareerRegistry` holds every rule (mirror of TrainsetRegistry's
+"epochs live here and only here" discipline): exclusive TTL'd claims, license gates checked
+server-side at claim time, per-player claim limits, strictly-sequential task reports, payout minted
+on the final step. `ProgressionPolicy` makes D3 real — per-player (default) vs shared career is one
+routing switch consulted by every wallet/license touch, not scattered ifs. `EconomyLedger` keeps
+integer cents with mint/burn as the ONLY money paths, so the M3 economy invariant is exact
+arithmetic: sum(balances) == minted − burned, asserted after every op in a 2,000-op fuzz in both
+presets. Deterministic generation runs on hand-rolled xorshift32 — **System.Random's algorithm
+differs between net48/Mono and net8**, which would have silently broken same-seed boards between
+the host-embedded server and the dedicated one.
+
+**Reconnect grace (07 §M3).** Disconnect starts a 10-min hold; claims stay bound to the KEY, so a
+rejoin restores claim + progress + wallet + licenses exactly and the haul continues mid-job (tested
+end-to-end). Grace lapse returns the jobs to the board for everyone.
+
+**Persistence v1 (03 §7).** "LMPS" versioned binary store, hand-rolled over PacketWriter/Reader and
+REUSING the wire codecs (store and wire can't drift). **Deliberate deviation, flagged for Cody:**
+03 §7 sketched MessagePack; zero-new-deps + proven infra won, MessagePack stays reserved for the
+bulk join-snapshot channel if it's ever needed. Atomic temp+rename writes with a rotating backup
+chain; interval `Autosaver` shared by both frontends. Subtleties banked: deadlines persist as
+REMAINING milliseconds (the monotonic clock restarts with the process); players online at save time
+get a fresh grace hold on restore (a restart IS their disconnect); restore refuses a preset
+mismatch loudly. The trains half saves defs + junctions + turntables + id counters AND the last
+admitted snapshot per set — which now also rides the join burst reliable, so parked/restored
+consists have positions before any owner streams (they previously didn't exist anywhere until then).
+Cold-restart e2e test: build world → save → new server from bytes → rejoin → finish the job.
+
+**100/100 tests (was 70), stable ×3, full sln 0 warnings, committed.** Next: M3.3 Shim career
+integration needs the game — real stations/licenses into `CareerConfig`, and the 02 verification
+item 4 recon (how cleanly DV's job generation can be intercepted). M3.2 (phased join snapshot +
+queue) can ride behind it; the current burst is fine at friend-session scale.
+
+---
+
 ## 2026-07-18 — M2 EXIT RUN №5: ALL PASSED — MILESTONE 2 CLOSED (one-PC wording) 🚂
 
 Every criterion has its log line, zero LocoMP exceptions:

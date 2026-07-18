@@ -21,15 +21,18 @@ public sealed class NetClient : IDisposable
     private readonly IClock _clock;
     private readonly Dictionary<int, PlayerState> _players = new();
 
-    public NetClient(ITransport transport, HandshakeRequest identity, string displayName, IClock clock, string? password = null)
+    public NetClient(ITransport transport, HandshakeRequest identity, string displayName, IClock clock,
+        string? password = null, string? playerKey = null)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _identity = identity ?? throw new ArgumentNullException(nameof(identity));
         _displayName = displayName ?? throw new ArgumentNullException(nameof(displayName));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _password = password ?? string.Empty;
+        PlayerKey = playerKey ?? Guid.NewGuid().ToString("N");
 
         Trains = new ClientTrains(_transport, () => Joined);
+        Career = new ClientCareer(_transport, () => Joined);
 
         _transport.Received += OnReceived;
         _transport.PeerConnected += OnConnected;
@@ -38,6 +41,16 @@ public sealed class NetClient : IDisposable
 
     /// <summary>The train subsystem (M2): the mirrored trainset world + propose/stream calls.</summary>
     public ClientTrains Trains { get; }
+
+    /// <summary>The career subsystem (M3): the mirrored board/wallet/licenses + propose calls.</summary>
+    public ClientCareer Career { get; }
+
+    /// <summary>
+    /// This player's stable identity (M3): the server keys their profile, wallet, and reconnect
+    /// grace on it, so the frontend should PERSIST it and pass the same key every session — a
+    /// fresh default (random) key is a fresh career. Never shown to other players.
+    /// </summary>
+    public string PlayerKey { get; }
 
     /// <summary>This client's server-assigned id once admitted; null until JoinAccepted arrives.</summary>
     public int? LocalId { get; private set; }
@@ -93,6 +106,7 @@ public sealed class NetClient : IDisposable
             .WriteString(_identity.ModListHash)
             .WriteString(_password)
             .WriteString(_displayName)
+            .WriteString(PlayerKey)
             .ToArray();
         _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
     }
@@ -102,6 +116,7 @@ public sealed class NetClient : IDisposable
         LocalId = null;
         _players.Clear();
         Trains.Reset();
+        Career.Reset();
     }
 
     private void OnReceived(int fromPeer, byte[] payload)
@@ -121,7 +136,9 @@ public sealed class NetClient : IDisposable
                 case MessageType.PlayerLeft: HandlePlayerLeft(r); break;
                 case MessageType.PlayerPose: HandlePlayerPose(r); break;
                 case MessageType.TimeSync: HandleTimeSync(r); break;
-                default: Trains.TryHandle(type, r); break;
+                default:
+                    if (!Trains.TryHandle(type, r)) Career.TryHandle(type, r);
+                    break;
             }
         }
         catch (Exception)

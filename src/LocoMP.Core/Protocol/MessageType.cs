@@ -94,4 +94,43 @@ public enum MessageType : byte
 
     /// <summary>grant holder → server → sim owner: one control moved (controlId, value).</summary>
     ControlInput = 28,
+
+    // ── M3: career (02 §4/§6, 03 §3 state authority). Everything economic is server-computed —
+    // clients only ever propose (claim/report/abandon/purchase); wallets, payouts, and fees are
+    // committed by the server and broadcast as state. All reliable-ordered. ──
+
+    /// <summary>server → client: your career (policy preset, wallet, licenses, active claims).
+    /// Sent in the join burst and again on rejoin — this is what makes reconnect restore exact.</summary>
+    CareerState = 29,
+
+    /// <summary>server → clients: a job was added to the board (full definition).</summary>
+    JobCreated = 30,
+
+    /// <summary>server → clients: a job's lifecycle changed (claimed/progressed/completed/…).</summary>
+    JobState = 31,
+
+    /// <summary>client → server: claim an available job (license + claim-limit gated).</summary>
+    JobClaimRequest = 32,
+
+    /// <summary>claimant → server: the next task step is done (server validates it is in order).</summary>
+    JobTaskReport = 33,
+
+    /// <summary>claimant → server: give the job up; it returns to the board.</summary>
+    JobAbandonRequest = 34,
+
+    /// <summary>server → client(s): a wallet balance changed (scope: yours or the shared one).</summary>
+    WalletState = 35,
+
+    /// <summary>client → server: buy a license (fee charged through the policy layer).</summary>
+    LicensePurchaseRequest = 36,
+
+    /// <summary>server → client(s): a license was granted (scope: yours or the shared set).</summary>
+    LicenseState = 37,
+
+    /// <summary>server → client(s): one committed money movement, for UI/log (payout, fee, …).</summary>
+    EconomyEvent = 38,
+
+    /// <summary>server → requester: a career proposal was refused, with the exact reason (unlike
+    /// train proposals, a refusal here is first-class UX — "missing license: hazmat").</summary>
+    CareerRejected = 39,
 }

@@ -10,6 +10,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- M3 career core (game-free): server-authoritative jobs and economy behind the **progression policy
+  layer** — per-player careers (default) and shared "classic co-op" ship as one switch, routing every
+  payout, fee, and license to the right wallet/scope. Jobs are generated deterministically
+  server-side (same seed ⇒ same board on any runtime) and claimed exclusively with a TTL, license
+  gates, and a per-player claim limit; task steps are validated strictly in order and the final
+  delivery mints the payout into the policy-routed wallet — money is only ever minted (payouts,
+  starting grants) or burned (fees), and the test suite asserts exact conservation after every
+  operation, including a 2,000-op fuzz in both presets. Network protocol is now v3: the handshake
+  carries a stable per-player key (the profile/reconnect identity — never broadcast to other
+  players), and career state syncs over ten new message types.
+- Reconnect grace: a disconnected player's claims are held for 10 minutes (configurable) and restore
+  exactly — claim, task progress, wallet, licenses — when the same player key returns; the hold
+  lapsing returns the jobs to the board for everyone.
+- Persistence v1: a versioned binary server store (schema-checked, bounds-checked) capturing
+  profiles, wallets, licenses, the job board with remaining claim time, consists with their last
+  known spline positions, junctions, and turntables. Saves are written atomically with a rotating
+  backup chain, an interval autosaver serves both frontends, and a cold server restart resumes the
+  world: consists come back parked at their saved positions and a rejoin continues a claimed job
+  mid-haul across the restart.
 - M2 train-sync core (game-free): consist replication built on server-committed **trainset
   transactions with epochs** — couple/uncouple/derail/rerail all retire or re-stamp the trainset, and
   any snapshot carrying a stale (id, epoch) is discarded by construction, never applied. Includes

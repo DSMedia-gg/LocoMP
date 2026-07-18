@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LocoMP.Core.Net;
+using LocoMP.Core.Persistence;
 using LocoMP.Core.Protocol;
 using LocoMP.Core.Trains;
 
@@ -22,6 +23,10 @@ public sealed class ServerTrains
     private readonly Dictionary<uint, byte> _junctions = new();
     private readonly Dictionary<uint, float> _turntables = new();
     private readonly Dictionary<int, int> _grants = new(); // carId → holding playerId
+
+    // Last ADMITTED snapshot per trainset — always epoch-current by construction (admission checks
+    // the epoch and every transaction prunes). Feeds the join-burst baseline and the world save.
+    private readonly Dictionary<int, TrainsetSnapshot> _latest = new();
 
     internal ServerTrains(ITransport transport, IClock clock, Func<IEnumerable<int>> connectedIds)
     {
@@ -76,6 +81,10 @@ public sealed class ServerTrains
     {
         foreach (TrainsetDef def in Registry.Sets.Values)
             _transport.Send(peerId, BuildCreate(0, def), DeliveryMethod.ReliableOrdered);
+        // Baseline positions (reliable, AFTER the defs): without these a newcomer sees a parked or
+        // restored consist nowhere until its owner's next stream — restored worlds have no owner.
+        foreach (TrainsetSnapshot snap in _latest.Values)
+            _transport.Send(peerId, BuildSnapshot(snap), DeliveryMethod.ReliableOrdered);
         foreach (KeyValuePair<uint, byte> j in _junctions)
             _transport.Send(peerId, BuildJunctionState(j.Key, j.Value), DeliveryMethod.ReliableOrdered);
         foreach (KeyValuePair<uint, float> t in _turntables)
@@ -138,6 +147,7 @@ public sealed class ServerTrains
             StaleSnapshotsDropped++;
             return;
         }
+        _latest[snap.TrainsetId] = snap; // join-burst baseline + persisted world position
         // Valid and current: relay the original bytes untouched (the sender is implicit — the
         // trainset's owner is authoritative, so recipients don't need a sender id).
         foreach (int id in _connectedIds())
@@ -297,9 +307,50 @@ public sealed class ServerTrains
 
     private void BroadcastTransaction(TrainsetTransaction txn)
     {
+        // Every transaction makes the stored baselines stale by construction (retired ids are gone;
+        // products carry a bumped epoch) — prune so the join burst never replays a dead position.
+        foreach (int id in txn.RetiredIds) _latest.Remove(id);
+        foreach (TrainsetDef def in txn.Products) _latest.Remove(def.Id);
+
         var w = new PacketWriter(128).WriteByte((byte)MessageType.TrainsetTransaction);
         TrainCodec.WriteTransaction(w, txn);
         Broadcast(w.ToArray(), DeliveryMethod.ReliableOrdered);
+    }
+
+    // ── persistence (v1) ──
+
+    /// <summary>Snapshot the world half of the save: defs (owners as-is; restore parks them),
+    /// baselines, junctions, turntables, id counters. Grants are session state and are not saved.</summary>
+    internal TrainsSaveData Capture()
+    {
+        var save = new TrainsSaveData();
+        (List<TrainsetDef> sets, int nextTrainsetId, int nextCarId) = Registry.CaptureState();
+        save.NextTrainsetId = nextTrainsetId;
+        save.NextCarId = nextCarId;
+        save.Sets.AddRange(sets);
+        save.LatestSnapshots.AddRange(_latest.Values);
+        foreach (KeyValuePair<uint, byte> j in _junctions) save.Junctions[j.Key] = j.Value;
+        foreach (KeyValuePair<uint, float> t in _turntables) save.Turntables[t.Key] = t.Value;
+        return save;
+    }
+
+    /// <summary>Rebuild the world from a save (cold restart). Runs before any peer connects.</summary>
+    internal void Restore(TrainsSaveData save)
+    {
+        Registry.RestoreState(save.Sets, save.NextTrainsetId, save.NextCarId);
+        _latest.Clear();
+        foreach (TrainsetSnapshot snap in save.LatestSnapshots) _latest[snap.TrainsetId] = snap;
+        _junctions.Clear();
+        foreach (KeyValuePair<uint, byte> j in save.Junctions) _junctions[j.Key] = j.Value;
+        _turntables.Clear();
+        foreach (KeyValuePair<uint, float> t in save.Turntables) _turntables[t.Key] = t.Value;
+    }
+
+    private static byte[] BuildSnapshot(TrainsetSnapshot snap)
+    {
+        var w = new PacketWriter(64).WriteByte((byte)MessageType.TrainsetSnapshot);
+        TrainCodec.WriteSnapshot(w, snap);
+        return w.ToArray();
     }
 
     private static byte[] BuildOwner(int trainsetId, int ownerId) =>
