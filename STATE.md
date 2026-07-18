@@ -152,8 +152,8 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
 ## Push state
 - **All M2.1 work PUSHED 2026-07-18** (`ce41556..cc615d2`: train core `1bc5a96`, UDP integration test `1ece517`, tag-shadow fix + banked findings `cc615d2`; Cody's go after the in-game regression passed). Post-push CI as expected: `build.yml` red at the Steam step (accepted until contributors).
 - **M2.2 PUSHED 2026-07-18** (`4d8e33c..9614a45`, Cody's explicit go). Expect `build.yml` red at the Steam step as usual (accepted until contributors).
-- **M2.3 work UNCOMMITTED** (commit after the M2 exit run): TrainSync/TrackIndexMap/JunctionHook/GhostConsists (+WorldStateSpike deleted), TopologyWalker, ConsistDriver + bot flags, build gate, Shim csproj publicizer fix, targets/.EXAMPLE + CI ref additions.
-- Staged payload in the game's `Mods/LocoMP/` = current (M2.3 full train seam). Extraction + name tag verified in earlier runs 2026-07-18 — no leftovers besides the M2 exit itself.
+- **M2.3 COMMITTED locally as `583992b` (unpushed — push needs Cody's explicit go, hard rule 7).** All M2 exit-run fixes included.
+- Staged payload in the game's `Mods/LocoMP/` = current (18:21 build + exit-run fixes, the exact build that passed run №5).
 
 ## Blockers
 - None. M2.1 verified headless; M2.2/M2.3 need the game (Cody at the PC), M2 exit ideally a friend session.
