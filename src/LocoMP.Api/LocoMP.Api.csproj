@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Public Mod API facade (04) → ships as NuGet 'LocoMP.API'. DTOs only: a game type must NEVER
+       cross this boundary (hard rule 3). The stable surface is designed at M6; this is a placeholder. -->
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net48</TargetFrameworks>
+    <AssemblyName>LocoMP.Api</AssemblyName>
+    <RootNamespace>LocoMP.Api</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LocoMP.Core\LocoMP.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,126 @@
+name: Build (full)
+
+# Full solution build INCLUDING the game-touching Shim + mod. Needs the CI Steam account (owns only
+# Derail Valley) to fetch game assemblies via DepotDownloader, plus the UMM distribution for the
+# UnityModManager + Harmony reference DLLs (NOT in the Steam depot). See 05 §4.
+#
+# Requires: secrets STEAM_USERNAME / STEAM_PASSWORD / STEAM_SHARED_SECRET
+#           repo variable UMM_ZIP_URL (a direct link to a UnityModManager release zip)
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DV_APP: "588030"
+  DV_DEPOT: "588031"
+
+jobs:
+  full-build:
+    name: DepotDownloader + full build + API-compat
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Cache NuGet
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('**/Directory.Packages.props') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Read pinned depot manifest
+        id: pin
+        run: echo "manifest=$(jq -r '.manifest' .ci/depot.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Derail Valley managed assemblies
+        uses: actions/cache@v4
+        with:
+          path: game
+          key: dv-${{ env.DV_DEPOT }}-${{ steps.pin.outputs.manifest }}-${{ hashFiles('.ci/depot-filelist.txt') }}
+
+      - name: Install DepotDownloader
+        run: dotnet tool install --global DepotDownloader
+
+      - name: Generate Steam TOTP
+        id: totp
+        uses: CyberAndrii/steam-totp@v1
+        with:
+          shared_secret: ${{ secrets.STEAM_SHARED_SECRET }}
+
+      - name: Download game assemblies (Managed DLLs only)
+        env:
+          STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+          STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
+          STEAM_TOTP: ${{ steps.totp.outputs.code }}
+          MANIFEST: ${{ steps.pin.outputs.manifest }}
+        run: |
+          set -euo pipefail
+          if [ -f game/DerailValley_Data/Managed/Assembly-CSharp.dll ]; then
+            echo "Depot restored from cache — skipping download."
+            exit 0
+          fi
+          args=(-app "$DV_APP" -depot "$DV_DEPOT" -dir game \
+                -filelist .ci/depot-filelist.txt \
+                -username "$STEAM_USERNAME" -password "$STEAM_PASSWORD")
+          # Reproducible when a real manifest is pinned; latest during first bring-up.
+          if [ "$MANIFEST" != "REPLACE_WITH_PINNED_MANIFEST" ]; then
+            args+=(-manifest "$MANIFEST")
+          fi
+          # DepotDownloader reads the Steam Guard code from stdin.
+          echo "$STEAM_TOTP" | DepotDownloader "${args[@]}"
+
+      - name: Fetch UnityModManager + Harmony reference DLLs
+        env:
+          UMM_ZIP_URL: ${{ vars.UMM_ZIP_URL }}
+        run: |
+          set -euo pipefail
+          test -n "$UMM_ZIP_URL" || { echo "::error::set the UMM_ZIP_URL repo variable (05 §4)"; exit 1; }
+          curl -fsSL "$UMM_ZIP_URL" -o umm.zip
+          unzip -oq umm.zip -d umm
+          dest="game/DerailValley_Data/Managed/UnityModManager"
+          mkdir -p "$dest"
+          cp "$(find umm -name UnityModManager.dll | head -1)" "$dest/"
+          cp "$(find umm -name 0Harmony.dll | head -1)" "$dest/"
+
+      - name: Point the build at the downloaded assemblies
+        run: |
+          cat > Directory.Build.targets <<'EOF'
+          <Project>
+            <PropertyGroup>
+              <DvManaged>$(MSBuildThisFileDirectory)game/DerailValley_Data/Managed</DvManaged>
+              <DvUmm>$(DvManaged)/UnityModManager</DvUmm>
+            </PropertyGroup>
+            <ItemGroup Condition="'$(LocoMpGameProject)' == 'true'">
+              <Reference Include="UnityModManager"><HintPath>$(DvUmm)/UnityModManager.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="0Harmony"><HintPath>$(DvUmm)/0Harmony.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="Assembly-CSharp"><HintPath>$(DvManaged)/Assembly-CSharp.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="UnityEngine"><HintPath>$(DvManaged)/UnityEngine.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="UnityEngine.CoreModule"><HintPath>$(DvManaged)/UnityEngine.CoreModule.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="DV.Simulation"><HintPath>$(DvManaged)/DV.Simulation.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="DV.Common"><HintPath>$(DvManaged)/DV.Common.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="DV.RailTrack"><HintPath>$(DvManaged)/DV.RailTrack.dll</HintPath><Private>false</Private></Reference>
+            </ItemGroup>
+          </Project>
+          EOF
+
+      - name: Build full solution (incl. Shim + mod)
+        run: dotnet build LocoMP.sln -c Release
+
+      - name: API-compat check (B100 early-warning)
+        run: |
+          # TODO (05 §4, WalkerSim2 model): diff the game-facing member list the Shim depends on against
+          # the freshly downloaded assemblies; fail naming exactly which members changed. Lands with the
+          # Shim's real patch targets (post-M0). For now the full build above is the compat smoke test.
+          echo "API-compat check: placeholder — see 05 §4."

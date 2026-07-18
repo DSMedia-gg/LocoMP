@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Transport adapters implementing LocoMP.Core.Net.ITransport. This is the ONLY project that
+       references a networking library. Multi-targets to load in Unity Mono (net48) and the server. -->
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net48</TargetFrameworks>
+    <AssemblyName>LocoMP.Transport</AssemblyName>
+    <RootNamespace>LocoMP.Transport</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LiteNetLib" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LocoMP.Core\LocoMP.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

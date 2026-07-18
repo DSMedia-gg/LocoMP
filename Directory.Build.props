@@ -1,0 +1,34 @@
+<Project>
+
+  <!-- ============================================================================================
+       THE version — single source of truth (05 §2). CI stamps this into assembly versions,
+       Info.json, repository.json, the git tag, the zip name, and the Nexus file version.
+       Never hand-edit versions anywhere else.
+       The network PROTOCOL version is deliberately separate — see LocoMP.Core/Protocol (03 §10).
+       ============================================================================================ -->
+  <PropertyGroup Label="Version">
+    <Version>0.0.2</Version>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Identity">
+    <Product>LocoMP</Product>
+    <Company>DSMedia</Company>
+    <Authors>DSMedia (Cody Moran)</Authors>
+    <Copyright>Copyright (c) 2026 DSMedia (Cody Moran)</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/DSMedia-gg/LocoMP</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://www.nexusmods.com/derailvalley/mods/1598</PackageProjectUrl>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Build conventions">
+    <LangVersion>10</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <!-- Game-touching projects opt in explicitly; default is game-free (hard rule 3). -->
+    <LocoMpGameProject>false</LocoMpGameProject>
+  </PropertyGroup>
+
+</Project>

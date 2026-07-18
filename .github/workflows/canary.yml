@@ -1,0 +1,99 @@
+name: Canary (game-build watcher)
+
+# The B100 early-warning system (05 §4/§8). Nightly: read Derail Valley's current buildid from Steam;
+# on first run, RECORD it (M0 exit criterion); on a change, open a PR bumping the pinned manifest and
+# post an itemized breakage heads-up. The game is frozen on B99.7 (~into 2027), so this mostly idles —
+# which is exactly the point: it fires the drill the moment B100 lands.
+on:
+  schedule:
+    - cron: '0 15 * * *'   # 15:00 UTC nightly (~01:00 AEST)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  DV_APP: "588030"
+  DV_DEPOT: "588031"
+
+jobs:
+  watch:
+    name: Check game buildid
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install steamcmd
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends lib32gcc-s1 || true
+          mkdir -p steamcmd && cd steamcmd
+          curl -fsSL "https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz" | tar zxf -
+
+      - name: Read current buildid (public branch)
+        id: steam
+        run: |
+          set -euo pipefail
+          # Anonymous login can read public app info for most apps; switch to the CI account if DV needs it.
+          ./steamcmd/steamcmd.sh +login anonymous +app_info_update 1 +app_info_print "$DV_APP" +quit > appinfo.txt || true
+          # Extract the public-branch buildid (best-effort VDF scrape).
+          buildid="$(awk '/"branches"/{b=1} b&&/"public"/{p=1} p&&/"buildid"/{gsub(/[^0-9]/,"",$2); print $2; exit}' appinfo.txt)"
+          echo "buildid=$buildid" >> "$GITHUB_OUTPUT"
+          echo "Current DV buildid: ${buildid:-<none>}"
+
+      - name: Record or compare
+        id: cmp
+        env:
+          BUILDID: ${{ steps.steam.outputs.buildid }}
+        run: |
+          set -euo pipefail
+          test -n "$BUILDID" || { echo "::warning::could not read buildid; skipping."; exit 0; }
+          if [ ! -f .ci/dv-buildid.txt ]; then
+            echo "$BUILDID" > .ci/dv-buildid.txt
+            git config user.name "locomp-canary[bot]"
+            git config user.email "canary-bot@users.noreply.github.com"
+            git add .ci/dv-buildid.txt
+            git commit -s -m "ci: record initial DV buildid $BUILDID"
+            git push origin HEAD:main
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Recorded initial buildid $BUILDID."
+            exit 0
+          fi
+          stored="$(cat .ci/dv-buildid.txt)"
+          if [ "$stored" = "$BUILDID" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No change ($stored)."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "new=$BUILDID" >> "$GITHUB_OUTPUT"
+            echo "old=$stored" >> "$GITHUB_OUTPUT"
+            echo "$BUILDID" > .ci/dv-buildid.txt
+          fi
+
+      - name: Open manifest-bump PR on change
+        if: steps.cmp.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: canary/dv-build-${{ steps.cmp.outputs.new }}
+          commit-message: "ci: DV build changed ${{ steps.cmp.outputs.old }} -> ${{ steps.cmp.outputs.new }}"
+          signoff: true
+          title: "Derail Valley build changed: ${{ steps.cmp.outputs.old }} → ${{ steps.cmp.outputs.new }}"
+          body: |
+            The canary detected a new Derail Valley build.
+
+            - Old buildid: `${{ steps.cmp.outputs.old }}`
+            - New buildid: `${{ steps.cmp.outputs.new }}`
+
+            Next steps (05 §8 runbook): update the pinned manifest in `.ci/depot.json`, let `build.yml`
+            run the API-compat check, and triage any Shim breakage. Game-free tests stay green throughout.
+
+      - name: Discord heads-up on change
+        if: steps.cmp.outputs.changed == 'true' && env.DISCORD_WEBHOOK != ''
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          curl -fsSL -H "Content-Type: application/json" \
+            -d "{\"content\":\"🚂 LocoMP canary: Derail Valley build changed ${{ steps.cmp.outputs.old }} → ${{ steps.cmp.outputs.new }}. B100 runbook (05 §8).\"}" \
+            "$DISCORD_WEBHOOK"

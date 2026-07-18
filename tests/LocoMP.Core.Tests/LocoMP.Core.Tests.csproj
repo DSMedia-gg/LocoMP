@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Game-free test harness (03 §11, hard rule 8). Runs on the .NET SDK on any OS — this is why
+       pr.yml never needs Steam or a game install. Consumes Core/Transport via netstandard2.0. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>LocoMP.Core.Tests</AssemblyName>
+    <RootNamespace>LocoMP.Core.Tests</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\LocoMP.Core\LocoMP.Core.csproj" />
+    <ProjectReference Include="..\..\src\LocoMP.Transport\LocoMP.Transport.csproj" />
+    <ProjectReference Include="..\..\src\LocoMP.Api\LocoMP.Api.csproj" />
+  </ItemGroup>
+
+</Project>
