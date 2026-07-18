@@ -5,6 +5,27 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-18 — M2.1 in-game regression + UDP proof + push
+
+**Goal:** verify M2.1 in a live session (regression: the v2 protocol + new train plumbing must not
+destabilize presence), close the real-UDP gap for train flows, then push.
+
+**Done:**
+- `TrainUdpIntegrationTests`: register → relay → couple → stale-stamp drop → re-baseline over REAL
+  localhost UDP (**60/60**). Stale stamp fired only after merge convergence — transactions and
+  snapshots ride different UDP channels with no cross-channel ordering; the in-flight race stays the
+  Loopback fuzz's job.
+- In-game run (Cody): mod loaded on protocol v2, hosted on 8877, bot joined/left twice over UDP,
+  avatars + tags fine, `Player.log` exception-free.
+- **Junction double-fire CONFIRMED** by a controlled single throw: player throw = 2 hook fires (the
+  two `Switch` overloads chain); game-internal sets hit only one. M2.3: hook the inner overload only.
+- Name-tag shadow still read as doubled text up close (0.048 offset + 0.03 depth parallax) →
+  tightened to 0.012/0.004. Visual re-check on the next game run.
+
+**Next:** M2.2 world extractor. See `STATE.md` → Next.
+
+---
+
 ## 2026-07-18 — M2.1 (game-free train core) — the hard problem, fuzz-proven
 
 **Goal:** implement 03 §4 (consist transactions with epochs) headless, plus the world-topology

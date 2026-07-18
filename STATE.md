@@ -37,11 +37,12 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
   streamed w/ positions, 21 junction throws captured across 2 junctions, clean toggle off→on, no exceptions.
   The one unmet exit — cloud CI (build.yml/canary buildid) — is **deferred by Cody's decision**: cloud CI only
   matters once there are contributors; local build is the dev rig, and a red build.yml on push is acceptable.
-- **M1 design note banked from the run:** each junction id logged 3–4× consecutively — but that's mostly Cody
-  throwing each switch several times by hand, so the log does NOT prove the hook multi-fires per throw. Open
-  question for M1: do the 2 `Switch` overloads double-emit on a single throw? Settle with a controlled
-  single-throw test. Debounce is good practice regardless, but must coalesce only true duplicates (same
-  resulting junction state within a tiny window) — **never rate-limit distinct real throws** (Cody, 2026-07-18).
+- **Junction double-fire: CONFIRMED 2026-07-18** (controlled single throw during the M2.1 regression run:
+  one player throw → the same junction id logged exactly 2×, i.e. the two patched `Switch` overloads chain).
+  Game-internal junction sets earlier in the same log hit only ONE overload (single lines). **M2.3: hook the
+  inner overload only, or dedupe same-frame repeats in the Shim**; the server-side coalesce (same-resulting-
+  state only) already makes the wire safe either way — and it never rate-limits distinct real throws
+  (Cody's constraint, honored).
 - **CI observed post-push:** `pr.yml` is PR-only (correct — didn't run on push). `build.yml` (full) fires on
   push and **fails at the Steam download** — expected, no secrets yet (that's exit 1 below). `release.yml`
   startup-failed on the first push (a YAML plain-scalar `": "` bug in the final TODO step) → fixed in `16d2d37`
@@ -77,8 +78,8 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
 3. **M2.3 — Shim train integration (in-game half):** capture owned consist bogies in spline space; apply
    remote snapshots with interpolation (12/s lerp precedent from avatars); Harmony hooks: coupler contact →
    `ProposeCouple` (translate physical coupler → trainset-end form), uncouple → `ProposeUncouple`, derail →
-   `ReportDerail`; junction hook → `ThrowJunction` — settle the M0 double-emit question with one controlled
-   throw (server coalesce makes it harmless either way); grants on cab entry/exit; **supported-build gate**:
+   `ReportDerail`; junction hook → `ThrowJunction` — **hook the inner `Switch` overload only (double-fire
+   confirmed, see note above)**; grants on cab entry/exit; **supported-build gate**:
    handshake sends runtime `Application.version` (`99-build2702`), mod refuses unknown builds with a friendly
    message instead of the hard-coded "B99.7". Bot: `--consist` mode driving a synthetic consist along
    extracted topology = the one-PC "ghost train" rig.
@@ -95,6 +96,14 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
 - None. M2.1 verified headless; M2.2/M2.3 need the game (Cody at the PC), M2 exit ideally a friend session.
 
 ## Session log
+- **2026-07-18** — **M2.1 in-game regression PASSED + pushed.** Fresh payload staged; Cody hosted on the
+  v2 protocol, bot joined/left twice over UDP, avatars clean, zero exceptions in Player.log. Added
+  `TrainUdpIntegrationTests` (register → relay → couple → stale-stamp drop → re-baseline over REAL
+  localhost UDP; the stale send happens only after merge convergence because transactions and snapshots
+  ride different UDP channels with no cross-channel ordering — the in-flight race stays the Loopback
+  fuzz's job). **60/60.** Controlled single junction throw settled the M0 question: player throw = 2 hook
+  fires (overloads chain); game-internal sets = 1. Name-tag shadow offset was still too big in the field
+  (parallax doubling up close) → tightened 0.048/0.03 → 0.012/0.004; **visual re-check next game run.**
 - **2026-07-18** — **M2.1 built (game-free train core), committed.** New Core: `Trains/` (BogieState
   spline-space, CarDef/TrainsetDef with epochs, CarSnapshot railed|6-DOF, TrainsetTransaction,
   TrainsetRegistry = ALL epoch rules in one place, TrainsetView = exact-epoch admission + discard
