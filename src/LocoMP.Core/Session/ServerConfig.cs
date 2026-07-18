@@ -1,21 +1,29 @@
 using System;
+using LocoMP.Core.Career;
 using LocoMP.Core.Protocol;
 
 namespace LocoMP.Core.Session;
 
 /// <summary>
 /// Host-chosen settings the server enforces during the handshake (03 §10). The order of checks —
-/// compatibility (protocol/build/mod) THEN password THEN capacity — is fixed in <see cref="NetServer"/>.
+/// compatibility (protocol/build/mod) THEN password THEN capacity THEN player key — is fixed in
+/// <see cref="NetServer"/>.
 /// </summary>
 public sealed class ServerConfig
 {
-    public ServerConfig(HandshakeRequest expected, string? password = null, int maxPlayers = 32)
+    public ServerConfig(HandshakeRequest expected, string? password = null, int maxPlayers = 32,
+        CareerConfig? career = null)
     {
         Expected = expected ?? throw new ArgumentNullException(nameof(expected));
         Password = password;
         if (maxPlayers < 1) throw new ArgumentOutOfRangeException(nameof(maxPlayers));
         MaxPlayers = maxPlayers;
+        Career = career ?? new CareerConfig();
     }
+
+    /// <summary>Career knobs (M3): preset, starting grant, claim rules, generator data. The default
+    /// has no stations, so a host that doesn't configure jobs simply runs an empty board.</summary>
+    public CareerConfig Career { get; }
 
     /// <summary>The protocol/build/mod fingerprint a joining client must match exactly.</summary>
     public HandshakeRequest Expected { get; }

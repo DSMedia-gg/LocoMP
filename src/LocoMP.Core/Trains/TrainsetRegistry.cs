@@ -236,6 +236,23 @@ public sealed class TrainsetRegistry
     public bool IsCurrentFromOwner(int senderId, int trainsetId, uint epoch) =>
         _sets.TryGetValue(trainsetId, out TrainsetDef? set) && set.Epoch == epoch && set.OwnerId == senderId;
 
+    /// <summary>Snapshot every def + the id counters for the world save (persistence v1). Counters
+    /// travel with the save so a restored world never re-mints an id a saved job or log referenced.</summary>
+    internal (List<TrainsetDef> sets, int nextTrainsetId, int nextCarId) CaptureState() =>
+        (_sets.Values.ToList(), _nextTrainsetId, _nextCarId);
+
+    /// <summary>Rebuild from a save (cold restart, before any peer connects). Ids and epochs are
+    /// preserved exactly; every set is parked — everyone is offline after a restart (03 §3).</summary>
+    internal void RestoreState(IEnumerable<TrainsetDef> sets, int nextTrainsetId, int nextCarId)
+    {
+        _sets.Clear();
+        _carToSet.Clear();
+        _createdAtMs.Clear();
+        foreach (TrainsetDef def in sets) Commit(def.WithOwner(0));
+        _nextTrainsetId = nextTrainsetId;
+        _nextCarId = nextCarId;
+    }
+
     private static bool IsAtEnd(TrainsetDef set, int carId, CoupleEnd end)
     {
         CarDef edge = end == CoupleEnd.Front ? set.Cars[0] : set.Cars[set.Cars.Count - 1];
