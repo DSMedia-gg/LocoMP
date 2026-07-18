@@ -63,6 +63,19 @@
       <HintPath>$(DvManaged)\BezierCurves.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- M2.3 trains: bogie span→world eval (EquiPointSet/Vector3d) + livery kind ids. -->
+    <Reference Include="DV.PointSet">
+      <HintPath>$(DvManaged)\DV.PointSet.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="net.smkd.vector3d">
+      <HintPath>$(DvManaged)\net.smkd.vector3d.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="DV.ThingTypes">
+      <HintPath>$(DvManaged)\DV.ThingTypes.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <!-- M1.3 presence: origin-shift math + avatar rendering + IMGUI session panel. -->
     <Reference Include="DV.OriginShiftInfo">
       <HintPath>$(DvManaged)\DV.OriginShiftInfo.dll</HintPath>

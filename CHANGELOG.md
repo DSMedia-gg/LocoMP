@@ -25,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ordering and junction ids — to a topology file the dedicated server can load. Every graph
   connection is positionally cross-checked during extraction and health counters are logged, so a
   bad dump announces itself instead of shipping.
+- In-game train sync (the M2 exit, verified live): sessions register every consist in the world and
+  stream their positions in spline space; coupling, uncoupling, derailing, and comms-radio rerailing
+  are translated from the game's own events into server-committed transactions (no snap-back by
+  construction); junction throws sync both ways (observing only the game's inner switch path, so one
+  throw is one message); control grants follow cab entry/exit; consists simulated by other players
+  render as placeholder ghost cars gliding on the real track splines. Robust to Derail Valley's
+  world lifecycle: distance streaming (far cars leaving the simulation), world unloads (the session
+  closes itself instead of going stale), and a supported-build gate that turns the mod off politely
+  on game builds it has not been verified against.
+- Ghost-train test rig: `LocoMP.Bot --consist <n>` drives a synthetic consist along the extracted
+  topology (junction-aware, seeded, reconnect-safe) so train sync is testable end-to-end on one PC;
+  the host logs paste-ready `--at` and `--start-edge` hints so the ghost spawns next to the player.
 
 ### Fixed
 - Remote-player name tags no longer read as doubled text up close: the drop-shadow copy sits at a
