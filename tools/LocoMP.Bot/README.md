@@ -8,12 +8,15 @@ dedicated-server soak runs (many bots, hours, Linux container).
 ## The one-PC workflow (M1.3 avatar bring-up)
 
 1. Launch Derail Valley and host a LocoMP session (embedded server).
-2. Note your player position from the LocoMP host log.
-3. In a terminal:
+2. The host log prints your position as a ready-made argument (`--at x,y,z`).
+3. In a terminal — the built exe needs only the .NET 8 **runtime**, no SDK:
 
    ```
-   dotnet run --project tools/LocoMP.Bot -- --at 671,132,591
+   tools\LocoMP.Bot\bin\Release\net8.0\LocoMP.Bot.exe --at 671,132,591
    ```
+
+   (Building it in the first place — `dotnet build tools/LocoMP.Bot` or any solution build — is
+   what needs the SDK; `dotnet run` rebuilds and therefore also wants the SDK.)
 
 4. In-game: a bot avatar orbits those coordinates. Ctrl+C leaves gracefully.
 

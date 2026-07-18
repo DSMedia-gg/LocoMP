@@ -54,6 +54,23 @@
       <HintPath>$(DvManaged)\DV.RailTrack.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- M1.3 presence: origin-shift math + avatar rendering + IMGUI session panel. -->
+    <Reference Include="DV.OriginShiftInfo">
+      <HintPath>$(DvManaged)\DV.OriginShiftInfo.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.PhysicsModule">
+      <HintPath>$(DvManaged)\UnityEngine.PhysicsModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>$(DvManaged)\UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(DvManaged)\UnityEngine.IMGUIModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
 </Project>
