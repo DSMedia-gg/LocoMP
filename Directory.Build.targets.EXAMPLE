@@ -54,6 +54,15 @@
       <HintPath>$(DvManaged)\DV.RailTrack.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- M2.2 extractor: RailTrackRegistryBase.Instance (SingletonBehaviour) + BezierCurve.length. -->
+    <Reference Include="DV.Utils">
+      <HintPath>$(DvManaged)\DV.Utils.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="BezierCurves">
+      <HintPath>$(DvManaged)\BezierCurves.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <!-- M1.3 presence: origin-shift math + avatar rendering + IMGUI session panel. -->
     <Reference Include="DV.OriginShiftInfo">
       <HintPath>$(DvManaged)\DV.OriginShiftInfo.dll</HintPath>

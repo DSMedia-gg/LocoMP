@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is now v2.
 - World-topology data model and versioned binary codec — the contract between the in-game world
   extractor and the future dedicated server, which must load track data without a game install.
+- In-game world extractor ("Extract world topology" in the mod panel): dumps the live rail network —
+  every track edge with its length and the full junction map, using the game's own stable track
+  ordering and junction ids — to a topology file the dedicated server can load. Every graph
+  connection is positionally cross-checked during extraction and health counters are logged, so a
+  bad dump announces itself instead of shipping.
 
 ### Fixed
 - Remote-player name tags no longer read as doubled text up close: the drop-shadow copy sits at a

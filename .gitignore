@@ -19,6 +19,9 @@ Facepunch.*.dll
 ## Packaging output
 *.zip
 
+## Extracted world topology — per-build derived data from a local game run (M2.2); re-extract, don't commit
+tests/data/*.lmpw
+
 ## DepotDownloader / CI scratch
 depot/
 .DepotDownloader/
