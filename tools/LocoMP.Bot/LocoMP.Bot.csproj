@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Headless test player (03 §11, hard rule 8 — the no-second-PC rig). A simulated client that
+       joins a real LocoMP session over UDP (or Loopback in tests) and streams synthetic avatar
+       poses. Serves M1.3 avatar bring-up on one PC today, join/leave churn testing tomorrow, and
+       the M6 dedicated-server soak runs (hours-long, many bots, SVHost container). Dev tool only —
+       never shipped in the mod zip. -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>LocoMP.Bot</AssemblyName>
+    <RootNamespace>LocoMP.Bot</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\LocoMP.Core\LocoMP.Core.csproj" />
+    <ProjectReference Include="..\..\src\LocoMP.Transport\LocoMP.Transport.csproj" />
+  </ItemGroup>
+
+</Project>

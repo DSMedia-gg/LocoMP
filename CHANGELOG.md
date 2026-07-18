@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- M1 presence networking (game-free): hand-rolled packet codec, `NetServer`/`NetClient` session
+  stack (handshake v1 with password, roster, server-authoritative pose relay, time sync), and the
+  full LiteNetLib UDP transport with localhost integration tests.
+- `tools/LocoMP.Bot` — headless test player(s) for one-PC development and future soak testing:
+  joins a live session over UDP, streams synthetic avatar poses (orbit/wander/idle), supports
+  swarms (`--count`), join/leave churn (`--churn`), and mismatch testing (`--build`/`--password`).
+
 ## [0.0.2] - 2026-07-18
 
 Walking skeleton (milestone M0). Not a playable release.

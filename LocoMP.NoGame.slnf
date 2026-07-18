@@ -6,7 +6,8 @@
       "src\\LocoMP.Transport\\LocoMP.Transport.csproj",
       "src\\LocoMP.Api\\LocoMP.Api.csproj",
       "src\\LocoMP.Server\\LocoMP.Server.csproj",
-      "tests\\LocoMP.Core.Tests\\LocoMP.Core.Tests.csproj"
+      "tests\\LocoMP.Core.Tests\\LocoMP.Core.Tests.csproj",
+      "tools\\LocoMP.Bot\\LocoMP.Bot.csproj"
     ]
   }
 }
