@@ -6,8 +6,10 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
 
 ## Where things stand
 
-- **Milestone:** **M2 — Trains: IN PROGRESS** (started 2026-07-18). **M2.1 (game-free train core) DONE,
-  committed** — the 03 §4 consist-transaction protocol implemented and fuzz-proven headless:
+- **Milestone:** **M2 — Trains: COMPLETE 2026-07-18** (one-PC exit wording; friend session upgrades
+  to official). M2.1 core + M2.2 extractor + M2.3 Shim integration all verified in-game; the exit
+  scenario (couple → merge → uncouple → derail → rerail, no snap-back) passed on run №5 with every
+  criterion's log line present and zero LocoMP exceptions. M2.1 detail below:
   - `TrainsetRegistry` (server authority): register / couple (all four end-orderings) / uncouple /
     derail / rerail / park / claim. Epoch rules: membership changes retire parent ids + mint fresh ones
     with epoch = max(parents)+1; derail/rerail keep the id, bump the epoch. Guards: 2 s settle window
@@ -84,28 +86,86 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
    from `tests/data/` (git-ignored; vacuous on game-free machines) and passes: scale, sequential
    edge ids, unique junction ids, entry+branches share a node, one dominant connected component.
    61/61, full sln 0 warnings.
-3. **M2.3 — Shim train integration (in-game half):** capture owned consist bogies in spline space; apply
-   remote snapshots with interpolation (12/s lerp precedent from avatars); Harmony hooks: coupler contact →
-   `ProposeCouple` (translate physical coupler → trainset-end form), uncouple → `ProposeUncouple`, derail →
-   `ReportDerail`; junction hook → `ThrowJunction` — **hook the inner `Switch` overload only (double-fire
-   confirmed, see note above)**; grants on cab entry/exit; **supported-build gate**:
-   handshake sends runtime `Application.version` (`99-build2702`), mod refuses unknown builds with a friendly
-   message instead of the hard-coded "B99.7". Bot: `--consist` mode driving a synthetic consist along
-   extracted topology = the one-PC "ghost train" rig.
-4. **M2 exit (in-game):** two consists driven (Cody + bot), couple into one, both crew it, uncouple,
-   derail + rerail — no snap-back. Friend session upgrades wording when available.
+3. **M2.3 — Shim train integration: CODE-COMPLETE + STAGED 2026-07-18 (uncommitted), awaiting the
+   in-game M2 exit run.** All planned scope built: supported-build gate live (runtime
+   `Application.version` vs `SupportedBuilds=["99-build2702"]`, friendly inert-mod message on unknown
+   builds; bot default updated); `Core.World.TopologyWalker` (seeded, junction-aware, `Behind(d)` for
+   trailing bogies — the future M6 coaster) + `Bot --consist <n>` ghost train over the REAL topology
+   (registers, streams current-epoch snapshots, throws junctions it crosses, survives churn); Shim:
+   `TrackIndexMap` (registry-order edge ids + save-format junction ids + (edge,s)→world eval with
+   SELF-CALIBRATING point-space — logs whether Vector3d points are absolute or shifted-local),
+   `JunctionHook` (inner `Switch(SwitchMode, byte)` overload ONLY + suppressed FORCED remote apply;
+   WorldStateSpike deleted), `GhostConsists` (box-car visuals, 12/s lerp + 80 m snap), `TrainSync`
+   (host registers all game trainsets, token = game set id + 1; 20 Hz spline capture via
+   `traveller.Span` + `TrackDirectionSign`; couple/uncouple via the game's PUBLIC
+   `Coupler.Coupled/Uncoupled` events → trainset-end proposals deduped by lower car id; derail by
+   POLLING `car.derailed` per tick; grants on `PlayerManager.CarChanged`; commits rebind bookkeeping
+   only — host physics already happened). 69/69 game-free (incl. 10 km real-map walker soak + ghost
+   end-to-end with 0 stale discards), full sln 0 warnings, payload staged. **Banked:** Krafs.Publicizer
+   must set `IncludeCompilerGeneratedMembers="false"` or event `+=` dies with CS0229 (same-name
+   backing field); new game refs DV.PointSet / net.smkd.vector3d / DV.ThingTypes (targets ×2 + CI ×2).
+4. **M2 exit run №1 FAILED (2026-07-18) — root-caused + FIXED, restaged for run №2.** What worked in
+   run №1: hosting, track index, **14 sets / 74 cars registered**, **point-space calibration:
+   Absolute, 0.4 m err** (the self-check paid for itself), control grants on cab entry/exit (cars
+   3/49/23 granted + released cleanly). What failed: Cody quit to the MAIN MENU mid-session — world
+   teardown fired `Uncoupled` on every coupler (proposal storm → server committed splits → "unknown
+   cars" resync spam), then the SESSION SURVIVED into the reloaded world with `_worldRegistered`
+   still true and a `TrackIndexMap` full of destroyed RailTracks → the bot's ghost registered and
+   streamed fine but `TryGetLocalPoint` failed on dead tracks → boxes never positioned → invisible.
+   **Fixes (built, 0 warnings, restaged):** TrainSync detects world death (registry singleton null)
+   → `WorldUnloaded` event → SessionController closes the session with a clear panel/log message
+   (re-host in the new world; bot auto-reconnects + re-registers — tested behavior); proposal paths
+   + resync guarded by `WorldAlive` + a `CarAboutToBeDeleted` despawn set (storm suppressed); ghost
+   boxes start INACTIVE until first positioned (never an invisible box at origin silently) and an
+   all-cars-unresolvable snapshot logs ONE loud "stale world map?" warning; ghost creation logged.
+5. **M2 exit run №2 (2026-07-18): pipeline PROVEN, ghost spawned FAR AWAY — fixed.** Log showed
+   "ghost consist 19 is on the rails (edge 0)" — everything worked, but the walker starts blind
+   (LMPW has no coordinates) so the ghost rolled around kilometres from Cody. Also fixed from the
+   same log: registry getters NRE internally when hosting from the loading screen (TryBuild now
+   try/catches = "still loading"), and premature hosting latched `_worldRegistered` with 0 sets
+   (now retries until trainsets exist; that run's 2nd host registered 18 sets / 83 cars, 0.1 m
+   calibration). **New workflow piece: the host logs `ghost-train hint: --start-edge N` next to the
+   `--at` line — paste BOTH into the bot.** 70/70, 0 warnings, restaged.
+6. **M2 exit run №3 (2026-07-18): GHOST TRAIN VERIFIED IN-GAME** ("looks good!" — 15 sets/89 cars
+   registered, hint `--start-edge 1176 ~4 m`, ghost consist 16 on the rails at edge 205 = spatially
+   adjacent after warm-up; remote train motion proven through the whole pipeline). Quit-time storm
+   leaked once more — scene-unload kills cars before the registry and skips CarAboutToBeDeleted →
+   new `IsLeavingWorld` guard on `gameObject.scene.isLoaded` (built, 70/70; **restage pending** —
+   game still running held the DLL lock). Also banked: game logs "Junctions hashes match" with OUR
+   JunctionsHash; TracksHash VARIES per session (FDEBEB… vs B77208…) while numbering held — use it
+   build-to-build only.
+7. **M2 exit run №4 (2026-07-18): UNCOUPLE VERIFIED in-game; 3 bugs caught + fixed + restaged
+   (18:21).** (a) Storms = DV DISTANCE STREAMING (far cars → ECS entities, GameObjects destroyed,
+   genuine Uncoupled cascades; why car counts vary 74/83/89) → fixed with per-car
+   `TrainCar.OnCarAboutToBeDestroyed` → despawn set + one-line unbind; (b) couple test made ZERO
+   proposals — old dedupe assumed both couplers fire and dropped the higher-id side → now every
+   event handled, same-pair collapsed within 0.5 s; (c) L-039's derail unreported — polling sat
+   inside the snapshot loop's early-break → now polled for every live car first. 70/70, 0 warnings.
+8. ~~**M2 exit FINALE.**~~ **PASSED 2026-07-18 (run №5) — M2 CLOSED (one-PC wording).** Couple
+   contact 77+78 → merged set 20 (fresh id, epoch machinery live) → clean split at 17/18; derail
+   reported + rerail requested (car 78 / L-014); grants clean; ghost beside the player; no
+   snap-back, zero LocoMP exceptions; teardown tamed to one unbind line per set. Friend session
+   upgrades the wording to official. Next milestone: M3 (07-ROADMAP).
 5. **Deferred until contributors (Cody, 2026-07-18):** wire CI Steam/Nexus secrets; set `.ci/depot.json` manifest. Red `build.yml` on push accepted until then.
 6. **Repo residuals, whenever** (05 §7): branch protection, DCO app (optional), repo topics.
 
 ## Push state
 - **All M2.1 work PUSHED 2026-07-18** (`ce41556..cc615d2`: train core `1bc5a96`, UDP integration test `1ece517`, tag-shadow fix + banked findings `cc615d2`; Cody's go after the in-game regression passed). Post-push CI as expected: `build.yml` red at the Steam step (accepted until contributors).
-- **M2.2 extractor work UNCOMMITTED** (commit after the in-game extraction proves the file loads): `TopologyExtractor.cs`, `Main.cs` dev-tools row, `RealWorldTopologyTests.cs`, targets/.EXAMPLE + build/release.yml ref additions, `.gitignore` tests/data entry.
-- Staged payload in the game's `Mods/LocoMP/` = current (M2.2 extractor + the M2.1 tag-shadow fix). **Next game run: trigger extraction AND visually re-check the name tag.**
+- **M2.2 PUSHED 2026-07-18** (`4d8e33c..9614a45`, Cody's explicit go). Expect `build.yml` red at the Steam step as usual (accepted until contributors).
+- **M2.3 work UNCOMMITTED** (commit after the M2 exit run): TrainSync/TrackIndexMap/JunctionHook/GhostConsists (+WorldStateSpike deleted), TopologyWalker, ConsistDriver + bot flags, build gate, Shim csproj publicizer fix, targets/.EXAMPLE + CI ref additions.
+- Staged payload in the game's `Mods/LocoMP/` = current (M2.3 full train seam). Extraction + name tag verified in earlier runs 2026-07-18 — no leftovers besides the M2 exit itself.
 
 ## Blockers
 - None. M2.1 verified headless; M2.2/M2.3 need the game (Cody at the PC), M2 exit ideally a friend session.
 
 ## Session log
+- **2026-07-18** — **M2 EXIT PASSED (run №5) — MILESTONE 2 CLOSED.** Couple→merge (set 20)→split,
+  derail report + rerail request, grants, ghost — all with log-line evidence, zero exceptions.
+  5 in-game runs today flushed 8 real bugs (worth it — 3 were world-lifecycle classes M3 needs).
+- **2026-07-18** — **M2.3 CODE-COMPLETE + staged (uncommitted).** Build gate (runtime version vs
+  supported list), TopologyWalker + bot `--consist` ghost train (headless-proven over the real map),
+  Shim TrainSync/TrackIndexMap/JunctionHook/GhostConsists wired into the session. 69/69, 0 warnings.
+  Publicizer CS0229 event trap fixed (`IncludeCompilerGeneratedMembers=false`). Awaiting the M2 exit run.
 - **2026-07-18** — **M2.2 CLOSED.** In-game extraction: 2,073 edges / 279.6 km / 563 junctions, all
   health counters zero, hashes banked for B100. Dump → `tests/data/`, exit test live + green, 61/61.
 - **2026-07-18** — **M2.2 code half built + staged (uncommitted).** Reflection-nailed the B99.7 track

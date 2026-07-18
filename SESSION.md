@@ -5,6 +5,190 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-18 — M2 EXIT RUN №5: ALL PASSED — MILESTONE 2 CLOSED (one-PC wording) 🚂
+
+Every criterion has its log line, zero LocoMP exceptions:
+- `couple contact: car 77 (Rear) + car 78 (Front) at 0.0 m/s — proposing` → server merged into
+  **set 20** (fresh id, 18+ cars — the epoch machinery minting exactly as designed);
+- `uncouple: set 20 between index 17 and 18 — proposing` → clean split of the merged product;
+- `car 78 derailed — reporting` (L-014, derailAllBogiesAtOnce) → `car 78 rerailed — requesting set
+  rerail` — both fixed paths proven;
+- grants swapped cleanly 77↔78; ghost consist 19 on the rails at edge 205 (hint 207) beside the
+  player; no snap-back observed (Cody), no resyncs, no mid-session storms.
+- Teardown at quit: TAMED — sets unbind with one log line each via the destroy hook; at most a
+  single stray proposal per set (first coupler event can beat the destroy hook), bounded + harmless
+  on a dying session. The closing `Bolt.SceneVariables` UnityException is the game's own teardown.
+
+**M2 (THE hard problem + the extractor risk) closed in ONE DAY** — planning corpus to verified
+in-game consist transactions. Exit wording upgrades to official at the first friend session.
+Run cadence total: 5 in-game runs, 8 real bugs found + fixed (3 lifecycle, 3 event-translation,
+1 spawn-placement, 1 publicizer). Next: commit + push (Cody's go), then M3 (World & jobs) planning.
+
+---
+
+## 2026-07-18 — M2 exit run №4 (coupling test): 3 bugs flushed out — all fixed, restaged
+
+**What the log proved:** manual UNCOUPLE works end-to-end (`set 4 between index 4 and 5 —
+proposing`, committed clean, no snap-back reported); grants kept flowing all session; ghost + hint
+flow again fine.
+
+**Three real bugs caught (this is what exit runs are for):**
+1. **The storms are DISTANCE STREAMING, not quitting.** This one fired mid-session seconds after
+   hosting: DV converts far-away cars to ECS entities and DESTROYS their GameObjects (also why the
+   registered car count varies 74/83/89 per run) → genuine Uncoupled cascades from sets 5–15 while
+   near-player sets 1–4 survived. Neither `scene.isLoaded` nor `CarAboutToBeDeleted` catches
+   conversion. **Fix: per-car `TrainCar.OnCarAboutToBeDestroyed` hook** (fires for every destruction
+   path) → despawn set + unbind that set with ONE log line ("left the streamed world — unbound";
+   respawn rebinding = M3).
+2. **Couple test produced ZERO proposals.** The old dedupe assumed the contact fires on BOTH
+   couplers and let only the lower car id speak — if the game raises it on one coupler only, that's
+   a coin-flip drop. **Fix: handle every event, collapse same unordered pair within 0.5 s
+   (`Time.unscaledTime`) instead.**
+3. **L-039's 98 km/h stress derail went unreported.** Derail polling lived inside the snapshot loop,
+   which breaks out at the first un-capturable car — later cars were never polled (and the set may
+   already have been storm-unbound). **Fix: poll derail transitions for every live car BEFORE the
+   snapshot pass.**
+
+70/70, 0 warnings, staged 18:21. **M2 exit still needs a green coupling run:** couple (expect
+"couple contact … — proposing"), uncouple, derail (expect "car N derailed — reporting"), rerail
+(expect "requesting set rerail") — near the player so streaming can't unbind the set under test.
+
+---
+
+## 2026-07-18 — M2 exit run №3: GHOST TRAIN VERIFIED IN-GAME 🎉 (exit scenario still to run)
+
+**Cody: "looks good!"** — the ghost rig works end-to-end in the live game: host registered 15 sets /
+89 cars, calibration 0.4 m, hint line `--start-edge 1176 (~4 m from you)` → ghost consist 16
+created and placed on edge 205 (spatially adjacent to 1176 after the ~50 m trail warm-up — edge ids
+are registry order, not spatial). Remote train motion through the full pipeline (bot walker → UDP →
+server relay → epoch admission → spline eval → lerped boxes) is PROVEN.
+
+**Two findings:** (a) the quit-time uncouple storm STILL leaked — scene-unload destroys cars BEFORE
+the registry dies (WorldAlive true) and never fires CarAboutToBeDeleted; cascading splits minted set
+ids into the 150s. Fixed with the precise Unity signal: `gameObject.scene.isLoaded` is false during
+unload → `IsLeavingWorld` guard on both coupler handlers (built, 70/70, restage pending — the game
+was still running and holds the DLL lock). (b) The GAME logged "Junctions hashes match '59887E…'" —
+the same JunctionsHash our extractor banked; also TracksHash differed across two sessions
+(`FDEBEB…` in run №2 vs `B77208…` in №1/№3) while numbering kept working — hash may fold in
+session state; watch it, don't rely on it session-to-session (build-to-build comparison still the
+intended use).
+
+**Still open for the M2 exit:** the coupling scenario itself — couple two real consists, uncouple,
+derail + rerail, no snap-back (the staged build is fine for it; the storm fix only affects quit).
+Commit + push after that passes.
+
+---
+
+## 2026-07-18 — M2 exit run №2: ghost ALIVE but far away — three fixes, restaged
+
+**Symptom:** still no visible ghost. **But the new logging worked exactly as designed:** the log
+shows `remote consist 19 (3 cars) — ghost created` AND `ghost consist 19 is on the rails (edge 0)`
+— the whole pipeline ran; the ghost spawned on **edge 0**, kilometres from Cody at (7908,132,7351).
+The walker picks its start blind because LMPW carries no world coordinates.
+
+Also surfaced: (a) hosting from the loading screen → `RailTrackRegistryBase.OrderedRailtracks`
+NREs INTERNALLY (TrackRootParent not up) — my null-check wasn't enough; (b) same premature host
+latched `_worldRegistered` with 0 sets ("no live trainsets"), never retried — the second manual
+host that run worked (18 sets / 83 cars, calibration 0.1 m abs).
+
+**Fixes:** (a) `TryBuild` wrapped in try/catch (registry getters throw mid-load = "still loading");
+(b) `RegisterWorld` only latches once ≥1 set registered — retries silently until cars spawn;
+(c) **ghost start hint**: host logs `ghost-train hint: --start-edge N (~D m from you)` (nearest
+edge by track-origin distance — same paste-me pattern as `--at`), bot gains `--start-edge <id>`,
+`TopologyWalker` takes an explicit start edge (falls back to its own pick when absent/unknown).
+70/70, 0 warnings, restaged. Run №3: paste BOTH host log lines into the bot command.
+
+---
+
+## 2026-07-18 — M2 exit run №1: failed on ghost visibility — root-caused, fixed, restaged
+
+**Symptom (Cody):** no ghost train, only the bot's avatar capsule orbiting.
+
+**What the log proved WORKED:** host + track index (2,073/563 matching the extraction), 14 trainsets
+/ 74 cars registered, **point-set space self-calibration: Absolute, 0.4 m error vs 9,910.6 m for the
+local hypothesis** — the (edge, s)→world path is right; control grants granted/released cleanly on
+three cab entries. Protocol v2 handshake on runtime build string worked.
+
+**Root cause:** the session OUTLIVED its world. Quit-to-menu destroyed every car → every coupler
+fired `Uncoupled` → proposal storm (all adjacent pairs, sets 1–14) → server committed the splits →
+products referenced destroyed cars → resync spam. Then the world was reloaded but `_worldRegistered`
+stayed true (no re-registration) and `TrackIndexMap` held DESTROYED RailTracks — the bot's ghost
+registered + streamed fine, `TryGetLocalPoint` returned false on dead tracks, and the ghost boxes sat
+unpositioned (invisible) at the origin. A silent failure by construction: nothing logged on the ghost
+path.
+
+**Fixes:** (a) `TrainSync` watches `RailTrackRegistryBase.Instance` — world death fires
+`WorldUnloaded` once; `SessionController` closes the session with a clear message (deferred out of
+the tick to avoid disposing mid-callback); re-hosting in the new world re-registers everything and
+the bot reconnects + re-registers by itself (already-tested churn path). (b) All proposal paths +
+transaction resyncs guarded by `WorldAlive` and a despawn set fed by `CarSpawner.CarAboutToBeDeleted`
+(teardown storms can't become protocol traffic). (c) Ghost cars spawn INACTIVE until first
+positioned; an all-unresolvable snapshot logs one loud "stale world map?" warning; ghost creation +
+first placement are logged ("ghost consist N is on the rails (edge E)"). Never again invisible-and-
+silent. Rebuilt 0 warnings, 69/69, restaged.
+
+**Bonus banked:** quit-to-menu DOES route car teardown through coupler events; `CarSpawner`'s
+`CarSpawnEvent` delegate = `(TrainCar car)`; grants confirmed working in-game (first M2.3 feature
+with live proof).
+
+---
+
+## 2026-07-18 — M2.3 Shim train integration — CODE-COMPLETE, staged (uncommitted)
+
+**Goal:** the in-game half of M2 — live consists on the wire in both directions, membership events
+as transactions, junction/grant flows, supported-build gate, and the one-PC ghost-train rig.
+
+**Done (game-free half — 69/69 tests, all headless-proven):**
+- **Supported-build gate:** `PresenceShim.GameBuild` is now the RUNTIME `Application.version`;
+  `SupportedBuilds = ["99-build2702"]`; on an unknown build the mod loads inert with a friendly
+  panel message (no Harmony patches installed). Bot default build updated to match.
+- **`Core.World.TopologyWalker`:** seeded kinematic traveller over extracted topology — head
+  advance across nodes, junction-aware branch picks (facing = seeded choice + throw event,
+  trailing = forced to the branch it came from), dead-end reversal, and `Behind(d)` resolving
+  trailing points across edge boundaries off a trail history. The seed of the M6 kinematic coaster.
+  6 new tests incl. a 10 km soak over the REAL extracted map (conditional on the dump).
+- **`Bot --consist <n>`:** registers an n-car ghost consist, drives it along the real topology at
+  `--consist-speed` (default 8 m/s), streams current-epoch spline-space snapshots, throws crossed
+  junctions, re-registers after churn/reconnect. `--world <path>` / env / tests-data probing.
+  2 end-to-end tests (admitted stream with 0 discards; churn re-registration).
+- **Krafs.Publicizer gotcha (banked):** publicizing compiler-generated members surfaces event
+  backing fields as same-name siblings → every `+=` dies with CS0229 ambiguity. Fix:
+  `IncludeCompilerGeneratedMembers="false"` on the Publicize item.
+
+**Done (Shim half — compiles 0-warnings vs B99.7, needs the in-game run):**
+- **`TrackIndexMap`:** RailTrack↔edgeId (registry order = extractor numbering), Junction↔save-id,
+  and (edgeId, s)→world eval via `EquiPointSet.GetPointIndexForSpan` + interpolation. Point-space
+  (absolute Vector3d vs shifted-local) is an inference, so it SELF-CALIBRATES from the first real
+  bogie sample and logs which fit won — a wrong guess costs a log line, not a broken render.
+- **`JunctionHook`** (replaces WorldStateSpike, which is deleted): patches ONLY the inner
+  `Switch(SwitchMode, byte)` overload (M2.1 finding), `ApplyRemote` = FORCED switch with hook
+  suppression so server echoes never loop.
+- **`GhostConsists`:** box-per-car visuals for remote sets (amber loco, slate wagons), placed from
+  two bogie spline points, avatar-style 12/s lerp + 80 m snap; derailed cars use the 6-DOF pose.
+- **`TrainSync`:** host registers every game `Trainset` (token = game set id + 1); 20 Hz capture of
+  bound sets (front/rear bogie `traveller.Span` + `TrackDirectionSign`-signed speed; derailed cars
+  stream absolute pose); membership via the game's OWN public events — `Coupler.Coupled/Uncoupled`
+  (EventHandler args, deduped by lower-car-id, translated to trainset-relative ends) — derail by
+  POLLING `car.derailed` per tick (no guessing at custom delegate signatures); junction hook →
+  `ThrowJunction`; `PlayerManager.CarChanged` → grant request/release; commits rebind bookkeeping
+  only (host physics already happened). Wired into SessionController (host=true / join=false).
+- New game refs ×4 spots: DV.PointSet, net.smkd.vector3d, DV.ThingTypes.
+
+**API intel (reflection-only, banked):** `Trainset` {cars, id, allSets, Merge/Split}; `Bogie`
+{track, traveller.Span, TrackDirectionSign}; `Coupler` {train, coupledTo, Coupled/Uncoupled +
+CoupleEventArgs/UncoupleEventArgs {thisCoupler, otherCoupler, viaChainInteraction,
+dueToBrokenCouple}}; `TrainCar` {trainset, derailed, FrontBogie/RearBogie, carLivery.id, couplers};
+`CarSpawner` {CarSpawned, CarAboutToBeDeleted}; `PlayerManager` {Car, CarChanged};
+`EquiPointSet` {points[{position:Vector3d, forward, span, spanToNextPoint}], span,
+GetPointIndexForSpan}; Vector3d lives in net.smkd.vector3d.dll.
+
+**Next (the M2 exit run, Cody at the PC):** host → check `[trains]` registration + calibration
+lines → run `LocoMP.Bot --consist 3 --at <coords>` → ghost train visible and rolling, switches
+flipping ahead of it → drive your own loco (bot sees snapshots) → couple two consists, uncouple,
+derail + rerail — watch for clean transactions, no snap-back, zero exceptions. Then commit + push.
+
+---
+
 ## 2026-07-18 — M2.2 world extractor — CLOSED (real extraction + exit test green)
 
 **In-game run (Cody):** loaded a world, hit the panel button. `world-99-build2702.lmpw` (25,217

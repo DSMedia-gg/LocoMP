@@ -50,6 +50,10 @@ public sealed class BotClient : IDisposable
 
     public bool Joined => _client?.Joined == true;
 
+    /// <summary>Optional per-tick session work while joined (e.g. the M2 ghost-consist driver).
+    /// Receives the live NetClient — a fresh instance after every reconnect, so consumers rebind.</summary>
+    public Action<NetClient, double>? SessionTick { get; set; }
+
     /// <summary>Set (and the bot permanently stopped) when the server refuses the handshake —
     /// a rejection means misconfiguration, and retrying would just spam the exact same refusal.</summary>
     public string? RejectReason { get; private set; }
@@ -85,6 +89,7 @@ public sealed class BotClient : IDisposable
 
             _client.SendPose(_behavior.Tick(dtSeconds));
             PosesSent++;
+            SessionTick?.Invoke(_client, dtSeconds);
 
             if (_churnMs > 0 && now - _joinedAtMs >= _churnMs)
             {

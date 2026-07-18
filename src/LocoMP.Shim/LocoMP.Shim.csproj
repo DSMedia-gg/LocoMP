@@ -10,10 +10,13 @@
     <LocoMpGameProject>true</LocoMpGameProject>
   </PropertyGroup>
 
-  <!-- Publicize game internals at compile time (never redistributed — reference-only). -->
+  <!-- Publicize game internals at compile time (never redistributed — reference-only).
+       Compiler-generated members stay private: publicizing an event's backing field creates a
+       same-name sibling and every `+=` on that event dies with CS0229 (hit by M2.3's Coupled/
+       CarChanged subscriptions). -->
   <ItemGroup>
     <PackageReference Include="Krafs.Publicizer" PrivateAssets="all" />
-    <Publicize Include="Assembly-CSharp" />
+    <Publicize Include="Assembly-CSharp" IncludeCompilerGeneratedMembers="false" />
   </ItemGroup>
 
   <ItemGroup>

@@ -24,12 +24,16 @@ public sealed class BotOptions
     public double Radius = 5;
     public double Speed = 1.4;          // human walking pace, m/s
     public double Hz = 20;              // pose sends per second
-    public string GameBuild = "B99.7";
+    public string GameBuild = "99-build2702"; // what B99.7 reports at runtime; must match the host's
     public string ModVersion = DefaultModVersion();
     public string ModListHash = "";
     public double ChurnSeconds = 0;     // 0 = stay connected
     public double DurationSeconds = 0;  // 0 = run until Ctrl+C
     public int Seed = 12345;            // wander is seeded so soak failures can be replayed
+    public int ConsistCars = 0;         // 0 = no ghost train
+    public double ConsistSpeed = 8;     // m/s ≈ 29 km/h, a sedate freight roll
+    public string? WorldFile;           // extracted .lmpw; null = probe the usual spots
+    public long StartEdge = -1;         // ghost start edge (host logs the nearest one); -1 = walker's pick
 
     public HandshakeRequest ToIdentity() => new(ProtocolVersion.Current, GameBuild, ModVersion, ModListHash);
 
@@ -71,6 +75,10 @@ public sealed class BotOptions
                     case "--churn": o.ChurnSeconds = double.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--duration": o.DurationSeconds = double.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--seed": o.Seed = int.Parse(Next(), CultureInfo.InvariantCulture); break;
+                    case "--consist": o.ConsistCars = Math.Max(1, int.Parse(Next(), CultureInfo.InvariantCulture)); break;
+                    case "--consist-speed": o.ConsistSpeed = double.Parse(Next(), CultureInfo.InvariantCulture); break;
+                    case "--world": o.WorldFile = Next(); break;
+                    case "--start-edge": o.StartEdge = long.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--help" or "-h" or "/?": PrintUsage(); return null;
                     default:
                         Console.Error.WriteLine($"Unknown option: {args[i]} (try --help)");
@@ -121,16 +129,23 @@ Usage: LocoMP.Bot [options]
   --radius <m>           orbit/wander radius      (default 5)
   --speed <m/s>          movement speed           (default 1.4)
   --hz <n>               pose sends per second    (default 20)
-  --build <s>            game build to present    (default B99.7)
+  --build <s>            game build to present    (default 99-build2702)
   --mod-version <s>      mod version to present   (default: this assembly's version)
   --modlist-hash <s>     mod manifest hash        (default empty)
   --churn <s>            leave + rejoin every N seconds (default 0 = stay)
   --duration <s>         total run time           (default 0 = until Ctrl+C)
   --seed <n>             wander RNG seed          (default 12345)
+  --consist <n>          drive an n-car ghost train along the extracted topology
+  --consist-speed <m/s>  ghost train speed        (default 8)
+  --start-edge <id>      edge to start the ghost on — paste the host log's
+                         'ghost-train hint' so it spawns near the player
+  --world <path>         extracted .lmpw topology (default: LOCOMP_WORLD_FILE env,
+                         then tests/data/world-*.lmpw upward from the working dir)
 
 Examples:
   LocoMP.Bot --at 671,132,591                        one bot orbiting those coords
   LocoMP.Bot --count 8 --behavior wander --radius 30 eight wanderers (join/leave storm: add --churn 15)
-  LocoMP.Bot --build WRONG                           verify the host's mismatch screen");
+  LocoMP.Bot --build WRONG                           verify the host's mismatch screen
+  LocoMP.Bot --consist 3 --at 671,132,591            a 3-car ghost train + an orbiting avatar");
     }
 }

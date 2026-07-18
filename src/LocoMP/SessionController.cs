@@ -34,10 +34,12 @@ public sealed class SessionController
     private LoopbackNetwork? _hub;
     private NetClient? _client;
     private ITransport? _clientTransport;
+    private TrainSync? _trains;
 
     private double _poseAccum;
     private double _timeAccum;
     private string _lastError = "";
+    private bool _worldUnloaded;
 
     // IMGUI field state
     private string _playerName = Environment.UserName;
@@ -89,6 +91,16 @@ public sealed class SessionController
             }
         }
 
+        _trains?.Tick(dt);
+        if (_worldUnloaded)
+        {
+            // Flagged from inside the tick; tear down afterwards so we never dispose mid-callback.
+            _worldUnloaded = false;
+            _log("[session] game world unloaded — session closed (host again once the new world is up)");
+            _lastError = "world unloaded — session closed";
+            Leave();
+            return;
+        }
         _avatars.Tick((float)dt);
     }
 
@@ -155,6 +167,8 @@ public sealed class SessionController
             _server.PlayerRemoved += id => _log($"[session] removed id {id} — {_server!.PlayerCount} player(s)");
 
             _client = MakeClient(_hub.Connect(out _)); // the host is just client #1, zero latency
+            _trains = new TrainSync(_client, isHost: true, _log);
+            _trains.WorldUnloaded += () => _worldUnloaded = true;
             _mode = Mode.Hosting;
 
             _log($"[session] hosting on UDP {port} (game reports version '{PresenceShim.ReportedGameVersion}', handshake build '{PresenceShim.GameBuild}')");
@@ -176,6 +190,8 @@ public sealed class SessionController
             _lastError = "";
             _clientTransport = LiteNetLibTransport.ConnectClient(_address, ParsePort(), NetDefaults.ConnectKey);
             _client = MakeClient(_clientTransport);
+            _trains = new TrainSync(_client, isHost: false, _log);
+            _trains.WorldUnloaded += () => _worldUnloaded = true;
             _mode = Mode.Joined;
             _log($"[session] joining {_address}:{_portText}…");
         }
@@ -204,6 +220,8 @@ public sealed class SessionController
     public void Leave()
     {
         if (_client is { Joined: true }) { _client.Leave(); _client.Poll(); }
+        _trains?.Dispose();
+        _trains = null;
         _client?.Dispose();
         _clientTransport?.Dispose();
         _server?.Dispose();

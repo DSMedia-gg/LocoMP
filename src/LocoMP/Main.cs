@@ -10,9 +10,8 @@ namespace LocoMP;
 
 /// <summary>
 /// UMM entry point (referenced by Info.json's EntryMethod = "LocoMP.Main.Load"). Composition root for
-/// the client: owns the UMM/Harmony lifecycle and the M1 <see cref="SessionController"/> (host/join
-/// panel in the UMM options, Ctrl+F10 → LocoMP). The M0 junction hook stays installed — it's quiet,
-/// event-driven, and still feeding B99.7 API intel toward M2.
+/// the client: owns the UMM/Harmony lifecycle, the supported-build gate, and the
+/// <see cref="SessionController"/> (host/join panel in the UMM options, Ctrl+F10 → LocoMP).
 /// </summary>
 public static class Main
 {
@@ -26,8 +25,20 @@ public static class Main
         _logger = modEntry.Logger;
         Action<string> log = s => _logger?.Log(s);
 
+        // Supported-build gate (03 §10): on an unknown game build the mod stays loaded but inert —
+        // a friendly panel message beats a Harmony patch exploding mid-session on B100.
+        if (!PresenceShim.IsSupportedBuild)
+        {
+            string msg = $"LocoMP {modEntry.Info.Version} does not support game build " +
+                         $"'{PresenceShim.ReportedGameVersion}' (supported: {string.Join(", ", PresenceShim.SupportedBuilds)}). " +
+                         "Check for a LocoMP update.";
+            log("[mod] " + msg);
+            modEntry.OnGUI = _ => GUILayout.Label(msg);
+            return true;
+        }
+
         var harmony = new Harmony(modEntry.Info.Id);
-        WorldStateSpike.Install(harmony, log);
+        JunctionHook.Install(harmony, log);
 
         _session = new SessionController(log);
 

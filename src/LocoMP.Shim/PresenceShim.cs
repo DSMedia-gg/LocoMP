@@ -21,15 +21,24 @@ namespace LocoMP.Shim;
 public static class PresenceShim
 {
     /// <summary>
-    /// The build string both sides present in the handshake. Hard-coded for now: the game is frozen
-    /// on B99.7 until B100 (~2027), and the bot harness presents the same default. TODO(M2): read
-    /// the live build at runtime + supported-build gate (03 §10); the in-game log line below is the
-    /// discovery step for what the runtime actually reports.
+    /// Builds this mod release is known to work on (03 §10 supported-build gate). B99.7 reports
+    /// itself as "99-build2702" at runtime (discovered M1.3). Extend per verified build; on an
+    /// unknown build the mod refuses to start a session with a friendly message instead of
+    /// crashing mid-play — and the exact-match handshake keeps mixed-build sessions out anyway.
     /// </summary>
-    public const string GameBuild = "B99.7";
+    public static readonly string[] SupportedBuilds = { "99-build2702" };
 
-    /// <summary>What the running game calls itself — logged at session start to inform the TODO above.</summary>
+    /// <summary>
+    /// The build string both sides present in the handshake — the RUNTIME version, so two patched
+    /// installs can never quietly session together across builds. The bot presents the same default.
+    /// </summary>
+    public static string GameBuild => Application.version;
+
+    /// <summary>Alias kept for log readability at session start.</summary>
     public static string ReportedGameVersion => Application.version;
+
+    /// <summary>False on a build this release has not been verified against (B100 one day).</summary>
+    public static bool IsSupportedBuild => System.Array.IndexOf(SupportedBuilds, Application.version) >= 0;
 
     // Sign convention, verified from DV.OriginShiftInfo IL (AbsolutePosition = position − currentMove):
     //   absolute = local − currentMove      local = absolute + currentMove
