@@ -16,6 +16,13 @@ public sealed class LoopbackTransport : ITransport
 
     public event Action<int, byte[]>? Received;
 
+    // The 1:1 pair models an already-established link (host = client #1). It never raises connect/
+    // disconnect itself; the multi-peer LoopbackNetwork drives the join/leave lifecycle for N clients.
+#pragma warning disable CS0067
+    public event Action<int>? PeerConnected;
+    public event Action<int>? PeerDisconnected;
+#pragma warning restore CS0067
+
     private LoopbackTransport() { }
 
     /// <summary>Create two linked endpoints; a Send on one is delivered to the other on its next Poll.</summary>
