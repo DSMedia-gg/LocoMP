@@ -152,7 +152,7 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
 ## Push state
 - **All M2.1 work PUSHED 2026-07-18** (`ce41556..cc615d2`: train core `1bc5a96`, UDP integration test `1ece517`, tag-shadow fix + banked findings `cc615d2`; Cody's go after the in-game regression passed). Post-push CI as expected: `build.yml` red at the Steam step (accepted until contributors).
 - **M2.2 PUSHED 2026-07-18** (`4d8e33c..9614a45`, Cody's explicit go). Expect `build.yml` red at the Steam step as usual (accepted until contributors).
-- **M2.3 COMMITTED locally as `583992b` (unpushed — push needs Cody's explicit go, hard rule 7).** All M2 exit-run fixes included.
+- **M2.3 PUSHED 2026-07-18** (`9614a45..8594e4f`, Cody's emphatic go). Expect the usual red `build.yml` at the Steam step (accepted until contributors).
 - Staged payload in the game's `Mods/LocoMP/` = current (18:21 build + exit-run fixes, the exact build that passed run №5).
 
 ## Blockers
