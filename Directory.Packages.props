@@ -1,0 +1,31 @@
+<Project>
+
+  <!-- Central Package Management: every version is pinned here, once. Enabled in Directory.Build.props.
+       Supply-chain posture: exact versions only (no floating ranges), single source per package. -->
+
+  <ItemGroup Label="Transport">
+    <!-- HARD RULE 4: LiteNetLib pinned EXACTLY 1.3.5. 2.x cannot load under Unity 2019.4 Mono;
+         =1.3.1 is deprecated for critical bugs. Do not bump without re-validating in-game. -->
+    <PackageVersion Include="LiteNetLib" Version="1.3.5" />
+  </ItemGroup>
+
+  <ItemGroup Label="Serialization (bulk paths only — hot paths are hand-rolled). Used from M2 onward.">
+    <PackageVersion Include="MessagePack" Version="3.1.8" />
+    <PackageVersion Include="MessagePack.Annotations" Version="3.1.8" />
+  </ItemGroup>
+
+  <ItemGroup Label="net48 targeting on any OS (reference assemblies; no Visual Studio needed)">
+    <PackageVersion Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" />
+  </ItemGroup>
+
+  <ItemGroup Label="Shim only — publicize game internals at compile time">
+    <PackageVersion Include="Krafs.Publicizer" Version="2.3.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Tests (game-free)">
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
+  </ItemGroup>
+
+</Project>

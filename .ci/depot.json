@@ -1,0 +1,6 @@
+{
+  "app": "588030",
+  "depot": "588031",
+  "manifest": "REPLACE_WITH_PINNED_MANIFEST",
+  "_note": "The pinned Derail Valley depot manifest for reproducible CI builds (05 §4). canary.yml opens a PR bumping this when a new game build appears. Until a real id is set here, build.yml downloads the latest manifest (fine for first bring-up)."
+}

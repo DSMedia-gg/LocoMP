@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The UMM mod: entry point, UI, Info.json. Composition root for the client — wires Shim + Core +
+       Transport + Api together in the host's game process (03 §6). net48, game project. -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>LocoMP</AssemblyName>
+    <RootNamespace>LocoMP</RootNamespace>
+    <LocoMpGameProject>true</LocoMpGameProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LocoMP.Core\LocoMP.Core.csproj" />
+    <ProjectReference Include="..\LocoMP.Transport\LocoMP.Transport.csproj" />
+    <ProjectReference Include="..\LocoMP.Api\LocoMP.Api.csproj" />
+    <ProjectReference Include="..\LocoMP.Shim\LocoMP.Shim.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Info.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

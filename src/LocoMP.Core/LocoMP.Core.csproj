@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Pure logic + protocol. NO UnityEngine, NO DV.* — runs in tests and the headless server (hard rule 3).
+       Multi-targets so it loads in both Unity Mono (net48) and the modern server (via netstandard2.0). -->
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net48</TargetFrameworks>
+    <AssemblyName>LocoMP.Core</AssemblyName>
+    <RootNamespace>LocoMP.Core</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

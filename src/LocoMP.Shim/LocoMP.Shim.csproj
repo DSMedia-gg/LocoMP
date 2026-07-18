@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- The ONLY assembly that references DV.*/Assembly-CSharp/UnityEngine (hard rule 3). Opts into game
+       references via LocoMpGameProject=true; those come from the git-ignored Directory.Build.targets
+       (each contributor's local game path). B100 breaks THIS assembly and only this one (03 §2). -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <AssemblyName>LocoMP.Shim</AssemblyName>
+    <RootNamespace>LocoMP.Shim</RootNamespace>
+    <LocoMpGameProject>true</LocoMpGameProject>
+  </PropertyGroup>
+
+  <!-- Publicize game internals at compile time (never redistributed — reference-only). -->
+  <ItemGroup>
+    <PackageReference Include="Krafs.Publicizer" PrivateAssets="all" />
+    <Publicize Include="Assembly-CSharp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LocoMP.Core\LocoMP.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net48'">
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

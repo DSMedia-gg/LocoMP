@@ -1,0 +1,59 @@
+name: Bug report
+description: Something in LocoMP is broken or behaves incorrectly.
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. LocoMP is pre-alpha — please include logs; they are almost always the fastest path to a fix.
+  - type: input
+    id: locomp-version
+    attributes:
+      label: LocoMP version
+      placeholder: "e.g. 0.0.2"
+    validations:
+      required: true
+  - type: input
+    id: game-build
+    attributes:
+      label: Derail Valley build
+      description: Steam → Derail Valley → Properties → Betas, or the in-game build string.
+      placeholder: "e.g. B99.7"
+    validations:
+      required: true
+  - type: dropdown
+    id: role
+    attributes:
+      label: Your role in the session
+      options: ["Host", "Client", "Solo / single instance", "Dedicated server"]
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      options: ["Direct IP (LiteNetLib)", "Steam relay", "Loopback / local", "Not sure"]
+    validations:
+      required: true
+  - type: dropdown
+    id: input-mode
+    attributes:
+      label: Input mode
+      options: ["Desktop", "VR", "Mixed session (both)"]
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected vs what actually happened, and exact steps to reproduce.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Attach the UnityModManager log (and the server log if you were hosting). Paste or drag-and-drop.
+      render: text
+    validations:
+      required: false

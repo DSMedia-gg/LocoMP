@@ -1,0 +1,59 @@
+<Project>
+
+  <!-- ============================================================================================
+       LocoMP — game assembly resolution (Derail Valley community norm; 05 §1 + CLAUDE.md hard rule 2)
+
+       Game assemblies are NEVER committed or redistributed. Each contributor copies this file to
+       'Directory.Build.targets' (git-ignored) and points DvInstallDir at their own LEGAL DV install.
+
+       Only projects that opt in with <LocoMpGameProject>true</LocoMpGameProject> (the Shim and the
+       UMM mod) receive these references. Core / Transport / Api / Server stay game-free by
+       construction — a stray 'using DV.*' in them will not even compile.
+       ============================================================================================ -->
+
+  <PropertyGroup>
+    <!-- EDIT THIS: your Derail Valley install directory. -->
+    <DvInstallDir Condition="'$(DvInstallDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Derail Valley</DvInstallDir>
+    <DvManaged>$(DvInstallDir)\DerailValley_Data\Managed</DvManaged>
+    <DvUmm>$(DvManaged)\UnityModManager</DvUmm>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(LocoMpGameProject)' == 'true'">
+    <!-- Loader + patcher: provided at runtime by UMM; referenced for compile only, never copied. -->
+    <Reference Include="UnityModManager">
+      <HintPath>$(DvUmm)\UnityModManager.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(DvUmm)\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <!-- Game + Unity, resolved by name from the local install. Add DV.* assemblies as the Shim grows. -->
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(DvManaged)\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(DvManaged)\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(DvManaged)\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="DV.Simulation">
+      <HintPath>$(DvManaged)\DV.Simulation.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="DV.Common">
+      <HintPath>$(DvManaged)\DV.Common.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="DV.RailTrack">
+      <HintPath>$(DvManaged)\DV.RailTrack.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

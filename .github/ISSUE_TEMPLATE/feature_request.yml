@@ -1,0 +1,28 @@
+name: Feature request
+description: Suggest an idea or improvement for LocoMP.
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What are you trying to do that LocoMP doesn't support (or supports awkwardly)?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: markdown
+    attributes:
+      value: |
+        Note: LocoMP has a published roadmap (milestones M0–M7). Some requests may already be planned —
+        a quick search of open issues and the roadmap helps avoid duplicates.

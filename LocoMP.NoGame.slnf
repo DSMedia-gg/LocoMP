@@ -1,0 +1,12 @@
+{
+  "solution": {
+    "path": "LocoMP.sln",
+    "projects": [
+      "src\\LocoMP.Core\\LocoMP.Core.csproj",
+      "src\\LocoMP.Transport\\LocoMP.Transport.csproj",
+      "src\\LocoMP.Api\\LocoMP.Api.csproj",
+      "src\\LocoMP.Server\\LocoMP.Server.csproj",
+      "tests\\LocoMP.Core.Tests\\LocoMP.Core.Tests.csproj"
+    ]
+  }
+}
