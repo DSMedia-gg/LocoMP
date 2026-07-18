@@ -5,6 +5,54 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-18 — M2.2 world extractor — CLOSED (real extraction + exit test green)
+
+**In-game run (Cody):** loaded a world, hit the panel button. `world-99-build2702.lmpw` (25,217
+bytes): **2,073 edges / 279.6 km / 1,886 nodes / 563 junctions, all health counters zero** —
+0 position mismatches (the `Branch.first` = IN-end reading is now empirically proven against the
+live game), 0 zero-length edges, 0 skipped or duplicate-id junctions, Player.log exception-free.
+Banked for B100 comparison: TracksHash `B77208E53A86A3B95DE74FF0BEE9B093`, JunctionsHash
+`59887E6A2C1E9ED9940EB10DCB51F4F6`. Dump copied to `tests/data/` → `RealWorldTopologyTests` went
+live and passed (scale, id discipline, junction-node consistency, one dominant component): **the
+M2.2 exit — Core loads the REAL extractor output — is met.** 61/61. The riskiest dedicated-server
+dependency (03 §6) is retired at prototype level. Next: M2.3.
+
+---
+
+## 2026-07-18 — M2.2 world extractor (code half) — built + staged
+
+**Goal:** the Shim-side extractor (03 §6): dump the live RailTrack graph to LMPW so the headless
+dedicated server can load the real world. Riskiest dedicated-server dependency — prototype level.
+
+**Done:**
+- **B99.7 API nailed by reflection-only inspection** (banked for M2.3 too):
+  `RailTrackRegistryBase.Instance` (via DV.Utils `SingletonBehaviour<T>`) exposes `OrderedRailtracks`
+  + `OrderedJunctions` — the game's OWN stable ordering — plus `TracksHash`/`JunctionsHash` for
+  cross-extraction comparison. `RailTrack`: `curve.length` (BezierCurves.dll), `inBranch`/`outBranch`
+  (`Junction.Branch { RailTrack track; bool first }`), `GetInNodeT()`/`GetOutNodeT()`. `Junction`:
+  `inBranch`, ordered `outBranches` (order is load-bearing — `selectedBranch` indexes it),
+  `junctionData.junctionId` (the save format's stable ids; protocol VarUInt-compatible).
+- `LocoMP.Shim.TopologyExtractor`: EdgeId = `OrderedRailtracks` index (the M2.3 `BogieState.EdgeId`
+  numbering); nodes = union-find over 2N track endpoints joined via the game's Branch pointers
+  (track↔track + junction fuses entry+branches into one node); junction ids = `junctionId` with
+  dedupe; writes `world-<Application.version>.lmpw` via TopologyCodec into the mod folder.
+  **Every union is positionally verified** (in/out node transforms ≤ 1 m apart) — this empirically
+  proves the `Branch.first` = "target track's IN end" reading against the live game; mismatches log
+  a do-not-trust warning. Health counters logged: mismatches, zero-length edges, skipped junctions.
+- UMM panel: "Extract world topology" button (Main dev-tools row, under the session panel).
+- New game refs ×4 (local targets, .EXAMPLE, build.yml, release.yml heredocs): DV.Utils, BezierCurves.
+- `RealWorldTopologyTests` (M2.2 exit): loads `tests/data/world-*.lmpw` (git-ignored, or
+  `LOCOMP_WORLD_FILE` env override) and asserts scale (>500 edges, >50 km, >30 junctions),
+  sequential edge ids, unique junction ids, every junction's entry+branches sharing one node, and
+  ≥50% of edges in one connected component (turntable stubs may be islands — turntable links are
+  session state, not topology). Passes vacuously with no dump so pr.yml stays game-free.
+- Full sln Release 0 warnings; **61/61** game-free tests; payload staged to `Mods/LocoMP/`.
+
+**Next:** in-game extraction run (Cody: load world → Ctrl+F10 → Extract) + name-tag visual check,
+copy the .lmpw to `tests/data/`, re-run the real-file test = M2.2 exit; then commit. Then M2.3.
+
+---
+
 ## 2026-07-18 — M2.1 in-game regression + UDP proof + push
 
 **Goal:** verify M2.1 in a live session (regression: the v2 protocol + new train plumbing must not

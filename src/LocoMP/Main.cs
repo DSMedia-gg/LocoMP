@@ -1,7 +1,9 @@
 using System;
+using System.IO;
 using HarmonyLib;
 using LocoMP.Core.Protocol;
 using LocoMP.Shim;
+using UnityEngine;
 using UnityModManagerNet;
 
 namespace LocoMP;
@@ -17,6 +19,7 @@ public static class Main
     private static UnityModManager.ModEntry.ModLogger? _logger;
     private static SessionController? _session;
     private static bool _active;
+    private static string _extractStatus = "";
 
     public static bool Load(UnityModManager.ModEntry modEntry)
     {
@@ -36,9 +39,36 @@ public static class Main
             return true;
         };
         modEntry.OnUpdate = (_, dt) => { if (_active) _session?.Update(dt); };
-        modEntry.OnGUI = _ => { if (_active) _session?.OnGUI(); };
+        modEntry.OnGUI = entry =>
+        {
+            if (!_active) return;
+            _session?.OnGUI();
+            OnToolsGUI(entry, log);
+        };
 
         log($"LocoMP loaded — protocol v{ProtocolVersion.Current}. Open the UMM options (Ctrl+F10) to host or join.");
         return true;
+    }
+
+    /// <summary>Dev tools under the session panel — currently just the M2.2 world extractor.</summary>
+    private static void OnToolsGUI(UnityModManager.ModEntry modEntry, Action<string> log)
+    {
+        GUILayout.Space(4);
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button("Extract world topology", GUILayout.Width(180)))
+        {
+            try
+            {
+                string path = TopologyExtractor.Extract(modEntry.Path, log);
+                _extractStatus = "wrote " + Path.GetFileName(path);
+            }
+            catch (Exception e)
+            {
+                _extractStatus = "failed: " + e.Message;
+                log("[extract] FAILED: " + e);
+            }
+        }
+        if (_extractStatus.Length > 0) GUILayout.Label(_extractStatus);
+        GUILayout.EndHorizontal();
     }
 }

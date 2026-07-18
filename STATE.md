@@ -1,6 +1,6 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-18 (M2.1 train-core session) · This is the **implementation** memory (burst cadence, D8).
+**Updated:** 2026-07-18 (M2.2 extractor code half) · This is the **implementation** memory (burst cadence, D8).
 The **planning corpus** lives one level up at `../` (00–09, INDEX, research/) — strategic, kept private.
 Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current milestone in `../07-ROADMAP.md`.
 
@@ -71,10 +71,19 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
 
 1. ~~**M2.1 — game-free train core.**~~ **DONE 2026-07-18** (see Where things stand) — registry, epochs,
    codecs, session modules, topology contract, 1,000-transaction fuzz green.
-2. **M2.2 — world extractor (Shim-side, needs the game):** walk the live `RailTrack` graph + junctions,
-   assign the stable edge numbering the Shim will also use for `BogieState.EdgeId`, write the LMPW file;
-   exit = Core loads the REAL extracted output in a test (criterion is "extractor output loads in a Core
-   test"). Prototype-level is fine (03 §6 flags it as the riskiest dedicated-server dependency).
+2. ~~**M2.2 — world extractor.**~~ **DONE 2026-07-18 — exit criterion met in-game.**
+   `Shim/TopologyExtractor` walks `RailTrackRegistryBase.Instance.OrderedRailtracks/OrderedJunctions`
+   (EdgeId = registry index — the SAME numbering M2.3 uses for `BogieState.EdgeId`; junction id =
+   game `junctionData.junctionId`), nodes via union-find over Branch pointers with 1 m positional
+   verification of every join, writes `world-<Application.version>.lmpw` via the UMM panel button.
+   **The real B99.7 extraction: 2,073 edges / 279.6 km / 1,886 nodes / 563 junctions — ALL health
+   counters zero** (0 position mismatches ⇒ `Branch.first` = target's IN end is empirically proven;
+   0 zero-length edges, 0 skipped/duplicate junctions; Player.log exception-free).
+   TracksHash `B77208E53A86A3B95DE74FF0BEE9B093`, JunctionsHash `59887E6A2C1E9ED9940EB10DCB51F4F6`
+   (compare on B100 to see if the numbering survived). `RealWorldTopologyTests` loads the real dump
+   from `tests/data/` (git-ignored; vacuous on game-free machines) and passes: scale, sequential
+   edge ids, unique junction ids, entry+branches share a node, one dominant connected component.
+   61/61, full sln 0 warnings.
 3. **M2.3 — Shim train integration (in-game half):** capture owned consist bogies in spline space; apply
    remote snapshots with interpolation (12/s lerp precedent from avatars); Harmony hooks: coupler contact →
    `ProposeCouple` (translate physical coupler → trainset-end form), uncouple → `ProposeUncouple`, derail →
@@ -90,12 +99,21 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
 
 ## Push state
 - **All M2.1 work PUSHED 2026-07-18** (`ce41556..cc615d2`: train core `1bc5a96`, UDP integration test `1ece517`, tag-shadow fix + banked findings `cc615d2`; Cody's go after the in-game regression passed). Post-push CI as expected: `build.yml` red at the Steam step (accepted until contributors).
-- Staged payload in the game's `Mods/LocoMP/` = current (incl. the tag-shadow fix, restaged 2026-07-18 after the game closed). **Visually re-check the tag on the next game run** — that's the only unverified change.
+- **M2.2 extractor work UNCOMMITTED** (commit after the in-game extraction proves the file loads): `TopologyExtractor.cs`, `Main.cs` dev-tools row, `RealWorldTopologyTests.cs`, targets/.EXAMPLE + build/release.yml ref additions, `.gitignore` tests/data entry.
+- Staged payload in the game's `Mods/LocoMP/` = current (M2.2 extractor + the M2.1 tag-shadow fix). **Next game run: trigger extraction AND visually re-check the name tag.**
 
 ## Blockers
 - None. M2.1 verified headless; M2.2/M2.3 need the game (Cody at the PC), M2 exit ideally a friend session.
 
 ## Session log
+- **2026-07-18** — **M2.2 CLOSED.** In-game extraction: 2,073 edges / 279.6 km / 563 junctions, all
+  health counters zero, hashes banked for B100. Dump → `tests/data/`, exit test live + green, 61/61.
+- **2026-07-18** — **M2.2 code half built + staged (uncommitted).** Reflection-nailed the B99.7 track
+  API (`RailTrackRegistryBase.Instance` Ordered arrays + hashes; `Branch {track, first}`;
+  `junctionData.junctionId`; `curve.length` in BezierCurves.dll). `TopologyExtractor` = union-find
+  over Branch pointers, positional verification of every join (1 m), LMPW out via the mod-folder
+  button. `RealWorldTopologyTests` = the M2.2 exit test (vacuous until a dump lands in tests/data/).
+  New refs DV.Utils + BezierCurves ×4 spots. 61/61, 0 warnings, staged. Awaiting the in-game run.
 - **2026-07-18** — **M2.1 in-game regression PASSED + pushed.** Fresh payload staged; Cody hosted on the
   v2 protocol, bot joined/left twice over UDP, avatars clean, zero exceptions in Player.log. Added
   `TrainUdpIntegrationTests` (register → relay → couple → stale-stamp drop → re-baseline over REAL
