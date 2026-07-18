@@ -44,8 +44,10 @@ public sealed class RemoteAvatar
         labelGo.transform.localPosition = new Vector3(0f, 2.4f, 0f);
         MakeTagText(labelGo.transform, "Text", playerName,
             new Color(0.78f, 0.78f, 0.78f), Vector3.zero);
+        // Shadow offset stays tight: big offsets read as doubled text up close, and any real depth
+        // separation parallaxes visibly off-axis — keep z just past z-fighting range.
         MakeTagText(labelGo.transform, "Shadow", playerName,
-            new Color(0f, 0f, 0f, 0.85f), new Vector3(0.048f, -0.048f, 0.03f)); // offset scales with characterSize
+            new Color(0f, 0f, 0f, 0.85f), new Vector3(0.012f, -0.012f, 0.004f));
         _label = labelGo.transform;
     }
 

@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is now v2.
 - World-topology data model and versioned binary codec — the contract between the in-game world
   extractor and the future dedicated server, which must load track data without a game install.
+
+### Fixed
+- Remote-player name tags no longer read as doubled text up close: the drop-shadow copy sits at a
+  quarter of its previous offset with near-zero depth separation (the old 3 cm behind-the-text gap
+  parallaxed visibly off-axis).
 - M1 presence networking (game-free): hand-rolled packet codec, `NetServer`/`NetClient` session
   stack (handshake v1 with password, roster, server-authoritative pose relay, time sync), and the
   full LiteNetLib UDP transport with localhost integration tests.
