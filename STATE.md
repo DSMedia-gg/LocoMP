@@ -89,8 +89,8 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
 6. **Repo residuals, whenever** (05 §7): branch protection, DCO app (optional), repo topics.
 
 ## Push state
-- **All M1 work PUSHED 2026-07-18** (`16d2d37..ce41556`). Post-push CI as expected: only `build.yml` fired (red at the Steam step — accepted until contributors), no Release run.
-- **M2.1 committed locally, UNPUSHED** — push needs Cody's explicit go (hard rule 7).
+- **All M2.1 work PUSHED 2026-07-18** (`ce41556..cc615d2`: train core `1bc5a96`, UDP integration test `1ece517`, tag-shadow fix + banked findings `cc615d2`; Cody's go after the in-game regression passed). Post-push CI as expected: `build.yml` red at the Steam step (accepted until contributors).
+- Staged payload in the game's `Mods/LocoMP/` = current (incl. the tag-shadow fix, restaged 2026-07-18 after the game closed). **Visually re-check the tag on the next game run** — that's the only unverified change.
 
 ## Blockers
 - None. M2.1 verified headless; M2.2/M2.3 need the game (Cody at the PC), M2 exit ideally a friend session.
