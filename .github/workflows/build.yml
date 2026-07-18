@@ -111,6 +111,10 @@ jobs:
               <Reference Include="DV.Simulation"><HintPath>$(DvManaged)/DV.Simulation.dll</HintPath><Private>false</Private></Reference>
               <Reference Include="DV.Common"><HintPath>$(DvManaged)/DV.Common.dll</HintPath><Private>false</Private></Reference>
               <Reference Include="DV.RailTrack"><HintPath>$(DvManaged)/DV.RailTrack.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="DV.OriginShiftInfo"><HintPath>$(DvManaged)/DV.OriginShiftInfo.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(DvManaged)/UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(DvManaged)/UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(DvManaged)/UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
             </ItemGroup>
           </Project>
           EOF

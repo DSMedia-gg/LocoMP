@@ -28,6 +28,55 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-18 — M1.3 (Shim presence + host embed) — code-complete
+
+**Goal:** the game half of M1: avatars + name tags for remote players, local pose capture, and the
+host-embedded server (host = client #1), developed against the bot harness.
+
+**Done (uncommitted — commit after the in-game bot run):**
+- **`CompositeTransport`** (Transport, game-free): one NetServer serves the host's own player over the
+  Loopback hub AND remote players over UDP. Each inner transport numbers peers from 1, so the composite
+  remaps to a unified outer id space. 3 tests: cross-link mutual visibility, cross-link pose relay,
+  single-link eviction. **26/26 total.**
+- **Shim presence:** `PresenceShim` (absolute-coordinate pose capture), `RemoteAvatar` (capsule +
+  billboarded TextMesh name tag, 12/s lerp, 50 m teleport-snap), `AvatarManager` (id → avatar registry).
+  Nothing above the Shim touches a GameObject.
+- **Mod:** `SessionController` — Idle/Hosting/Joined state machine behind a UMM OnGUI panel (name, port,
+  password, address; Host/Join/Leave; live player list). Hosting = NetServer over the composite + own
+  NetClient on the hub; 20 Hz pose send; 5 s BroadcastTime. On host it logs `--at x,y,z` ready to paste
+  into the bot. `Main` reworked: session wired to OnToggle/OnUpdate/OnGUI; M0's 5 s car-position log
+  removed; junction hook kept (quiet, event-driven).
+
+**Learned (B99.7 API intel, clean-room):**
+- **Floating origin:** the sync-correctness landmine. `DV.OriginShift.OriginShift` (static, in
+  `DV.OriginShiftInfo.dll`) exposes `currentMove` + `AbsolutePosition(Transform)`; `WorldMover` itself
+  is in `WorldStreamer.dll`. **Sign verified by IL inspection: absolute = position − currentMove** (the
+  draft had it backwards — avatars would have scattered by the accumulated shift). We compute with
+  `currentMove` directly: `AbsolutePosition`'s float3/Translation/LocalToWorld overloads drag
+  Unity.Mathematics + Unity.Transforms into overload resolution for one Vector3 subtraction.
+- `UnityEngine.Pose` collides with Core's `Pose` → using-alias, same idiom as the LiteNetLib
+  `DeliveryMethod` collision. Third instance of the pattern; it's now house style.
+- Raw `TextMesh` renders NOTHING without both a font (`Resources.GetBuiltinResource<Font>("Arial.ttf")`)
+  and that font's material on the MeshRenderer.
+- New game refs needed (added to both targets files + both CI heredocs): `DV.OriginShiftInfo`,
+  `UnityEngine.PhysicsModule` (Collider destroy), `UnityEngine.TextRenderingModule` (TextMesh),
+  `UnityEngine.IMGUIModule` (GUILayout).
+- Deliberate M1 simplifications, documented in code: handshake game build hard-coded `"B99.7"` (runtime
+  `Application.version` logged at host start = discovery for the M2 supported-build gate); modListHash
+  `""` on both sides until the Mod API era (04) — matches the bot's defaults so the daily rig just works.
+
+**In-game run: PASSED (same day).** Cody hosted, the bot joined over real UDP, the avatar orbited with
+its name tag — "looks good". Banked from the log: **`Application.version` = `99-build2702`** (the string
+for M2's supported-build gate), host self-join offset 0 ms (loopback host=client#1 proof), absolute
+capture exercised ~8 km from Unity origin. One cosmetic fix applied after the run: name tag was hard to
+read against the skybox → text now soft grey with a black drop-shadow copy (a second TextMesh nudged
+down-right/behind — TextMesh has no native shadow). Note: `dotnet run` failed for Cody (SDK is
+user-profile only, runtime is system-wide) → run the built exe directly; bot README now leads with that.
+
+**Next:** eyeball the new tag on next game start, then commit M1.3.
+
+---
+
 ## 2026-07-18 — Bot harness (tools/LocoMP.Bot): the one-PC second player
 
 **Goal:** solve M1.3's testing constraint — Cody has two Steam accounts but one PC and no friend
