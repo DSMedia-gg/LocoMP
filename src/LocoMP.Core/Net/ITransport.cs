@@ -24,9 +24,18 @@ public interface ITransport : IDisposable
     /// <summary>Raised when a payload arrives from a peer: (peerId, payload).</summary>
     event Action<int, byte[]>? Received;
 
+    /// <summary>
+    /// Raised when a peer link is established: (peerId). On the client this fires once with the
+    /// server's id (join handshake is sent in response); on the server, once per connecting client.
+    /// </summary>
+    event Action<int>? PeerConnected;
+
+    /// <summary>Raised when a peer link drops (graceful or lost): (peerId). Drives roster eviction.</summary>
+    event Action<int>? PeerDisconnected;
+
     /// <summary>Send a payload to a peer with the given delivery guarantee.</summary>
     void Send(int peerId, byte[] payload, DeliveryMethod delivery);
 
-    /// <summary>Pump queued network events. Called once per server/client tick.</summary>
+    /// <summary>Pump queued network events (Received / PeerConnected / PeerDisconnected). Once per tick.</summary>
     void Poll();
 }
