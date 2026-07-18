@@ -12,4 +12,10 @@
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" PrivateAssets="all" />
   </ItemGroup>
 
+  <!-- The wire codecs are internal (implementation detail behind NetServer/NetClient) but their
+       untrusted-input edges are unit-tested directly. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="LocoMP.Core.Tests" />
+  </ItemGroup>
+
 </Project>

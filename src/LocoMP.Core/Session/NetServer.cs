@@ -26,12 +26,17 @@ public sealed class NetServer : IDisposable
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
 
+        Trains = new ServerTrains(_transport, _clock, () => _players.Keys);
+
         _transport.Received += OnReceived;
         _transport.PeerDisconnected += OnPeerDisconnected;
     }
 
     /// <summary>The current roster, keyed by player id. Read-only view for the host UI / tests.</summary>
     public IReadOnlyDictionary<int, PlayerState> Players => _players;
+
+    /// <summary>The train subsystem (M2): authoritative trainsets, junctions, turntables, grants.</summary>
+    public ServerTrains Trains { get; }
 
     public int PlayerCount => _players.Count;
 
@@ -69,7 +74,10 @@ public sealed class NetServer : IDisposable
                 case MessageType.JoinRequest: HandleJoin(peerId, r); break;
                 case MessageType.PlayerPose: HandlePose(peerId, r); break;
                 case MessageType.Leave: Remove(peerId); break;
-                default: break; // unknown / server-only type from a client — ignore
+                default:
+                    // Train traffic is only heard from ADMITTED peers — everything else is ignored.
+                    if (_players.ContainsKey(peerId)) Trains.TryHandle(peerId, type, r, payload);
+                    break;
             }
         }
         catch (Exception)
@@ -108,6 +116,7 @@ public sealed class NetServer : IDisposable
 
         SendAccepted(peerId, state);                       // newcomer learns id + time + roster
         BroadcastPlayerJoined(state, exceptPeer: peerId);  // everyone else learns the newcomer
+        Trains.OnPlayerAdmitted(peerId);                   // world burst: trainsets/junctions/grants
         PlayerAdmitted?.Invoke(state);
     }
 
@@ -177,6 +186,7 @@ public sealed class NetServer : IDisposable
         foreach (int id in _players.Keys)
             _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);
 
+        Trains.OnPlayerRemoved(peerId);                    // park their consists, free their grants
         PlayerRemoved?.Invoke(peerId);
     }
 

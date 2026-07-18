@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- M2 train-sync core (game-free): consist replication built on server-committed **trainset
+  transactions with epochs** — couple/uncouple/derail/rerail all retire or re-stamp the trainset, and
+  any snapshot carrying a stale (id, epoch) is discarded by construction, never applied. Includes
+  spline-space bogie snapshots (derailed cars stream a 6-DOF pose), simulation ownership with
+  park/claim, per-cab control grants with input routing to the sim owner, junction sync (duplicate
+  throws coalesce only when the resulting state is identical), turntable sync, and a resync escape
+  hatch. Verified by a 1,000-transaction fuzz with zero stale-snapshot applications. Network protocol
+  is now v2.
+- World-topology data model and versioned binary codec — the contract between the in-game world
+  extractor and the future dedicated server, which must load track data without a game install.
 - M1 presence networking (game-free): hand-rolled packet codec, `NetServer`/`NetClient` session
   stack (handshake v1 with password, roster, server-authoritative pose relay, time sync), and the
   full LiteNetLib UDP transport with localhost integration tests.
