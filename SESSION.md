@@ -28,6 +28,52 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-18 — Bot harness (tools/LocoMP.Bot): the one-PC second player
+
+**Goal:** solve M1.3's testing constraint — Cody has two Steam accounts but one PC and no friend
+testers available. Answer: the "second player" doesn't need the game. A headless bot client joins the
+hosted session over localhost UDP and streams synthetic avatar poses; Cody watches its avatar in his
+one game instance. (Two rendered instances on one Win11 PC isn't viable — one Steam client per user
+session, second session gets no GPU. Second account stays reserved for the CI depot + occasional
+borrowed-hardware checks.) Built to serve ALL future plans, not just M1.3 — this is 03 §11's
+"scripted bot clients" pulled forward from M6.
+
+**Done (uncommitted):**
+- **`tools/LocoMP.Bot`** — net8 console over Core+Transport only (runs on Linux for M6 SVHost soaks):
+  - `BotClient`: injected transport factory + clock → the whole lifecycle is unit-tested over
+    Loopback. Connect timeout (10 s) → retry with backoff (survives server restarts, soak-grade);
+    handshake rejection → hard stop (config mismatch, don't spam); `--churn N` = leave/rejoin cycle
+    (live-fire join/leave storm).
+  - Behaviors behind `IBotBehavior` (pure pose math, no networking): orbit (faces direction of
+    travel), wander (seeded → replayable), idle. Swarm via `--count` (spread start angles/seeds).
+  - Mismatch testing built in: `--build WRONG`, `--mod-version`, `--password` exercise every
+    rejection screen the host will grow in M1.3.
+- **`NetDefaults` (Core):** canonical port **8877** + connect key **`LocoMP:<protocol>`** — stale
+  protocol refused at the socket before any handshake; host UI (M1.3) and dedicated server (M6)
+  will consume the same constants.
+- **`LoopbackNetwork` fix:** endpoint `Dispose()` now deregisters from the hub and raises
+  `PeerDisconnected` on the far side — Loopback drop semantics now match UDP socket close.
+- Wired into `LocoMP.sln` + `LocoMP.NoGame.slnf` (pr.yml compiles it forever), 4 lifecycle tests
+  (join+orbit-on-circle, churn rejoin, reject-stops, no-server-retries) → **23/23**; CHANGELOG
+  Unreleased entry; `tools/LocoMP.Bot/README.md` with the one-PC workflow + future-use table.
+
+**Verified:** unit suite 23/23 (stable) + full sln 0-warnings + live end-to-end over real UDP:
+scratch host (temp project outside the repo, deleted after) + `--count 3 --churn 6 --duration 22` →
+12 joins across 4 churn cycles, 963 poses, mutual visibility correct after every rejoin, server
+roster returned to 0 each cycle, graceful shutdown. Also smoke-tested `--help` and the no-server
+timeout path via the shipped exe.
+
+**Decisions (implementation-level):**
+- Tool lives under `tools/` (new root) — structurally obvious it never ships in the mod zip.
+- LangVersion 10 gotcha: raw string literals are C# 11 → verbatim strings in tool code.
+- Testing posture for M1.3 recorded: bot = daily rig; friend session = the milestone's official
+  exit verification when next available.
+
+**Next:** M1.3 — Shim presence, developed against the bot: host in-game → run
+`LocoMP.Bot --at <your coords>` → watch the avatar orbit you.
+
+---
+
 ## 2026-07-18 — M1.2 (real LiteNetLib UDP transport)
 
 **Goal:** make the M1.1 session stack run over real UDP by finishing `LiteNetLibTransport`, and prove it

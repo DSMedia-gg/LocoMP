@@ -94,6 +94,13 @@ public sealed class LoopbackNetwork
         internal void QueueConnect(int peerId) => _events.Enqueue(() => PeerConnected?.Invoke(peerId));
         internal void QueueDisconnect(int peerId) => _events.Enqueue(() => PeerDisconnected?.Invoke(peerId));
 
-        public void Dispose() => _events.Clear();
+        public void Dispose()
+        {
+            // Match UDP semantics: disposing your transport drops the link, and the OTHER side
+            // observes PeerDisconnected (LiteNetLib does this on socket close). A client endpoint
+            // deregisters from the hub; no-op if the hub already disconnected it.
+            if (_id != ServerPeer) _net.Disconnect(_id);
+            _events.Clear();
+        }
     }
 }

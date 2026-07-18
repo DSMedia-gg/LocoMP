@@ -20,6 +20,7 @@
     <ProjectReference Include="..\..\src\LocoMP.Core\LocoMP.Core.csproj" />
     <ProjectReference Include="..\..\src\LocoMP.Transport\LocoMP.Transport.csproj" />
     <ProjectReference Include="..\..\src\LocoMP.Api\LocoMP.Api.csproj" />
+    <ProjectReference Include="..\..\tools\LocoMP.Bot\LocoMP.Bot.csproj" />
   </ItemGroup>
 
 </Project>
