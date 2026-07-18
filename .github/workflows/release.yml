@@ -159,4 +159,5 @@ jobs:
           file_path: ${{ steps.pkg.outputs.zip }}
 
       - name: Rebuild site changelog
-        run: echo "TODO: trigger locomp.dsm.gg changelog rebuild once the site exists (06)."
+        run: |
+          echo "TODO: trigger locomp.dsm.gg changelog rebuild once the site exists (06)."
