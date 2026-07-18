@@ -1,31 +1,37 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-18 (M0 scaffold session) · This is the **implementation** memory (burst cadence, D8).
+**Updated:** 2026-07-18 (M2.1 train-core session) · This is the **implementation** memory (burst cadence, D8).
 The **planning corpus** lives one level up at `../` (00–09, INDEX, research/) — strategic, kept private.
 Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current milestone in `../07-ROADMAP.md`.
 
 ## Where things stand
 
-- **Milestone:** **M1 — Presence: IN PROGRESS** (started 2026-07-18). **M1.1 + M1.2 + bot DONE** (committed,
-  unpushed); **M1.3 CODE-COMPLETE, uncommitted — awaiting the in-game bot run** (Cody at the PC). Built:
-  `CompositeTransport` (host serves Loopback + UDP under one id space; 3 tests), Shim presence
-  (`PresenceShim` absolute-coordinate pose capture via OriginShift — sign verified from IL: **absolute =
-  position − currentMove**; `RemoteAvatar` capsule + billboarded name tag; `AvatarManager`), mod
-  `SessionController` (Host/Join/Leave UMM panel, host = client #1 over Loopback, 20 Hz pose, 5 s time
-  sync) + reworked `Main`. Handshake build hard-coded "B99.7" for now (runtime `Application.version`
-  logged at host for discovery; TODO M2 supported-build gate). modListHash = "" both sides until the Mod
-  API era (04). New game refs: DV.OriginShiftInfo + Physics/TextRendering/IMGUI modules (targets ×2 + CI
-  heredocs ×2). **26/26 tests, full sln 0-warnings, fresh build staged in `Mods/LocoMP/`.**
-  **In-game run:** enable LocoMP → Ctrl+F10 → Host session → log prints `--at x,y,z` → run
-  `dotnet run --project tools/LocoMP.Bot -- --at x,y,z` → bot avatar orbits you.
-  M1.1 = game-free session core: `NetServer`/`NetClient` over `ITransport` — handshake v1
-  (protocol+build+modVersion+modListHash + password), roster, pose relay (server-authoritative id), server
-  time offset, hand-rolled packet codec, multi-peer `LoopbackNetwork` hub. M1.2 = real transport:
-  `LiteNetLibTransport` fully implemented (server/client roles, connect-key gate, own peer-id assignment,
-  DeliveryMethod mapping, pooled-reader copy) + 2 localhost-UDP integration tests — the SAME session stack,
-  now over real sockets. **19/19 tests, stable ×3, full solution 0-warnings.**
-  Remaining M1: **M1.3** Shim presence (remote avatars + name tags, capture local pose, host = client #1 via
-  Loopback, server time, real modListHash) — the in-game/friend-session half of M1's exit.
+- **Milestone:** **M2 — Trains: IN PROGRESS** (started 2026-07-18). **M2.1 (game-free train core) DONE,
+  committed** — the 03 §4 consist-transaction protocol implemented and fuzz-proven headless:
+  - `TrainsetRegistry` (server authority): register / couple (all four end-orderings) / uncouple /
+    derail / rerail / park / claim. Epoch rules: membership changes retire parent ids + mint fresh ones
+    with epoch = max(parents)+1; derail/rerail keep the id, bump the epoch. Guards: 2 s settle window
+    (Open Rails), 10 m/s relV cap, end-car adjacency, owner-only proposals (rerail = any player).
+  - `TrainsetView` (client mirror): snapshot admission = known id + EXACT epoch + car count; discard
+    counters are the fuzz oracle. `BogieState` spline-space encoding (edgeId, s, v); derailed cars
+    stream a 6-DOF `Pose` instead (`CarSnapshot`).
+  - `ServerTrains`/`ClientTrains` modules wired into NetServer/NetClient: snapshot relay behind the
+    owner+epoch admission check, world burst on admit, park + grant-release on disconnect, junctions
+    (duplicate-coalesce ONLY on same-resulting-state — distinct throws always commit, per the M0 note),
+    turntables (last-writer-wins), control grants + input routing to the sim owner (grant ≠ ownership,
+    multi-crew shape), `ResyncRequest` escape hatch. **Protocol v2** (MessageType 9–28).
+  - `WorldTopology` + `TopologyCodec` ("LMPW" versioned binary via PacketWriter/Reader, zero new deps)
+    — the extractor contract; Core loads a synthetic world game-free (M2.2 writes real files).
+  - **M2 exit fuzz passed: 1,000 random couple/uncouple/derail/rerail transactions, each chased by a
+    stale-stamped snapshot down the same link — zero stale applications (server drops all 1,000 at the
+    door; independent per-client epoch-shadow oracle never fired), all 3 client mirrors converge exactly
+    to the registry, car conservation holds. 59/59 tests, stable ×3, full sln 0 warnings.**
+- **Milestone:** **M1 — Presence: COMPLETE + PUSHED** (2026-07-18, `16d2d37..ce41556`): session core +
+  handshake v1 + roster + pose relay + time sync (`23e9929`), LiteNetLib UDP transport + bot harness
+  (`c443a5b`), Shim presence in-game — host/join UMM panel, avatars + name tags, absolute-coordinate
+  capture via OriginShift (`ce41556`). Verified live via the one-PC bot rig; friend session later
+  upgrades to the official exit wording. Runtime version string banked: **`Application.version` =
+  `99-build2702`** (handshake build still hard-coded "B99.7" → M2.3 supported-build gate).
 - **Milestone:** **M0 — walking skeleton: COMPLETE** (2026-07-18). Scaffold pushed (`9cc1285` + `16d2d37`)
   **and the in-game Shim run passed** — mod loaded, 2 `Junction.Switch` overloads patched, 84 live cars
   streamed w/ positions, 21 junction throws captured across 2 junctions, clean toggle off→on, no exceptions.
@@ -60,25 +66,55 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
 - **CI (`.github/workflows/`):** `pr.yml` (game-free build+test+DCO — locally proven), `build.yml` (DepotDownloader+TOTP → full build → API-compat placeholder), `release.yml` (tag/version+CHANGELOG gate → zip → GH Release → repository.json → Nexus), `canary.yml` (nightly buildid watch → records first buildid, PRs on change).
 - **Repo hygiene:** MIT LICENSE, README (AI disclosure + not-affiliated), CONTRIBUTING (DCO + clean-room), CHANGELOG, issue/PR templates, `.editorconfig`, `NuGet.config` (source-pinned), `global.json`.
 
-## Next — M1 in progress
+## Next — M2 in progress
 
-1. ~~**M0: push + in-game Shim run.**~~ **DONE 2026-07-18** — `9cc1285` + `16d2d37`; log confirmed load/84 cars/21 junction throws/clean toggle.
-2. ~~**M1.1 — game-free session core.**~~ **DONE 2026-07-18** (in `23e9929`) — packet codec, NetServer/NetClient, handshake v1 (+password/modhash), roster, pose relay, time offset, LoopbackNetwork hub. 17/17 tests incl. 8-client storm.
-3. ~~**M1.2 — real transport.**~~ **DONE 2026-07-18** (in `23e9929`) — `LiteNetLibTransport` server/client roles, connect-key gate, own peer-id map, Core→LiteNetLib `DeliveryMethod` mapping (using-alias to kill the enum collision), pooled-reader copy+recycle. 2 localhost-UDP integration tests (connect/relay/leave + wrong-key reject). 19/19, stable ×3.
-4. ~~**M1.3 — Shim presence.**~~ **VERIFIED IN-GAME 2026-07-18** (uncommitted) — Cody hosted, the bot joined over UDP, avatar orbited with name tag, "looks good". Log banked: **runtime `Application.version` = `99-build2702`** (M2 supported-build gate string); host self-join offset 0 ms; absolute capture exercised ~8 km from origin (`--at 7905,132,7353`). Cosmetic fix applied after the run (grey tag text + black drop-shadow copy — white glared against the skybox); rebuilt + restaged, needs a game restart to see. **Then commit M1.3.** Friend session upgrades verification to M1's official exit wording when available. Junction-debounce note lands with M2.
+1. ~~**M2.1 — game-free train core.**~~ **DONE 2026-07-18** (see Where things stand) — registry, epochs,
+   codecs, session modules, topology contract, 1,000-transaction fuzz green.
+2. **M2.2 — world extractor (Shim-side, needs the game):** walk the live `RailTrack` graph + junctions,
+   assign the stable edge numbering the Shim will also use for `BogieState.EdgeId`, write the LMPW file;
+   exit = Core loads the REAL extracted output in a test (criterion is "extractor output loads in a Core
+   test"). Prototype-level is fine (03 §6 flags it as the riskiest dedicated-server dependency).
+3. **M2.3 — Shim train integration (in-game half):** capture owned consist bogies in spline space; apply
+   remote snapshots with interpolation (12/s lerp precedent from avatars); Harmony hooks: coupler contact →
+   `ProposeCouple` (translate physical coupler → trainset-end form), uncouple → `ProposeUncouple`, derail →
+   `ReportDerail`; junction hook → `ThrowJunction` — settle the M0 double-emit question with one controlled
+   throw (server coalesce makes it harmless either way); grants on cab entry/exit; **supported-build gate**:
+   handshake sends runtime `Application.version` (`99-build2702`), mod refuses unknown builds with a friendly
+   message instead of the hard-coded "B99.7". Bot: `--consist` mode driving a synthetic consist along
+   extracted topology = the one-PC "ghost train" rig.
+4. **M2 exit (in-game):** two consists driven (Cody + bot), couple into one, both crew it, uncouple,
+   derail + rerail — no snap-back. Friend session upgrades wording when available.
 5. **Deferred until contributors (Cody, 2026-07-18):** wire CI Steam/Nexus secrets; set `.ci/depot.json` manifest. Red `build.yml` on push accepted until then.
 6. **Repo residuals, whenever** (05 §7): branch protection, DCO app (optional), repo topics.
 
-## Local commits not yet pushed (push gated on Cody — hard rule 7)
-- **`23e9929` feat: M1 presence — session core + UDP transport** (M1.1 + M1.2, 22 files, DCO-signed).
-- **`c443a5b` feat: LocoMP.Bot — headless test-player harness** (15 files, DCO-signed).
-- **Uncommitted: M1.3** — `CompositeTransport` + 3 tests, Shim presence (PresenceShim/RemoteAvatar/AvatarManager), mod SessionController + Main rework, game-ref additions (targets ×2 + CI heredocs ×2), doc deltas. 26/26 tests, 0-warnings. **Commit after the in-game bot run passes.**
-- `Mods/LocoMP/` re-staged with the M1.3 build (dev artifact, outside the repo).
+## Push state
+- **All M1 work PUSHED 2026-07-18** (`16d2d37..ce41556`). Post-push CI as expected: only `build.yml` fired (red at the Steam step — accepted until contributors), no Release run.
+- **M2.1 committed locally, UNPUSHED** — push needs Cody's explicit go (hard rule 7).
 
 ## Blockers
-- None. M1.1 + M1.2 verified locally (incl. real UDP). M1.3 needs the game + ideally a friend session.
+- None. M2.1 verified headless; M2.2/M2.3 need the game (Cody at the PC), M2 exit ideally a friend session.
 
 ## Session log
+- **2026-07-18** — **M2.1 built (game-free train core), committed.** New Core: `Trains/` (BogieState
+  spline-space, CarDef/TrainsetDef with epochs, CarSnapshot railed|6-DOF, TrainsetTransaction,
+  TrainsetRegistry = ALL epoch rules in one place, TrainsetView = exact-epoch admission + discard
+  counters), `Protocol/TrainCodec` (hand-rolled, count-capped untrusted reads), `World/`
+  (WorldTopology + LMPW TopologyCodec — extractor contract), `Session/ServerTrains` + `ClientTrains`
+  wired into NetServer/NetClient (train traffic only from ADMITTED peers; world burst on admit; park +
+  grant release on leave). Protocol v1→2 (MessageType 9–28 appended). Design choices worth remembering:
+  (a) membership transactions mint FRESH trainset ids and retire parents — a stale snapshot can't even
+  name a live set after a merge/split; epoch bump covers same-id derail/rerail; (b) client epoch check
+  is EXACT equality because snapshots (sequenced-unreliable) can outrun transactions (reliable-ordered)
+  cross-channel — a future-epoch snapshot is dropped and the owner's next one re-baselines;
+  (c) `CoupleEnd` is defined against the TRAINSET (Front = index-0 side), not car couplers, so Core
+  validates/orders merges without knowing car orientation — Shim translates at the boundary;
+  (d) junction duplicate-coalesce = same-resulting-branch only (never rate-limits distinct throws —
+  Cody's M0 constraint); (e) snapshot relay reuses the sender's original bytes (no re-encode).
+  `InternalsVisibleTo(LocoMP.Core.Tests)` added for codec edge tests. **Tests 26→59** (codec 5, registry
+  14 incl. all 4 merge-end orderings, topology 3, session integration 8, fuzz 3): the 07 §M2 exit fuzz =
+  1,000 random transactions each chased by a stale-stamped snapshot on the same link — 0 stale applies,
+  server dropped all 1,000, mirrors converge, cars conserved. Stable ×3, full sln 0 warnings.
+  **Next: M2.2 extractor (needs game) → M2.3 Shim trains + supported-build gate.**
 - **2026-07-18** — **M1.3 built (Shim presence + host embed), uncommitted.** `CompositeTransport` multiplexes Loopback + UDP under one outer peer-id space (both inners number from 1 → remap required; 3 tests prove cross-link roster/pose/evict). Shim: `PresenceShim` captures the local pose in ABSOLUTE coords — **DV floating origin**: `OriginShift.currentMove` in `DV.OriginShiftInfo.dll` (found via assembly sweep; `WorldMover` lives in `WorldStreamer.dll`); sign verified by IL inspection of `AbsolutePosition(Transform)` = `position − currentMove` (my first draft had it backwards — would have scattered avatars); did the arithmetic directly instead of calling the helper because its overloads drag Unity.Mathematics/Unity.Transforms into compile-time resolution. `RemoteAvatar` = capsule (collider destroyed) + TextMesh name tag (needs `Arial.ttf` builtin font AND `font.material` on the renderer or it renders nothing) billboarded to `PlayerManager.ActiveCamera`; 12/s lerp, 50 m teleport-snap. Mod: `SessionController` (Idle/Hosting/Joined; host = NetServer over composite + own NetClient on the hub; 20 Hz pose, 5 s BroadcastTime; UMM OnGUI panel Host/Join/Leave; logs `--at x,y,z` for the bot on host). `Main` reworked (session wired; M0 car-spam removed; junction hook kept). `UnityEngine.Pose` name-collides with Core's → using-alias (same idiom as DeliveryMethod). New refs in targets ×2 + CI heredocs ×2: DV.OriginShiftInfo, UnityEngine.{Physics,TextRendering,IMGUI}Module. Handshake build hard-coded "B99.7"; `Application.version` logged for discovery; modListHash "" both sides (Mod API era computes real one). 26/26, 0-warnings, staged to `Mods/LocoMP/`. **Next: Cody's in-game bot run, then commit.**
 - **2026-07-18** — M0 scaffold. Cloned repo into `repo/` (Option A layout). Built + verified game-free (5/5) and full solution (Shim compiles vs B99.7). Authored 4 CI workflows. Fixed a `DeliveryMethod` name clash with LiteNetLib. DV API for the spike verified by reflection-only inspection (TrainCar/Bogie/CarSpawner in Assembly-CSharp; Junction in DV.RailTrack). Awaiting Cody for push + secrets + in-game run.
 - **2026-07-18** — **Pushed the scaffold** (Cody's explicit go, twice). `9cc1285` scaffold → `16d2d37` release.yml fix. Re-ran `LocoMP.NoGame.slnf` before push = 5/5 (SDK is user-profile `C:\Users\User\.dotnet`, 8.0.423 — system dotnet is runtime-only). Post-push CI: caught + fixed a `release.yml` startup failure (YAML `": "` in a plain-scalar `run:`); confirmed the fix (no Release run on the tag-only workflow). `build.yml` red = no Steam secrets, expected. M0 now down to secrets + in-game run.

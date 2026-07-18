@@ -29,10 +29,15 @@ public sealed class NetClient : IDisposable
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _password = password ?? string.Empty;
 
+        Trains = new ClientTrains(_transport, () => Joined);
+
         _transport.Received += OnReceived;
         _transport.PeerConnected += OnConnected;
         _transport.PeerDisconnected += OnDisconnected;
     }
+
+    /// <summary>The train subsystem (M2): the mirrored trainset world + propose/stream calls.</summary>
+    public ClientTrains Trains { get; }
 
     /// <summary>This client's server-assigned id once admitted; null until JoinAccepted arrives.</summary>
     public int? LocalId { get; private set; }
@@ -96,6 +101,7 @@ public sealed class NetClient : IDisposable
     {
         LocalId = null;
         _players.Clear();
+        Trains.Reset();
     }
 
     private void OnReceived(int fromPeer, byte[] payload)
@@ -115,7 +121,7 @@ public sealed class NetClient : IDisposable
                 case MessageType.PlayerLeft: HandlePlayerLeft(r); break;
                 case MessageType.PlayerPose: HandlePlayerPose(r); break;
                 case MessageType.TimeSync: HandleTimeSync(r); break;
-                default: break;
+                default: Trains.TryHandle(type, r); break;
             }
         }
         catch (Exception)

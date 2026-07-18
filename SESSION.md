@@ -5,6 +5,57 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-18 — M2.1 (game-free train core) — the hard problem, fuzz-proven
+
+**Goal:** implement 03 §4 (consist transactions with epochs) headless, plus the world-topology
+contract, and prove the M2 exit fuzz criterion before any Shim work.
+
+**Done:**
+- `LocoMP.Core.Trains`: `BogieState` (spline-space), `CarDef`/`TrainsetDef`/`CarSnapshot`/
+  `TrainsetSnapshot`, `TrainsetTransaction`, `TrainsetRegistry` (the server authority — every epoch
+  rule lives here), `TrainsetView` (client mirror — exact-epoch snapshot admission; discard counters
+  double as the fuzz oracle).
+- `ServerTrains`/`ClientTrains` session modules wired into NetServer/NetClient: snapshot relay behind
+  the owner+epoch admission check, world burst on admit, park + grant release on disconnect,
+  junctions, turntables, control grants + input routing to the sim owner, `ResyncRequest`.
+  Protocol v1 → v2 (MessageType 9–28 appended).
+- `LocoMP.Core.World`: `WorldTopology` + "LMPW" versioned binary codec on the PacketWriter/Reader
+  primitives (zero new dependencies) — the extractor ↔ dedicated-server contract, loads game-free.
+- Tests 26 → 59: codec edges (hostile counts, truncation), registry (all four merge end-orderings,
+  settle guard, relV cap, epoch rules), 8 session integration flows, and the 07 §M2 exit fuzz —
+  **1,000 random couple/uncouple/derail/rerail transactions, each chased by a stale-stamped snapshot
+  down the same link: zero stale applications**, all three client mirrors converge exactly to the
+  registry, car conservation holds. Stable ×3; full solution 0 warnings.
+
+**Decisions this session (implementation-level; none change 00's D1–D12):**
+- Membership transactions mint FRESH trainset ids (parents retired); product epoch = max(parents)+1.
+  Derail/rerail keep the id and bump the epoch. Strongest form of the 03 §4 invariant: after a
+  merge/split a stale snapshot cannot even *name* a live trainset.
+- Client snapshot admission is EXACT epoch equality: snapshots (sequenced-unreliable) can outrun
+  transactions (reliable-ordered) cross-channel, so a future-epoch snapshot is dropped too; the
+  owner's next snapshot re-baselines. Brief gap, zero corruption.
+- `CoupleEnd` is defined against the TRAINSET (Front = index-0 side), not the car's own couplers —
+  Core validates and orders merges without knowing car orientations; the Shim translates a physical
+  coupler contact into trainset-end form at the boundary.
+- Junction duplicate-coalesce: only a throw producing the SAME resulting branch is swallowed (hook
+  double-fire case); distinct real throws always commit (Cody's M0 constraint, honored server-side).
+- Rerail placement is delegated to the owner's first new-epoch snapshot for now; a server-chosen
+  spline pose needs topology and lands with the extractor era.
+- Registration correlation token: the server assigns ALL ids; the registering client maps its local
+  cars by (token, car order) from the echoed create.
+
+**Learned / notes:**
+- Snapshot relay reuses the sender's original packet bytes after validation (no re-encode on the hot
+  path); recipients need no sender id — the trainset's owner is authoritative by definition.
+- `InternalsVisibleTo` (Core → Tests) added so `TrainCodec`'s untrusted-input edges are directly
+  testable; PresenceCodec precedent had kept the codecs internal.
+
+**Next:** M2.2 world extractor (Shim walks the live RailTrack graph, writes LMPW; Core loads the REAL
+file = exit criterion) → M2.3 Shim train integration + supported-build gate (`99-build2702`) + bot
+`--consist` ghost-train rig → in-game M2 exit. See `STATE.md` → Next.
+
+---
+
 ## 2026-07-18 — M0 push (scaffold → GitHub)
 
 **Goal:** land the M0 scaffold on `DSMedia-gg/LocoMP` (pipeline exit 1), Cody-gated per hard rule 7.
