@@ -30,6 +30,27 @@ public sealed class ServerCareer
     // jobs (D13). Dedicated-server mode never sets AcceptExternalJobs, so this never matters there.
     private int _worldSourcePeer;
 
+    // Deferred completion reports on captured jobs (M3.5c): a remote claimant's "done" is not
+    // trusted — the world source's game validates its own task tree and answers. Keyed by job id;
+    // claimants are held by KEY (they may disconnect while the query is in flight).
+    private sealed class PendingComplete
+    {
+        public PendingComplete(string claimantKey, int taskIndex, long deadlineMs)
+        {
+            ClaimantKey = claimantKey;
+            TaskIndex = taskIndex;
+            DeadlineMs = deadlineMs;
+        }
+
+        public string ClaimantKey { get; }
+        public int TaskIndex { get; }
+        public long DeadlineMs { get; }
+    }
+
+    private const long CompleteQueryTimeoutMs = 15_000;
+    private readonly Dictionary<int, PendingComplete> _pendingCompletes = new();
+    private readonly IClock _clock;
+
     internal ServerCareer(ITransport transport, IClock clock, CareerConfig config,
         Func<IEnumerable<int>> connectedIds, CareerSaveData? restore, Func<int, Pose?> poseOf)
     {
@@ -37,6 +58,7 @@ public sealed class ServerCareer
         _config = config;
         _connectedIds = connectedIds;
         _poseOf = poseOf;
+        _clock = clock;
         Registry = new CareerRegistry(config, clock, restore);
     }
 
@@ -105,6 +127,7 @@ public sealed class ServerCareer
             case MessageType.JobRetract: HandleJobRetract(peerId, r); return true;
             case MessageType.LicenseGrantExternal: HandleLicenseGrantExternal(peerId, r); return true;
             case MessageType.FeeExternal: HandleFeeExternal(peerId, r); return true;
+            case MessageType.JobCompleteReply: HandleCompleteReply(peerId, r); return true;
             default: return false;
         }
     }
@@ -117,7 +140,28 @@ public sealed class ServerCareer
         foreach (JobRecord job in tick.GeneratedJobs)
             Broadcast(BuildJobCreated(job.Def));
         foreach (JobRecord job in tick.ReleasedJobs)
+        {
+            _pendingCompletes.Remove(job.Def.Id); // a released claim voids any in-flight verification
             Broadcast(BuildJobState(job));
+        }
+
+        if (_pendingCompletes.Count > 0)
+        {
+            long now = _clock.NowMs;
+            List<int>? lapsed = null;
+            foreach (KeyValuePair<int, PendingComplete> kv in _pendingCompletes)
+                if (now >= kv.Value.DeadlineMs) (lapsed ??= new List<int>()).Add(kv.Key);
+            if (lapsed != null)
+            {
+                foreach (int jobId in lapsed)
+                {
+                    PendingComplete pending = _pendingCompletes[jobId];
+                    _pendingCompletes.Remove(jobId);
+                    if (_peerByKey.TryGetValue(pending.ClaimantKey, out int peer))
+                        Reject(peer, "task: the host did not confirm delivery in time — try again", jobId);
+                }
+            }
+        }
     }
 
     // ── handlers ──
@@ -155,10 +199,22 @@ public sealed class ServerCareer
             Reject(peerId, "retract: only the world source retracts jobs", jobId);
             return;
         }
+        // Capture the claimant BEFORE the retract clears it: a claim dying under someone (the
+        // native job expired at a far station) deserves an explicit toast, not just a vanished
+        // MY JOB row.
+        string? claimantKey = Registry.Jobs.TryGetValue(jobId, out JobRecord? held) ? held.ClaimantKey : null;
+
         if (Registry.TryRetract(jobId, out JobRecord? job, out string? reason))
+        {
+            _pendingCompletes.Remove(jobId);
             Broadcast(BuildJobState(job!));
+            if (claimantKey != null && _peerByKey.TryGetValue(claimantKey, out int claimantPeer))
+                Reject(claimantPeer, "the host world expired this job — claim released", jobId);
+        }
         else
+        {
             Reject(peerId, $"retract: {reason}", jobId);
+        }
     }
 
     private void HandleTaskReport(int peerId, PacketReader r)
@@ -173,6 +229,34 @@ public sealed class ServerCareer
         if (!TaskLocationOk(peerId, jobId, taskIndex, out string? whereReason))
         {
             Reject(peerId, $"task: {whereReason}", jobId);
+            return;
+        }
+
+        // Captured jobs reported by anyone but the world source defer to NATIVE validation
+        // (M3.5c): the host's game owns the task tree, so the report becomes a query and the
+        // commit waits for the verdict. The world source's own reports keep the direct path —
+        // they only ever arrive AFTER the game validated the turn-in (JobCapture's flow).
+        if (Registry.Jobs.TryGetValue(jobId, out JobRecord? record) &&
+            record.Def.GameId.Length > 0 && peerId != _worldSourcePeer)
+        {
+            if (record.State != JobLifecycle.Claimed || record.ClaimantKey != key)
+            {
+                Reject(peerId, $"task: job {jobId} is not claimed by you", jobId);
+                return;
+            }
+            if (taskIndex != record.NextTaskIndex)
+            {
+                Reject(peerId, $"task: task {taskIndex} out of order (expected {record.NextTaskIndex})", jobId);
+                return;
+            }
+            // Re-reports while a query is in flight just refresh the deadline — reliable-ordered
+            // transport means the world source will answer the first one soon regardless.
+            _pendingCompletes[jobId] = new PendingComplete(key, taskIndex, _clock.NowMs + CompleteQueryTimeoutMs);
+            byte[] query = new PacketWriter(8)
+                .WriteByte((byte)MessageType.JobCompleteRequest)
+                .WriteVarUInt((uint)jobId)
+                .ToArray();
+            _transport.Send(_worldSourcePeer, query, DeliveryMethod.ReliableOrdered);
             return;
         }
 
@@ -192,15 +276,60 @@ public sealed class ServerCareer
         }
     }
 
+    /// <summary>The world source's native verdict on a deferred completion (M3.5c). On ok the
+    /// stashed report commits exactly like a direct one — payout to whoever holds the claim (by
+    /// KEY, so a claimant mid-reconnect still gets paid). On a refusal the claimant gets the
+    /// native reason as their toast.</summary>
+    private void HandleCompleteReply(int peerId, PacketReader r)
+    {
+        int jobId = (int)r.ReadVarUInt();
+        bool ok = r.ReadByte() != 0;
+        string verdict = r.ReadString();
+        if (peerId != _worldSourcePeer)
+        {
+            Reject(peerId, "complete: only the world source verifies captured jobs", jobId);
+            return;
+        }
+        if (!_pendingCompletes.TryGetValue(jobId, out PendingComplete? pending)) return; // lapsed or voided
+        _pendingCompletes.Remove(jobId);
+
+        if (!ok)
+        {
+            if (_peerByKey.TryGetValue(pending.ClaimantKey, out int claimantPeer))
+                Reject(claimantPeer, $"task: {(verdict.Length > 0 ? verdict : "the host world says this job is not finished")}", jobId);
+            return;
+        }
+
+        if (Registry.TryReportTask(pending.ClaimantKey, jobId, pending.TaskIndex,
+                out JobRecord? job, out bool completed, out long payout, out string? reason))
+        {
+            Broadcast(BuildJobState(job!));
+            if (completed)
+            {
+                SendWalletUpdate(pending.ClaimantKey);
+                SendEconomyEvent(pending.ClaimantKey, EconomyEventKind.JobPayout, payout, $"job {jobId} delivered");
+            }
+        }
+        else if (_peerByKey.TryGetValue(pending.ClaimantKey, out int claimantPeer))
+        {
+            Reject(claimantPeer, $"task: {reason}", jobId);
+        }
+    }
+
     private void HandleAbandon(int peerId, PacketReader r)
     {
         int jobId = (int)r.ReadVarUInt();
         if (KeyOf(peerId) is not string key) return;
 
         if (Registry.TryAbandon(key, jobId, out JobRecord? job, out string? reason))
+        {
+            _pendingCompletes.Remove(jobId); // an abandon voids any in-flight verification
             Broadcast(BuildJobState(job!));
+        }
         else
+        {
             Reject(peerId, $"abandon: {reason}", jobId);
+        }
     }
 
     private void HandlePurchase(int peerId, PacketReader r)
@@ -220,22 +349,29 @@ public sealed class ServerCareer
         }
     }
 
-    /// <summary>D14: the game granted a license natively on the host — mirror it into the policy
-    /// scope, charge-free (the register's payment arrives as FeeExternal). Idempotent grants that
-    /// change nothing are silently fine: they're echoes of our own server-side grants landing in
-    /// the native LicenseManager and coming back around.</summary>
+    /// <summary>D14/M3.5c: a charge-free license grant from the world source — either the mirror
+    /// of a native purchase on the host (target 0 = own scope; the register's payment arrives as
+    /// FeeExternal) or a host-admin grant to a connected player (target = their peer id).
+    /// Idempotent grants that change nothing are silently fine: they're echoes of our own
+    /// server-side grants landing in the native LicenseManager and coming back around.</summary>
     private void HandleLicenseGrantExternal(int peerId, PacketReader r)
     {
         string licenseId = r.ReadString();
-        if (KeyOf(peerId) is not string key) return;
+        int targetPeer = (int)r.ReadVarUInt();
         if (peerId != _worldSourcePeer)
         {
-            Reject(peerId, "grant: only the world source mirrors native grants");
+            Reject(peerId, "grant: only the world source grants licenses");
             return;
         }
-        if (Registry.TryGrantExternal(key, licenseId, out bool newlyGranted, out string? reason))
+        string? targetKey = targetPeer == 0 ? KeyOf(peerId) : KeyOf(targetPeer);
+        if (targetKey is null)
         {
-            if (newlyGranted) SendLicenseUpdate(key, licenseId);
+            Reject(peerId, $"grant: player {targetPeer} is not connected");
+            return;
+        }
+        if (Registry.TryGrantExternal(targetKey, licenseId, out bool newlyGranted, out string? reason))
+        {
+            if (newlyGranted) SendLicenseUpdate(targetKey, licenseId);
         }
         else
         {

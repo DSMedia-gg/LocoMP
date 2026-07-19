@@ -240,19 +240,19 @@ public class CareerSessionTests
         Pump(server, new[] { host, b });
         Assert.Single(server.Career.Registry.Jobs);
 
-        // Native expiry retracts an unclaimed job everywhere; a claimed one is protected.
+        // Native death retracts an external job even UNDER a claim (M3.5c): in host-native mode
+        // the world's job lifecycle follows the host's presence — a far station expires its jobs
+        // under a remote claimant, and a claim on a dead native job can never complete. The
+        // claimant is told explicitly, not just left with a vanished row.
         b.Career.ClaimJob(serverId);
         Pump(server, new[] { host, b });
-        host.Career.RetractJob(serverId);
-        Pump(server, new[] { host, b });
-        Assert.Equal(JobLifecycle.Claimed, server.Career.Registry.Jobs[serverId].State);
-
-        b.Career.AbandonJob(serverId);
-        Pump(server, new[] { host, b });
+        string? claimantToast = null;
+        b.Career.RequestRejected += (r, id) => { if (id == serverId) claimantToast = r; };
         host.Career.RetractJob(serverId);
         Pump(server, new[] { host, b });
         Assert.Empty(server.Career.Registry.Jobs);
         Assert.Empty(b.Career.Jobs);                           // Expired jobs leave every mirror
+        Assert.Contains("host world expired", claimantToast);
     }
 
     [Fact]
@@ -366,7 +366,7 @@ public class CareerSessionTests
         b.Career.ReportExternalFee(100_00, "shop");
         Pump(server, new[] { a, b });
 
-        Assert.Contains("grant: only the world source mirrors native grants", rejections);
+        Assert.Contains("grant: only the world source grants licenses", rejections);
         Assert.Contains("fee: only the world source reports native fees", rejections);
         Assert.DoesNotContain("de2", b.Career.Licenses);
         Assert.Equal(500_00, b.Career.BalanceCents);

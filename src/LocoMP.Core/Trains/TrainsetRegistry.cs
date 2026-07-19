@@ -51,9 +51,10 @@ public sealed class TrainsetRegistry
     }
 
     /// <summary>
-    /// Admit an existing consist into the session (world source registering its cars, or a future
-    /// spawn). Specs carry kind + derailed only — the server assigns both the trainset id and every
-    /// car id (any ids on the specs are ignored).
+    /// Admit an existing consist into the session (world source registering its cars, or a mid-
+    /// session spawn). The server assigns both the trainset id and every car id (any ids on the
+    /// specs are ignored); everything else on the spec — kind, derailed, world identity, cargo —
+    /// is preserved (M3.5c: job paperwork and rebinding name cars by their game identity).
     /// </summary>
     public TrainsetDef Register(int ownerId, IReadOnlyList<CarDef> carSpecs)
     {
@@ -62,11 +63,31 @@ public sealed class TrainsetRegistry
 
         var cars = new CarDef[carSpecs.Count];
         for (int i = 0; i < carSpecs.Count; i++)
-            cars[i] = new CarDef(_nextCarId++, carSpecs[i].Kind, carSpecs[i].Derailed);
+        {
+            CarDef spec = carSpecs[i];
+            cars[i] = new CarDef(_nextCarId++, spec.Kind, spec.Derailed,
+                spec.GameId, spec.GameGuid, spec.CargoId, spec.CargoAmount);
+        }
 
         var def = new TrainsetDef(_nextTrainsetId++, epoch: 1, ownerId, cars);
         Commit(def);
         return def;
+    }
+
+    /// <summary>Commit a live cargo change on one car (owner-reported, M3.5c). Cargo is NOT
+    /// membership, so the epoch does not move — snapshots stay admissible across a load. The
+    /// updated def is what late joiners and saves will carry.</summary>
+    public bool TryUpdateCargo(int carId, string cargoId, float cargoAmount,
+        out TrainsetDef? updated, out string? reason)
+    {
+        updated = null;
+        if (!TryFindCar(carId, out TrainsetDef set)) { reason = $"unknown car {carId}"; return false; }
+
+        var cars = set.Cars.Select(c => c.Id == carId ? c.WithCargo(cargoId, cargoAmount) : c).ToArray();
+        updated = new TrainsetDef(set.Id, set.Epoch, set.OwnerId, cars);
+        _sets[set.Id] = updated;
+        reason = null;
+        return true;
     }
 
     /// <summary>Validate + commit a coupling contact (03 §4 step 2). Product owner = the proposer.</summary>

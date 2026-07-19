@@ -130,9 +130,14 @@ public sealed class CareerRegistry
         var tick = new CareerTick();
         long now = _clock.NowMs;
 
+        // Collect before releasing: an external job's release REMOVES it from the board (below),
+        // and removing while iterating _jobs.Values would throw.
+        List<JobRecord>? due = null;
         foreach (JobRecord job in _jobs.Values)
             if (job.State == JobLifecycle.Claimed && now >= job.ClaimExpiresAtMs)
-                Release(job, tick);
+                (due ??= new List<JobRecord>()).Add(job);
+        if (due != null)
+            foreach (JobRecord job in due) Release(job, tick);
 
         List<string>? lapsed = null;
         foreach (KeyValuePair<string, long> kv in _graceUntilMs)
@@ -142,9 +147,12 @@ public sealed class CareerRegistry
             foreach (string key in lapsed)
             {
                 _graceUntilMs.Remove(key);
+                List<JobRecord>? held = null;
                 foreach (JobRecord job in _jobs.Values)
                     if (job.State == JobLifecycle.Claimed && job.ClaimantKey == key)
-                        Release(job, tick);
+                        (held ??= new List<JobRecord>()).Add(job);
+                if (held != null)
+                    foreach (JobRecord job in held) Release(job, tick);
             }
         }
 
@@ -235,7 +243,9 @@ public sealed class CareerRegistry
         return true;
     }
 
-    /// <summary>Give a claim up: the job returns to the board with progress reset.</summary>
+    /// <summary>Give a claim up: the job returns to the board with progress reset. EXTERNAL jobs
+    /// die instead (broadcast as Expired) — DV cannot re-shelve a taken job, so re-offering one
+    /// would advertise a job no world can deliver.</summary>
     public bool TryAbandon(string playerKey, int jobId, out JobRecord? job, out string? reason)
     {
         job = null;
@@ -246,9 +256,16 @@ public sealed class CareerRegistry
             return false;
         }
 
-        record.State = JobLifecycle.Available;
-        record.ClaimantKey = null;
-        record.NextTaskIndex = 0;
+        if (record.Def.GameId.Length > 0)
+        {
+            RetireExternal(record);
+        }
+        else
+        {
+            record.State = JobLifecycle.Available;
+            record.ClaimantKey = null;
+            record.NextTaskIndex = 0;
+        }
         job = record;
         reason = null;
         return true;
@@ -283,15 +300,30 @@ public sealed class CareerRegistry
         return true;
     }
 
-    /// <summary>Drop an unclaimed external job whose native counterpart expired. A claimed job is
-    /// never retracted out from under its claimant — the refusal tells the world source so.</summary>
+    /// <summary>Drop an external job whose native counterpart died. Available jobs retract
+    /// freely; a CLAIMED job retracts only when it is external — in host-native mode the world's
+    /// job lifecycle follows the HOST's presence (a far station expires its jobs under a remote
+    /// claimant, M3.5c run-A finding), and a claim on a dead native job can never complete, so
+    /// protecting it would only manufacture zombies. Core-generated claims stay protected —
+    /// nothing external can invalidate them.</summary>
     public bool TryRetract(int jobId, out JobRecord? job, out string? reason)
     {
         job = null;
         if (!_jobs.TryGetValue(jobId, out JobRecord? record)) { reason = $"unknown job {jobId}"; return false; }
-        if (record.State != JobLifecycle.Available) { reason = $"job {jobId} is not available"; return false; }
+        if (record.State == JobLifecycle.Claimed && record.Def.GameId.Length == 0)
+        {
+            reason = $"job {jobId} is claimed";
+            return false;
+        }
+        if (record.State != JobLifecycle.Available && record.State != JobLifecycle.Claimed)
+        {
+            reason = $"job {jobId} is not available";
+            return false;
+        }
 
         record.State = JobLifecycle.Expired;
+        record.ClaimantKey = null;
+        record.NextTaskIndex = 0;
         _jobs.Remove(jobId);
         job = record;
         reason = null;
@@ -371,6 +403,12 @@ public sealed class CareerRegistry
         save.SharedLicenses.AddRange(_sharedLicenses);
         foreach (JobRecord job in _jobs.Values)
         {
+            // AVAILABLE external jobs are pure mirrors of the world source's LIVE world — the
+            // join-time sweep re-offers them every session, and persisting them manufactures
+            // ghosts: a restart's world has different jobs, and a saved entry with no native
+            // counterpart is claimable but backed by nothing (M3.5c run-A finding). CLAIMED
+            // external jobs still persist — the reconnect-grace story needs them.
+            if (job.Def.GameId.Length > 0 && job.State == JobLifecycle.Available) continue;
             long remaining = job.State == JobLifecycle.Claimed ? Math.Max(0, job.ClaimExpiresAtMs - now) : 0;
             save.Jobs.Add(new JobSave(job.Def, job.State, job.ClaimantKey ?? string.Empty, job.NextTaskIndex, remaining));
         }
@@ -478,11 +516,25 @@ public sealed class CareerRegistry
         return 0f;
     }
 
-    private static void Release(JobRecord job, CareerTick tick)
+    private void Release(JobRecord job, CareerTick tick)
     {
-        job.State = JobLifecycle.Available;
+        // External (host-captured) jobs die when their claim lapses — same rationale as abandon:
+        // the native job stays "taken" in the host world and can never return to a validator.
+        if (job.Def.GameId.Length > 0) RetireExternal(job);
+        else
+        {
+            job.State = JobLifecycle.Available;
+            job.ClaimantKey = null;
+            job.NextTaskIndex = 0;
+        }
+        tick.ReleasedJobs.Add(job);
+    }
+
+    private void RetireExternal(JobRecord job)
+    {
+        job.State = JobLifecycle.Expired;
         job.ClaimantKey = null;
         job.NextTaskIndex = 0;
-        tick.ReleasedJobs.Add(job);
+        _jobs.Remove(job.Def.Id);
     }
 }

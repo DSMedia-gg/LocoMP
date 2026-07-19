@@ -24,6 +24,11 @@ public sealed class ServerTrains
     private readonly Dictionary<uint, float> _turntables = new();
     private readonly Dictionary<int, int> _grants = new(); // carId → holding playerId
 
+    // Latest committed cab-control values, carId → (controlId → value). Owner-authoritative and
+    // replayed in the join burst so a newcomer's replica levers match reality (M3.5c). Session
+    // state only — restored worlds come back neutral, like the game's own cold start.
+    private readonly Dictionary<int, Dictionary<byte, float>> _controls = new();
+
     // Last ADMITTED snapshot per trainset — always epoch-current by construction (admission checks
     // the epoch and every transaction prunes). Feeds the join-burst baseline and the world save.
     private readonly Dictionary<int, TrainsetSnapshot> _latest = new();
@@ -71,6 +76,10 @@ public sealed class ServerTrains
             case MessageType.ControlGrantRequest: HandleGrantRequest(peerId, r); return true;
             case MessageType.ControlGrantRelease: HandleGrantRelease(peerId, r); return true;
             case MessageType.ControlInput: HandleControlInput(peerId, r); return true;
+            case MessageType.ControlState: HandleControlState(peerId, r); return true;
+            case MessageType.CargoState: HandleCargoState(peerId, r); return true;
+            case MessageType.CoupleRequest: HandleCoupleRequest(peerId, r); return true;
+            case MessageType.UncoupleRequest: HandleUncoupleRequest(peerId, r); return true;
             default: return false;
         }
     }
@@ -91,6 +100,9 @@ public sealed class ServerTrains
             _transport.Send(peerId, BuildTurntableState(t.Key, t.Value), DeliveryMethod.ReliableOrdered);
         foreach (KeyValuePair<int, int> g in _grants)
             _transport.Send(peerId, BuildGrantState(g.Key, g.Value), DeliveryMethod.ReliableOrdered);
+        foreach (KeyValuePair<int, Dictionary<byte, float>> car in _controls)
+            foreach (KeyValuePair<byte, float> ctrl in car.Value)
+                _transport.Send(peerId, BuildControlState(car.Key, ctrl.Key, ctrl.Value), DeliveryMethod.ReliableOrdered);
     }
 
     /// <summary>A player left: park their consists (03 §3 — positions freeze until reclaimed) and
@@ -121,13 +133,10 @@ public sealed class ServerTrains
             ProposalRejected?.Invoke(peerId, $"register: car count {count} out of range");
             return;
         }
+        // Full CarDef codec since v5 (identity + cargo survive registration); the spec's car id is
+        // ignored — the registry assigns every id.
         var specs = new CarDef[count];
-        for (int i = 0; i < count; i++)
-        {
-            string kind = r.ReadString();
-            byte flags = r.ReadByte();
-            specs[i] = new CarDef(0, kind, (flags & 0x01) != 0);
-        }
+        for (int i = 0; i < count; i++) specs[i] = TrainCodec.ReadCarDef(r);
 
         TrainsetDef def = Registry.Register(peerId, specs);
 
@@ -294,6 +303,103 @@ public sealed class ServerTrains
         _transport.Send(set.OwnerId, payload, DeliveryMethod.ReliableOrdered);
     }
 
+    /// <summary>Committed cab-control value from the car's SIM OWNER (the authority — grant
+    /// holders' inputs arrive via ControlInput and only become state once the owner applies them
+    /// and reports back through here). Stored for the join burst, relayed to everyone else.</summary>
+    private void HandleControlState(int peerId, PacketReader r)
+    {
+        int carId = (int)r.ReadVarUInt();
+        byte controlId = r.ReadByte();
+        float value = r.ReadSingle();
+
+        if (!Registry.TryFindCar(carId, out TrainsetDef set) || set.OwnerId != peerId)
+        {
+            ProposalRejected?.Invoke(peerId, $"control state: not the sim owner of car {carId}");
+            return;
+        }
+
+        if (!_controls.TryGetValue(carId, out Dictionary<byte, float>? perCar))
+            _controls[carId] = perCar = new Dictionary<byte, float>();
+        perCar[controlId] = value;
+
+        byte[] payload = BuildControlState(carId, controlId, value);
+        foreach (int id in _connectedIds())
+            if (id != peerId) _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>Live cargo change from the car's sim owner: folded into the stored CarDef (late
+    /// joiners and saves carry the current load — cargo is not membership, the epoch stays) and
+    /// relayed to everyone else.</summary>
+    private void HandleCargoState(int peerId, PacketReader r)
+    {
+        int carId = (int)r.ReadVarUInt();
+        string cargoId = r.ReadString();
+        float amount = r.ReadSingle();
+
+        if (!Registry.TryFindCar(carId, out TrainsetDef owned) || owned.OwnerId != peerId)
+        {
+            ProposalRejected?.Invoke(peerId, $"cargo: not the sim owner of car {carId}");
+            return;
+        }
+        if (!Registry.TryUpdateCargo(carId, cargoId, amount, out _, out string? reason))
+        {
+            ProposalRejected?.Invoke(peerId, $"cargo: {reason}");
+            return;
+        }
+
+        byte[] payload = new PacketWriter(24)
+            .WriteByte((byte)MessageType.CargoState)
+            .WriteVarUInt((uint)carId)
+            .WriteString(cargoId)
+            .WriteSingle(amount)
+            .ToArray();
+        foreach (int id in _connectedIds())
+            if (id != peerId) _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>Route a physical couple request to carA's sim owner — the owner performs the real
+    /// couple and its native event drives the normal proposal path (one authority chain, no second
+    /// commit path). Any admitted player may ask: chaining cars is world interaction, not a grant.</summary>
+    private void HandleCoupleRequest(int peerId, PacketReader r)
+    {
+        int carA = (int)r.ReadVarUInt();
+        byte endA = r.ReadByte();
+        int carB = (int)r.ReadVarUInt();
+        byte endB = r.ReadByte();
+
+        if (!Registry.TryFindCar(carA, out TrainsetDef setA)) { ProposalRejected?.Invoke(peerId, $"couple request: unknown car {carA}"); return; }
+        if (!Registry.TryFindCar(carB, out _)) { ProposalRejected?.Invoke(peerId, $"couple request: unknown car {carB}"); return; }
+        if (setA.OwnerId == 0) { ProposalRejected?.Invoke(peerId, $"couple request: trainset {setA.Id} is parked"); return; }
+        if (setA.OwnerId == peerId) return; // requester simulates it — they act locally, nothing to route
+
+        byte[] payload = new PacketWriter(16)
+            .WriteByte((byte)MessageType.CoupleRequest)
+            .WriteVarUInt((uint)carA)
+            .WriteByte(endA)
+            .WriteVarUInt((uint)carB)
+            .WriteByte(endB)
+            .ToArray();
+        _transport.Send(setA.OwnerId, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>Route a physical uncouple request to the car's sim owner (same shape as couple).</summary>
+    private void HandleUncoupleRequest(int peerId, PacketReader r)
+    {
+        int carId = (int)r.ReadVarUInt();
+        byte end = r.ReadByte();
+
+        if (!Registry.TryFindCar(carId, out TrainsetDef set)) { ProposalRejected?.Invoke(peerId, $"uncouple request: unknown car {carId}"); return; }
+        if (set.OwnerId == 0) { ProposalRejected?.Invoke(peerId, $"uncouple request: trainset {set.Id} is parked"); return; }
+        if (set.OwnerId == peerId) return;
+
+        byte[] payload = new PacketWriter(8)
+            .WriteByte((byte)MessageType.UncoupleRequest)
+            .WriteVarUInt((uint)carId)
+            .WriteByte(end)
+            .ToArray();
+        _transport.Send(set.OwnerId, payload, DeliveryMethod.ReliableOrdered);
+    }
+
     // ── packet builders ──
 
     private static byte[] BuildCreate(uint token, TrainsetDef def)
@@ -379,6 +485,14 @@ public sealed class ServerTrains
             .WriteByte((byte)MessageType.ControlGrantState)
             .WriteVarUInt((uint)carId)
             .WriteVarUInt((uint)playerId)
+            .ToArray();
+
+    private static byte[] BuildControlState(int carId, byte controlId, float value) =>
+        new PacketWriter(16)
+            .WriteByte((byte)MessageType.ControlState)
+            .WriteVarUInt((uint)carId)
+            .WriteByte(controlId)
+            .WriteSingle(value)
             .ToArray();
 
     private void Broadcast(byte[] payload, DeliveryMethod delivery)

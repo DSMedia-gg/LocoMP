@@ -49,4 +49,10 @@ public sealed class CarDef
     public CarDef WithDerailed(bool derailed) => derailed == Derailed
         ? this
         : new CarDef(Id, Kind, derailed, GameId, GameGuid, CargoId, CargoAmount);
+
+    /// <summary>Copy with a different load (live cargo sync, M3.5c). Empty id = unloaded.</summary>
+    public CarDef WithCargo(string cargoId, float cargoAmount) =>
+        cargoId == CargoId && cargoAmount == CargoAmount
+            ? this
+            : new CarDef(Id, Kind, Derailed, GameId, GameGuid, cargoId, cargoAmount);
 }
