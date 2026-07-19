@@ -1,8 +1,8 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-19 (debt/polish pass BUILT — session-lost UX, 15 s disconnect timeout,
-AbandonJob audit CLOSED, bot honors chain requests, `--derail-car` rig; 129/129 ×3, full sln
-0 warnings; uncommitted — everything through M3.5c is PUSHED, HEAD `852e121`) · This
+**Updated:** 2026-07-19 (debt/polish pass PUSHED `bc3b62c..c80df71` — session-lost UX, 15 s
+disconnect timeout, AbandonJob audit CLOSED, bot honors chain requests, `--derail-car` rig;
+129/129 ×3, full sln 0 warnings; smoke checklist rides the next game session) · This
 is the **implementation** memory (burst cadence, D8).
 The **planning corpus** lives one level up at `../` (00–09, INDEX, research/) — strategic, kept private.
 Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current milestone in `../07-ROADMAP.md`.
@@ -603,6 +603,12 @@ career" toggle or delete the .lmps to re-mint).
 6. **Repo residuals, whenever** (05 §7): branch protection, DCO app (optional), repo topics.
 
 ## Push state
+- **PUSHED 2026-07-19 (Cody's go): the debt/polish pass as three dependency-ordered commits**
+  `bc3b62c` (Core/Transport: session-loss seam, 15 s timeout, Loopback UDP-parity dispose) →
+  `b03a114` (mod/Shim/bot: session-lost prompt, chain-request execution + product adoption,
+  `--derail-car`, input-drop once-log) → `c80df71` (docs). Remote unchanged since the M3.5c
+  push (no canary movement). Pushed ahead of the smoke run on Cody's call — the checklist
+  rides the next game session.
 - **PUSHED 2026-07-19 (Cody's go): M3.5c as three dependency-ordered commits** `7b25f3d` (Core
   protocol v5 + tests) → `5f4ae98` (Shim/mod/bot in-game half) → `00677a8` (docs). Remote was
   unchanged since the M3.5b push (no canary movement). Push-tooling note: PowerShell 5.1 mangles
