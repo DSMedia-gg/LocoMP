@@ -27,10 +27,11 @@ public sealed class TrainSync : IDisposable
     private readonly NetClient _client;
     private readonly bool _isHost;
     private readonly Action<string> _log;
-    private readonly GhostConsists _ghosts;
+    private readonly RealCarSync _remote;
 
     private TrackIndexMap? _map;
     private bool _worldRegistered;
+    private bool _worldCleared;
     private double _streamAccum;
 
     // Server-assigned car ids ↔ live cars (car ids survive merges/splits, M2.1 design).
@@ -68,7 +69,7 @@ public sealed class TrainSync : IDisposable
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _isHost = isHost;
         _log = log ?? throw new ArgumentNullException(nameof(log));
-        _ghosts = new GhostConsists(log);
+        _remote = new RealCarSync(log);
 
         client.Trains.View.TrainsetAdded += OnTrainsetAdded;
         client.Trains.View.TransactionApplied += OnTransaction;
@@ -115,6 +116,7 @@ public sealed class TrainSync : IDisposable
         }
 
         if (_isHost && !_worldRegistered) RegisterWorld();
+        if (!_isHost && !_worldCleared) ClearNativeWorld();
 
         if (!_botHintLogged && _isHost)
         {
@@ -135,7 +137,38 @@ public sealed class TrainSync : IDisposable
             CaptureAndStream();
         }
 
-        _ghosts.Tick((float)dt);
+        _remote.Tick((float)dt);
+    }
+
+    /// <summary>M3.5b, joined clients only: the local SP world's own cars are NOT the session's
+    /// cars — clear them so the host's consists (spawned as real cars) are the only trains in the
+    /// world. The player's own savegame is protected by <see cref="SaveSuppressor"/>; leaving the
+    /// session means reloading the save to get the own world back.</summary>
+    private void ClearNativeWorld()
+    {
+        CarSpawner spawner = CarSpawner.Instance;
+        if (spawner == null || spawner.AllCars == null) return;
+        _worldCleared = true;
+
+        var mine = new List<TrainCar>();
+        foreach (TrainCar car in spawner.AllCars)
+        {
+            if (car != null && !_remote.IsRemoteCar(car)) mine.Add(car);
+        }
+        if (mine.Count == 0) return;
+
+        if (PlayerManager.Car != null)
+            _log("[trains] WARNING: you are inside one of your own cars — it is part of the world being cleared");
+        try
+        {
+            spawner.DeleteTrainCarsInstant(mine);
+            _log($"[trains] cleared {mine.Count} local car(s) — this session runs the host's world " +
+                 "(reload your save after leaving to restore your own)");
+        }
+        catch (Exception e)
+        {
+            _log($"[trains] local world clear failed: {e.Message}");
+        }
     }
 
     // ── registration & bookkeeping ──
@@ -158,21 +191,65 @@ public sealed class TrainSync : IDisposable
 
         _worldRegistered = true;
         int cars = 0;
+        var liveryHint = new List<string>();
         foreach (Trainset set in sets)
         {
             var specs = new CarDef[set.cars.Count];
             for (int i = 0; i < specs.Length; i++)
-                specs[i] = new CarDef(0, KindOf(set.cars[i]), set.cars[i].derailed);
+            {
+                TrainCar car = set.cars[i];
+                string kind = KindOf(car);
+                (string cargoId, float cargoAmount) = CargoOf(car);
+                specs[i] = new CarDef(0, kind, car.derailed,
+                    SafeId(car), SafeGuid(car), cargoId, cargoAmount);
+                if (liveryHint.Count < 3 && !liveryHint.Contains(kind)) liveryHint.Add(kind);
+            }
             _client.Trains.RegisterTrainset((uint)(set.id + 1), specs);
             cars += specs.Length;
         }
         _log($"[trains] registered {sets.Count} trainset(s) / {cars} car(s) with the session");
+        if (liveryHint.Count > 0)
+            // Real livery ids straight from this world — paste into the bot so ITS consist spawns
+            // as real cars here (a bot without --livery keeps the old ghost boxes).
+            _log($"[trains] bot livery hint: --livery {string.Join(",", liveryHint.ToArray())}");
     }
 
     private static string KindOf(TrainCar car)
     {
         try { return car.carLivery != null ? car.carLivery.id : car.carType.ToString(); }
         catch { return "unknown"; }
+    }
+
+    private static string SafeId(TrainCar car)
+    {
+        try { return car.ID ?? ""; }
+        catch { return ""; }
+    }
+
+    private static string SafeGuid(TrainCar car)
+    {
+        try { return car.CarGUID ?? ""; }
+        catch { return ""; }
+    }
+
+    /// <summary>Registration-time cargo as a (v2 id, amount) pair; empty when the car carries
+    /// nothing. Live load/unload sync is a banked M3.5c debt.</summary>
+    private static (string, float) CargoOf(TrainCar car)
+    {
+        try
+        {
+            DV.Logic.Job.Car? logic = car.logicCar;
+            if (logic == null) return ("", 0f);
+            DV.ThingTypes.CargoType type = logic.CurrentCargoTypeInCar;
+            if (type == DV.ThingTypes.CargoType.None) return ("", 0f);
+            if (!DV.Globals.G.Types.CargoType_to_v2.TryGetValue(type, out DV.ThingTypes.CargoType_v2 v2) || v2 == null)
+                return ("", 0f);
+            return (v2.id, logic.LoadedCargoAmount);
+        }
+        catch
+        {
+            return ("", 0f);
+        }
     }
 
     private void OnRegistered(uint token, TrainsetDef def)
@@ -221,27 +298,25 @@ public sealed class TrainSync : IDisposable
 
     private void OnTrainsetAdded(TrainsetDef def)
     {
-        // Our own sets are wired via the registration token; anything else is remote → ghost it.
+        // Our own sets are wired via the registration token; anything else is remote → real cars
+        // (spawned on the first admitted snapshot; ghost boxes when a livery can't resolve).
         if (def.OwnerId != _client.LocalId)
         {
-            _ghosts.EnsureSet(def);
-            _log($"[trains] remote consist {def.Id} ({def.Cars.Count} car(s), owner {def.OwnerId}) — ghost created");
+            _remote.EnsureSet(def);
+            _log($"[trains] remote consist {def.Id} ({def.Cars.Count} car(s), owner {def.OwnerId}) — spawning on first snapshot");
         }
     }
 
     private void OnTransaction(TrainsetTransaction txn)
     {
-        foreach (int retired in txn.RetiredIds)
-        {
-            _bindings.Remove(retired);
-            _ghosts.Remove(retired);
-        }
+        var remoteProducts = new List<TrainsetDef>();
+        foreach (int retired in txn.RetiredIds) _bindings.Remove(retired);
 
         foreach (TrainsetDef def in txn.Products)
         {
             if (def.OwnerId == _client.LocalId)
             {
-                _ghosts.Remove(def.Id);
+                _remote.Remove(def.Id);
                 var cars = new TrainCar[def.Cars.Count];
                 bool complete = true;
                 for (int i = 0; i < cars.Length; i++)
@@ -258,16 +333,18 @@ public sealed class TrainSync : IDisposable
             }
             else
             {
-                _ghosts.EnsureSet(def);
+                remoteProducts.Add(def);
             }
         }
+        // One holistic pass over the remote half: cars survive merges/splits by server car id.
+        _remote.ApplyTransaction(txn.RetiredIds, remoteProducts);
         RebuildCarSetIndex();
     }
 
     private void OnTrainsetRemoved(int trainsetId)
     {
         _bindings.Remove(trainsetId);
-        _ghosts.Remove(trainsetId);
+        _remote.Remove(trainsetId);
         RebuildCarSetIndex();
     }
 
@@ -389,7 +466,23 @@ public sealed class TrainSync : IDisposable
     private void OnCoupled(object sender, CoupleEventArgs e)
     {
         if (!WorldAlive || IsDespawning(e.thisCoupler, e.otherCoupler)) return;
-        if (!TryGetPair(e.thisCoupler, e.otherCoupler, out int carA, out int carB)) return;
+
+        // A LOCAL car chained to a REMOTE-driven car cannot be honored yet: the remote car is
+        // kinematic (the owner's physics is elsewhere) and the couple request path is M3.5c.
+        // Revert immediately — a silent half-couple would anchor the local train to a teleporting
+        // body, which is exactly the incumbent's snap-back failure shape.
+        TrainCar? local = e.thisCoupler?.train, other = e.otherCoupler?.train;
+        if (local != null && other != null &&
+            _remote.IsRemoteCar(other) != _remote.IsRemoteCar(local) &&
+            (_idByCar.ContainsKey(local) || _idByCar.ContainsKey(other) || !_isHost))
+        {
+            _log("[trains] coupling with a remote-driven car is not synced yet (M3.5c) — uncoupling");
+            try { e.thisCoupler!.Uncouple(playAudio: false, calledOnOtherCoupler: false, dueToBrokenCouple: false, viaChainInteraction: false); }
+            catch { /* best effort — the def-side membership was never touched */ }
+            return;
+        }
+
+        if (!TryGetPair(e.thisCoupler!, e.otherCoupler!, out int carA, out int carB)) return;
         if (IsDuplicatePair(carA, carB, couple: true)) return;
 
         if (!TryTrainsetEnd(carA, out CoupleEnd endA) || !TryTrainsetEnd(carB, out CoupleEnd endB))
@@ -398,7 +491,7 @@ public sealed class TrainSync : IDisposable
             return;
         }
 
-        float relV = RelativeSpeed(e.thisCoupler.train, e.otherCoupler.train);
+        float relV = RelativeSpeed(e.thisCoupler!.train, e.otherCoupler!.train);
         _log($"[trains] couple contact: car {carA} ({endA}) + car {carB} ({endB}) at {relV:F1} m/s — proposing");
         _client.Trains.ProposeCouple(carA, endA, carB, endB, relV);
     }
@@ -509,15 +602,20 @@ public sealed class TrainSync : IDisposable
 
     private void OnPlayerCarChanged(TrainCar car)
     {
-        if (_grantCar != null && _idByCar.TryGetValue(_grantCar, out int prevId))
+        if (_grantCar != null && TryAnyCarId(_grantCar, out int prevId))
             _client.Trains.ReleaseControlGrant(prevId);
         _grantCar = car;
-        if (car != null && _idByCar.TryGetValue(car, out int carId))
+        if (car != null && TryAnyCarId(car, out int carId))
         {
             _log($"[trains] entered car {carId} — requesting control grant");
             _client.Trains.RequestControlGrant(carId);
         }
     }
+
+    /// <summary>Server car id for OWN bound cars and remotely-spawned cars alike — entering a
+    /// remote-driven cab requests a grant the same way (input routing over it is M3.5c).</summary>
+    private bool TryAnyCarId(TrainCar car, out int carId) =>
+        _idByCar.TryGetValue(car, out carId) || _remote.TryGetServerCarId(car, out carId);
 
     private void OnGrantChanged(int carId, int holderId) =>
         _log($"[trains] control grant: car {carId} → {(holderId == 0 ? "free" : $"player {holderId}")}");
@@ -527,7 +625,7 @@ public sealed class TrainSync : IDisposable
     private void OnSnapshot(TrainsetSnapshot snap)
     {
         if (_bindings.ContainsKey(snap.TrainsetId) || _map is null) return; // never re-apply our own sets
-        _ghosts.Apply(snap, _map);
+        _remote.Apply(snap, _map);
     }
 
     public void Dispose()
@@ -549,6 +647,6 @@ public sealed class TrainSync : IDisposable
         }
         _hookedCars.Clear();
         _destroyHooks.Clear();
-        _ghosts.Clear();
+        _remote.Clear();
     }
 }

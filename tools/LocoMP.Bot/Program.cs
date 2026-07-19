@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using LocoMP.Bot;
+using LocoMP.Core.Net;
 using LocoMP.Core.Presence;
 using LocoMP.Core.Session;
 using LocoMP.Core.World;
@@ -31,6 +32,24 @@ if (opts.ConsistCars > 0)
 }
 
 var clock = new SystemClock();
+
+// M3.5b listen mode: the bot IS the server (plus its own first client over the loopback hub) so
+// the game can JOIN as a client — the one-PC rig for the client-side real-car path. Mirrors the
+// in-game host wiring: LoopbackNetwork for self, LiteNetLib UDP for the game, one composite.
+NetServer? server = null;
+CompositeTransport? serverTransport = null;
+LoopbackNetwork? hub = null;
+if (opts.Listen)
+{
+    hub = new LoopbackNetwork();
+    var udp = LiteNetLibTransport.StartServer(opts.Port, opts.Key);
+    serverTransport = new CompositeTransport(hub.Server, udp);
+    server = new NetServer(serverTransport, new ServerConfig(opts.ToIdentity(), opts.Password), clock);
+    server.PlayerAdmitted += p => Console.WriteLine($"[server] admitted {p.Name} (id {p.Id}) — {server!.PlayerCount} player(s)");
+    server.PlayerRemoved += id => Console.WriteLine($"[server] removed id {id} — {server!.PlayerCount} player(s)");
+    Console.WriteLine($"[server] hosting on UDP {opts.Port} — join from the game (address 127.0.0.1)");
+}
+
 var bots = new List<BotClient>(opts.Count);
 for (int i = 0; i < opts.Count; i++)
 {
@@ -42,15 +61,18 @@ for (int i = 0; i < opts.Count; i++)
         "wander" => new WanderBehavior(opts.Center, opts.Radius, opts.Speed, opts.Seed + i),
         _ => new OrbitBehavior(opts.Center, opts.Radius, opts.Speed, startAngle: i * Math.PI * 2 / opts.Count),
     };
-    var bot = new BotClient(name,
-        () => LiteNetLibTransport.ConnectClient(opts.Host, opts.Port, opts.Key),
+    Func<ITransport> connect = hub is { } h
+        ? () => h.Connect(out _)
+        : () => LiteNetLibTransport.ConnectClient(opts.Host, opts.Port, opts.Key);
+    var bot = new BotClient(name, connect,
         opts.ToIdentity(), behavior, clock, Console.WriteLine,
         opts.Password, opts.ChurnSeconds);
     if (world != null)
     {
         // Multiple ghosts share a start hint; stagger them a seed apart so they diverge at junctions.
         uint? startEdge = opts.StartEdge >= 0 ? (uint)opts.StartEdge : (uint?)null;
-        var driver = new ConsistDriver(world, opts.ConsistCars, opts.ConsistSpeed, opts.Seed + i, name, Console.WriteLine, startEdge);
+        var driver = new ConsistDriver(world, opts.ConsistCars, opts.ConsistSpeed, opts.Seed + i, name, Console.WriteLine,
+            startEdge, opts.Liveries, opts.CargoId, opts.CargoAmount);
         bot.SessionTick = driver.Tick;
     }
     bots.Add(bot);
@@ -63,7 +85,7 @@ Console.CancelKeyPress += (_, e) => { e.Cancel = true; stopping = true; };
 
 var sw = Stopwatch.StartNew();
 long tickMs = (long)(1000 / opts.Hz);
-long lastTick = 0, lastStats = 0;
+long lastTick = 0, lastStats = 0, lastTimeSync = 0;
 
 while (!stopping && (opts.DurationSeconds <= 0 || sw.Elapsed.TotalSeconds < opts.DurationSeconds))
 {
@@ -71,6 +93,12 @@ while (!stopping && (opts.DurationSeconds <= 0 || sw.Elapsed.TotalSeconds < opts
     double dt = (now - lastTick) / 1000.0;
     lastTick = now;
 
+    server?.Poll();
+    if (server != null && now - lastTimeSync >= 5_000)
+    {
+        lastTimeSync = now;
+        server.BroadcastTime();
+    }
     foreach (BotClient bot in bots) bot.Tick(dt);
 
     if (bots.All(b => b.RejectReason != null))
@@ -93,6 +121,8 @@ while (!stopping && (opts.DurationSeconds <= 0 || sw.Elapsed.TotalSeconds < opts
 
 Console.WriteLine("Shutting down — leaving session(s)…");
 foreach (BotClient bot in bots) bot.Dispose();
+server?.Dispose();
+serverTransport?.Dispose();
 Thread.Sleep(150); // let LiteNetLib flush the disconnects
 Console.WriteLine($"Done. {bots.Sum(b => b.PosesSent)} poses sent across {bots.Sum(b => b.JoinCount)} join(s).");
 return 0;

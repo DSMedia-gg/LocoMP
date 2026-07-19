@@ -93,6 +93,14 @@ public sealed class TrackIndexMap
     public bool TryGetEdgeId(RailTrack track, out uint edgeId) =>
         _edgeOf.TryGetValue(track, out edgeId);
 
+    public bool TryGetTrack(uint edgeId, out RailTrack track)
+    {
+        track = null!;
+        if (edgeId >= _trackOf.Length || _trackOf[edgeId] == null) return false;
+        track = _trackOf[edgeId];
+        return true;
+    }
+
     public bool TryGetJunctionId(Junction junction, out uint id) =>
         _idOfJunction.TryGetValue(junction, out id);
 

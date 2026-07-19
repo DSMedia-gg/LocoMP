@@ -1,5 +1,6 @@
 using System;
 using DV.CashRegister;
+using DV.Common;
 using DV.InventorySystem;
 using HarmonyLib;
 using LocoMP.Core.Session;
@@ -71,6 +72,20 @@ public sealed class WalletMirror : IDisposable
         _client.Career.CareerStateReceived += OnCareerState;
         _client.Career.WalletChanged += OnWalletChanged;
         _client.Career.RequestRejected += OnRejected;
+        // M3.5b (closes the D14 flagged debt): a mid-session native save must not persist the
+        // MIRRORED balance into the SP save — swap the real SP amount back in just before the save
+        // data is captured; the periodic reconcile re-mirrors within a second afterwards.
+        SaveGameManager.AboutToSave += OnAboutToSave;
+    }
+
+    private void OnAboutToSave(SaveType _)
+    {
+        if (!_saved || !_haveCareer) return;
+        Inventory? inventory = Inventory.Instance;
+        if (inventory == null) return;
+        inventory.SetMoney(_savedNativeMoney);
+        _reconcileAccum = 0;
+        _log($"[career] native save detected — SP balance (${_savedNativeMoney:F2}) written to the save; re-mirroring");
     }
 
     /// <summary>Pump from the session update loop: periodic reconcile catches leftover-deposit
@@ -140,6 +155,7 @@ public sealed class WalletMirror : IDisposable
         _client.Career.CareerStateReceived -= OnCareerState;
         _client.Career.WalletChanged -= OnWalletChanged;
         _client.Career.RequestRejected -= OnRejected;
+        SaveGameManager.AboutToSave -= OnAboutToSave;
         if (!_saved) return;
         try
         {
