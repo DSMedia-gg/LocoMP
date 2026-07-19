@@ -1,6 +1,8 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-19 (M3.5a + D14 VERIFIED IN-GAME — run №2 passed, zero bugs/regressions; PUSHED `48e72a1`/`ae97710`/`94d1957`) · This is the **implementation** memory (burst cadence, D8).
+**Updated:** 2026-07-19 (M3.5b VERIFIED IN-GAME — Runs A+B passed incl. the proximity-culling
+round-trip; uncommitted, push on Cody's go) · This is the **implementation** memory (burst
+cadence, D8).
 The **planning corpus** lives one level up at `../` (00–09, INDEX, research/) — strategic, kept private.
 Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current milestone in `../07-ROADMAP.md`.
 
@@ -160,9 +162,124 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
 - **M3.5a CLOSED 2026-07-19: run №2 PASSED — zero bugs, zero regressions** (whole D14 surface +
   all run-№1 regressions: mirror boot, native license buy → licensed claim with leaflet safe,
   panel-shop reverse sync, haul/turn-in, deposit/cancel settle, persistence + grace, bot).
-- **M3 remaining**: push (Cody's go) · M3.5b/c — remote claim parity + REAL-CAR replication
-  replacing ghost consists (the pulled-forward M4 spine) · M3.2 join phases (deferrable) ·
-  friend session upgrades exit wording.
+- **M3.5b BUILT 2026-07-19 (uncommitted, STAGED 14:31): REAL-CAR REPLICATION — the pulled-forward
+  M4 spine's first half.** Remote consists spawn as real TrainCars instead of ghost boxes:
+  - **Core protocol v3→4 + save schema v2→3**: `CarDef` gains `GameId` (TrainCar.ID), `GameGuid`
+    (CarGUID), `CargoId` (v2 string id) + `CargoAmount` — the identity job paperwork names cars by
+    rides the wire from registration. `WithDerailed` preserves them (derail commits copy defs).
+    110/110 ×3, 0 warnings.
+  - **Shim `RealCarSync`** (replaces GhostConsists in TrainSync; the ghost class remains as the
+    per-SET fallback when any livery can't resolve — the bot's synthetic `ghost-loco` kinds keep
+    the old rig working unchanged). Spawn = the game's own savegame-restore primitive
+    **`CarSpawner.SpawnLoadedCar`** (exact per-bogie track+span placement + carId/carGuid), deferred
+    to the first admitted snapshot (the join burst carries a baseline). Post-spawn hardening:
+    `preventDelete`, `preventAutoCouple` on every coupler, ALL rigidbodies kinematic (re-applied
+    for 3 s while components initialize) — local physics never fights the remote authority (the
+    incumbent's snap-back class). Drive = the proven ghost lerp (12/s + 80 m snap) on the real car
+    root; `Bogie.SetTrack` keeps track occupancy current on edge change; registration cargo is
+    mirrored onto the logic car (`LoadCargo`, capacity when amount unknown). Adjacent cars are
+    physically coupled (position-based `TryCouple`, audio off); membership transactions re-map
+    cars BY SERVER CAR ID across merges/splits (no despawn/respawn) then repair physical couplings
+    to match the defs. Lost-car self-heal: respawn from next snapshot ×3, then ghost fallback.
+  - **Interaction guard**: a manual chain-couple between a LOCAL car and a REMOTE-driven car is
+    reverted immediately with a log line — the couple-request path is M3.5c; a silent half-couple
+    would anchor local physics to a teleporting kinematic body. Entering a remote cab requests a
+    control grant (`TryAnyCarId` covers both maps); input routing over the grant is M3.5c.
+  - **Joined-client world handover**: on join the client CLEARS its own native cars (the host's
+    world IS the session world; warning logged if you're inside one) and **`SaveSuppressor`**
+    (false-prefix on `SaveGameManager.SaveAllowed`, the one gate all save paths consult) blocks
+    native saves until Leave — a session can never leak into the player's SP save; reload the
+    save after leaving. **Host D14 debt CLOSED**: `WalletMirror` hooks `SaveGameManager.AboutToSave`
+    and writes the real pre-session balance into any mid-session save (reconcile re-mirrors ≤1 s).
+  - **Host enrichment**: RegisterWorld fills identity + cargo per car and logs a paste-me
+    `bot livery hint: --livery a,b,c` line (real livery ids from the live world).
+  - **Bot**: `--listen` = bot HOSTS (NetServer over Loopback hub + UDP composite — the same wiring
+    as the in-game host; the game joins as the CLIENT on one PC), `--livery a,b,c` (first = car 1,
+    rest cycle) + `--cargo id[:amt]` register the consist so it spawns real. Headless smoke run
+    passed: listen + self-join + registration with liveries + streaming.
+  - **Banked M3.5c debts**: control-grant input routing (remote can sit in the cab, not drive);
+    client couple/uncouple REQUESTS (today: auto-reverted); live cargo load/unload sync;
+    mid-session host-spawned cars (new job chains!) are never registered — dynamic registration;
+    booklet materialization + remote claim flow (the M3.5c core); derailed-at-registration spawn
+    passes null tracks to SpawnLoadedCar (untested path — watch run A); crew-vehicle/garage
+    spawns on a joined client re-create native cars after the clear.
+- **M3 remaining**: M3.5b in-game runs (checklist below) → commit+push (Cody's go) · M3.5c —
+  remote claim parity (job materialization, input routing, couple requests) · M3.2 join phases
+  (deferrable) · friend session upgrades exit wording.
+
+**M3.5b CLOSED 2026-07-19: Run B №2 PASSED — "test success!" (Cody).** Real cars spawned on the
+joined client, and the proximity culling verified as a full round-trip: consist rolled out past
+330 m → dematerialized, Cody caught up → it REmaterialized at its current synced position.
+Combined with Run A + Run B №1's world-handover/save-protection passes, every M3.5b exit surface
+is verified live. **Edge case also verified (Cody): SERVER CLOSED while the client was still
+joined → saving STILL blocked, SP save untouched** — SaveSuppressor.Active only clears in
+Leave(), so a dead server fails SAFE (blocked saves), never open. Known UX debt for later (M5's
+graceful-mismatch family): after server death the client sits in a dead session (carless world,
+saves blocked) until manual Leave — a "session lost, leave to restore" prompt would be kinder.
+Remaining: commit + push (Cody's go), then M3.5c.
+
+**M3.5b Run B №1 (2026-07-19): world handover + save protection PASSED; spawn KILLED BY DISTANCE
+STREAMING → proximity materialization built (restage waiter armed).** Verified: `cleared 39 local
+car(s)` (correctly excluded the 3 remote cars), save = no-op while joined, SP save verified intact
+after Leave+reload. The consist spawned at ~359 m (`edge 894, ~359 m from you` — the walker had
+rolled on since bot start) and DV's distance streaming destroyed the GameObjects within a second
+(`preventDelete` does NOT cover ECS conversion — the M2 storm mechanism, now hitting OUR spawns).
+**Fix = proximity materialization (the D10 interest-management shape, forced early):** remote
+consists are DATA always, real cars only within **250 m** of the player; voluntary dematerialize
+past **330 m** (hysteresis); a DV-destroyed spawned car = quiet "streamed out" (per-car
+`OnCarAboutToBeDestroyed` hooks with an our-own-delete guard), 10 s cooldown then re-materialize
+on approach. Far sets log once: `is ~N m away — materializes as real cars within 250 m`. Also
+seen in the log (not chased): the client was evicted as id 2 during the save-load freeze and
+self-re-handshook as id 3 — the career grace/rebind machinery absorbed it by design; watch it.
+
+**M3.5b Run A №2 (2026-07-19): PASSED — real cars spawned and rolling, liveries correct,
+interactable.** Two observations banked, both accepted: (1) large inter-car gaps = BOT artifact
+(ConsistDriver's synthetic uniform 16 m car length; real host→client replication uses the owner's
+actual bogie positions, so spacing will be exact — don't teach the bot car lengths); (2) remote
+cars PHASE through local vehicles — accepted for now and safer than run №1's shove-derail; proper
+remote↔local collision authority is M3.5c+ scope. Next: Run B (client side).
+
+**M3.5b run №1 (2026-07-19): spawn pipeline PROVEN, placement WRONG — 3 fixes, RESTAGED 15:02.** The log shows the full path ran (`remote consist 61: 3 real
+car(s) on the rails (edge 204)`), but the cars materialized ON/BESIDE Cody's own train — the
+`--start-edge` hint points at the edge nearest the PLAYER, which is where his train sits. Evidence:
+the couple-guard fired right after spawn (a spawned car's scan-based TryCouple grabbed HIS coupler),
+and his FlatbedEmpty stress-derailed at 24.9 m/s (kinematic colliders shoving a local car). Also:
+repeated DV "Point Set Traveller not moving even though velocity is" warnings from the kinematic
+bogies. **Verified live as a bonus: the D14 AboutToSave fix — mid-session autosave wrote the real
+$10,000, log line present.** Fixes built (0 warnings): (a) spawn DEFERS while any car position
+overlaps existing cars (`CarSpawner.IsBoxOverlappingSimple`; the moving consist clears itself —
+one log line while waiting); (b) adjacency coupling now uses EXPLICIT partner couplers
+(`CoupleTo`, ≤8 m sanity) — never a scan that can grab a bystander; (c) remote bogies get
+`DistanceTrackingEnabled = false` (kills the traveller warning); spawn log now includes
+`~N m from you`.
+
+## M3.5b in-game runs (Cody at the PC; payload staged 14:31, game was not running)
+
+**Run A — host side (the existing rig, now with real cars):**
+1. Host per usual. NEW expected line: `bot livery hint: --livery <ids>` next to the `--at` and
+   `--start-edge` hints. Paste ALL THREE into the bot:
+   `LocoMP.Bot --consist 3 --livery <ids> --cargo Coal --at <coords> --start-edge <N>`.
+2. Expect `remote consist N (3 car(s)) — spawning on first snapshot` then
+   `remote consist N: 3 real car(s) on the rails (edge E)` — REAL cars with the right liveries
+   beside you, wagons visibly loaded (coal), rolling smoothly, switches still flipping ahead.
+3. Walk up: couplers/chains visible between its cars; car plates show BOT-… ids. Enter its cab →
+   `entered car N — requesting control grant` (controls won't drive it — M3.5c).
+4. Manually chain-couple YOUR loco to a bot car → expect the revert:
+   `coupling with a remote-driven car is not synced yet (M3.5c) — uncoupling` and no snap-back.
+5. Bot without `--livery` (old command) → ghost boxes as before (fallback regression).
+6. Quit-time teardown: expect the bot's cars despawned/unbound quietly, zero LocoMP exceptions.
+
+**Run B — client side (the NEW rig: bot hosts, the game joins):**
+1. `LocoMP.Bot --listen --consist 3 --livery <ids from run A> --cargo Coal --behavior idle`
+   (add `--start-edge <N>` from run A so the train is near your spawn).
+2. In-game (load your SP save, ideally on foot): Join `127.0.0.1`. Expect:
+   `cleared N local car(s) — this session runs the host's world (…)`, then the bot's REAL train
+   spawning and rolling. Your money/licenses stay native (wallet mirror is host-only).
+3. THE critical assertion — SP save integrity: while joined, try to sleep/save (should silently
+   not save), then Leave → quit to menu → reload your save → your own world, cars, and money are
+   EXACTLY as before the session (the deleted cars are back because nothing ever saved).
+4. Watch for: joining while inside one of your cars (warning line + you fall — acceptable),
+   respawn-loop lines (`lost car(s) locally — respawning`), any exception.
 
 ## M3.5a run №2 — PASSED 2026-07-19 (checklist retired)
 
@@ -357,12 +474,24 @@ career" toggle or delete the .lmps to re-mint).
 - Staged payload in the game's `Mods/LocoMP/` = **2026-07-19 13:22 build** = the verified commit.
 
 ## Blockers
-- None technical. Next step needs Cody at the PC: the M3.5a in-game run (checklist above). After
-  it passes: commit + push on his go, then M3.5b/c (remote claim parity + real-car replication —
-  the pulled-forward M4 spine).
+- None technical. Next step needs Cody at the PC: the two M3.5b in-game runs (checklist above).
+  After they pass: commit + push on his go, then M3.5c (job materialization + remote claim
+  parity + input routing over grants).
 
 ## Session log
-- **2026-07-19** — **M3.5a run №1: Phase 1 PASSED, Phase 2 blocked → D14 recorded + built + staged
+- **2026-07-19** — **M3.5b BUILT (real-car replication) + STAGED 14:31, uncommitted.** Recon-first
+  over B99.7 nailed the whole surface as first-class API: `CarSpawner.SpawnLoadedCar` (savegame
+  restore = identity-preserving per-bogie spawn), `Bogie.SetTrack`, `Coupler.preventAutoCouple`/
+  `TryCouple`/`Uncouple`, `TrainCar.preventDelete`, `Globals.G.Types.TryGetLivery/TryGetCargo`,
+  `SaveGameManager.SaveAllowed` + `AboutToSave`. Core: CarDef identity+cargo (protocol v4, save
+  schema v3), 110/110 ×3. Shim: `RealCarSync` (spawn/kinematic-drive/couple-mirror/transaction
+  re-map by car id/self-heal + per-set ghost fallback), joined-client world clear +
+  `SaveSuppressor`, WalletMirror `AboutToSave` fix (D14 debt closed), host livery hint. Bot:
+  `--listen` host mode (game joins as client — the one-PC client rig), `--livery`/`--cargo`;
+  headless listen smoke passed. Full sln 0 warnings. Key design call: remote cars are KINEMATIC
+  (owner physics is the only truth — forecloses the incumbent's snap-back class); local↔remote
+  manual couples auto-revert until the M3.5c request path. Next: Cody's two runs (host rig with
+  real liveries; bot-hosted client join incl. SP-save-integrity assertion), then commit + push.
   (13:14).** Cody's findings: board 1:1 with world jobs, FH granted; BUT a native career-manager
   license purchase was invisible to LocoMP → validator-approved take → server refusal → AbandonJob
   rollback DESTROYED the leaflet (log claimed "returned to world" — wrong; abandoned ≠ available,

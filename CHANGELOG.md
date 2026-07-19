@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Real-car replication (M3.5b): consists simulated by other players now spawn as REAL train cars —
+  correct liveries, the source world's car identity (ids/guids, so job paperwork can name them),
+  and their loaded cargo — placed per-bogie on the exact track and span from the sync stream and
+  driven kinematically from the owner's snapshots (local physics never fights the remote
+  authority). Falls back to the old placeholder boxes per consist when a car type can't be
+  resolved. Network protocol is now v4 (car definitions carry identity + cargo).
+- Joined-client world handover: joining a session clears the local world's own cars (the host's
+  world is the session world) and blocks ALL native game saves until you leave, so a session can
+  never leak into your singleplayer savegame — reload your save after leaving to restore your own
+  world. On the host, a mid-session save now writes the real pre-session balance instead of the
+  mirrored session wallet.
+- Bot: `--listen` hosts a session headlessly (join it from the game — the one-PC client test rig),
+  `--livery` registers the ghost consist with real car types so it spawns as real cars, and
+  `--cargo` loads its wagons. The in-game host log prints a paste-me `--livery` hint.
 - Native economy unification for the host (D14): while hosting, the game's money display is a live
   view of the LocoMP wallet (the pre-session balance is restored on leave) and the native career
   manager is the shop — license purchases and fees paid at any cash register burn from the
