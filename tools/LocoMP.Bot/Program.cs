@@ -67,13 +67,24 @@ for (int i = 0; i < opts.Count; i++)
     var bot = new BotClient(name, connect,
         opts.ToIdentity(), behavior, clock, Console.WriteLine,
         opts.Password, opts.ChurnSeconds);
+    ConsistDriver? driver = null;
     if (world != null)
     {
         // Multiple ghosts share a start hint; stagger them a seed apart so they diverge at junctions.
         uint? startEdge = opts.StartEdge >= 0 ? (uint)opts.StartEdge : (uint?)null;
-        var driver = new ConsistDriver(world, opts.ConsistCars, opts.ConsistSpeed, opts.Seed + i, name, Console.WriteLine,
+        driver = new ConsistDriver(world, opts.ConsistCars, opts.ConsistSpeed, opts.Seed + i, name, Console.WriteLine,
             startEdge, opts.Liveries, opts.CargoId, opts.CargoAmount);
-        bot.SessionTick = driver.Tick;
+    }
+    RemoteActor? actor = opts.ClaimFirst || opts.Drive || opts.AbandonAfterSeconds > 0
+        ? new RemoteActor(opts, name, Console.WriteLine)
+        : null;
+    if (driver != null || actor != null)
+    {
+        bot.SessionTick = (client, dt) =>
+        {
+            driver?.Tick(client, dt);
+            actor?.Tick(client, dt);
+        };
     }
     bots.Add(bot);
 }

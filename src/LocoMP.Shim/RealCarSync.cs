@@ -88,8 +88,44 @@ public sealed class RealCarSync
     /// <summary>Server car id of a spawned remote car (grants target cars by server id).</summary>
     public bool TryGetServerCarId(TrainCar car, out int carId) => _serverIdByCar.TryGetValue(car, out carId);
 
+    /// <summary>The live replica behind a server car id (control-state mirroring, M3.5c).</summary>
+    public bool TryGetCarByServerId(int carId, out TrainCar car) =>
+        _carByServerId.TryGetValue(carId, out car) && car != null;
+
     /// <summary>True for cars this class spawned — i.e. cars simulated by ANOTHER player.</summary>
     public bool IsRemoteCar(TrainCar car) => _serverIdByCar.ContainsKey(car);
+
+    /// <summary>True while we are inside the game's spawn call — its CarSpawned event fires before
+    /// the car lands in our maps, and the joined-client native-spawn cleaner must not eat it.</summary>
+    public bool SpawningRemote { get; private set; }
+
+    /// <summary>Live cargo change from the owner (M3.5c): remembered on the def (so a
+    /// re-materialization spawns the current load) and mirrored onto the live logic car.</summary>
+    public void ApplyCargo(int carId, string cargoId, float amount)
+    {
+        foreach (RemoteSet set in _sets.Values)
+        {
+            foreach (Entry entry in set.Cars)
+            {
+                if (entry.Def.Id != carId) continue;
+                entry.Def = entry.Def.WithCargo(cargoId, amount);
+                if (entry.Car != null)
+                {
+                    try
+                    {
+                        DV.Logic.Job.Car? logic = entry.Car.logicCar;
+                        if (logic != null && logic.CurrentCargoTypeInCar != CargoType.None) logic.DumpCargo();
+                    }
+                    catch (Exception e)
+                    {
+                        _log($"[trains] cargo unload mirror failed for car {carId}: {e.Message}");
+                    }
+                    if (cargoId.Length > 0) MirrorCargo(entry.Car, entry.Def);
+                }
+                return;
+            }
+        }
+    }
 
     /// <summary>Record a newly announced remote set. Actual spawning waits for the first admitted
     /// snapshot (the join burst carries a baseline, so this is one round-trip at most).</summary>
@@ -374,6 +410,7 @@ public sealed class RealCarSync
 
         try
         {
+            SpawningRemote = true;
             for (int i = 0; i < set.Cars.Length; i++)
             {
                 Entry entry = set.Cars[i];
@@ -411,6 +448,10 @@ public sealed class RealCarSync
             _log($"[trains] remote consist {set.Def.Id}: real-car spawn FAILED ({e.Message}) — falling back to ghost boxes");
             FallBackToGhost(set);
             return false;
+        }
+        finally
+        {
+            SpawningRemote = false;
         }
 
         set.Spawned = true;

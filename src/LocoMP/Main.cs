@@ -39,6 +39,7 @@ public static class Main
 
         var harmony = new Harmony(modEntry.Info.Id);
         JunctionHook.Install(harmony, log);
+        ChainHook.Install(harmony, log);
         JobGenSuppressor.Install(harmony, log);
         JobCapture.Install(harmony, log);
         WalletMirror.Install(harmony, log);

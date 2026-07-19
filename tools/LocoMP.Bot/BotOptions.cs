@@ -39,6 +39,15 @@ public sealed class BotOptions
     public string CargoId = "";         // cargo id loaded onto the consist's wagons
     public float CargoAmount = 0f;      // 0 = the car's capacity
 
+    // M3.5c remote-parity rig: exercise career + cab-input flows as the "remote player".
+    public bool ClaimFirst;             // claim the first available job after the career burst
+    public double ReportIntervalSeconds; // retry "Report delivery" every N s (0 = never)
+    public double AbandonAfterSeconds;  // abandon the held claim after N s (0 = never)
+    public bool Drive;                  // grab a grant on a host loco and push its throttle
+    public string DriveCarId = "";      // target car by its game plate (e.g. L-013); "" = first loco
+    public float DriveValue = 0.35f;    // throttle to send while driving
+    public double DriveSeconds = 15;    // how long before throttle-to-zero + grant release
+
     public HandshakeRequest ToIdentity() => new(ProtocolVersion.Current, GameBuild, ModVersion, ModListHash);
 
     /// <summary>The bot ships in the same tree as the mod, so the single version source
@@ -92,6 +101,13 @@ public sealed class BotOptions
                         if (parts.Length > 1) o.CargoAmount = float.Parse(parts[1], CultureInfo.InvariantCulture);
                         break;
                     }
+                    case "--claim-first": o.ClaimFirst = true; break;
+                    case "--report-interval": o.ReportIntervalSeconds = double.Parse(Next(), CultureInfo.InvariantCulture); break;
+                    case "--abandon-after": o.AbandonAfterSeconds = double.Parse(Next(), CultureInfo.InvariantCulture); break;
+                    case "--drive": o.Drive = true; break;
+                    case "--drive-car": o.DriveCarId = Next(); o.Drive = true; break;
+                    case "--drive-value": o.DriveValue = float.Parse(Next(), CultureInfo.InvariantCulture); break;
+                    case "--drive-seconds": o.DriveSeconds = double.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--help" or "-h" or "/?": PrintUsage(); return null;
                     default:
                         Console.Error.WriteLine($"Unknown option: {args[i]} (try --help)");
@@ -160,6 +176,16 @@ Usage: LocoMP.Bot [options]
                          paste the host log's 'bot livery hint' so the consist spawns
                          as REAL cars in the game instead of ghost boxes
   --cargo <id[:amt]>     load this cargo onto the consist's wagons (amt default: full)
+  --claim-first          claim the first available board job (the remote-claim rig)
+  --report-interval <s>  retry 'Report delivery' on the held claim every N seconds —
+                         refusals log until the host world says the cars are delivered
+  --abandon-after <s>    abandon the held claim after N seconds (external jobs DIE)
+  --drive                request a control grant on a host loco and push its throttle
+  --drive-car <plate>    drive THIS car (game plate, e.g. L-013; implies --drive) —
+                         without it the bot picks the first loco it sees, which may
+                         not be the one you're standing next to
+  --drive-value <v>      throttle value to send   (default 0.35)
+  --drive-seconds <s>    driving time before throttle 0 + release (default 15)
 
 Examples:
   LocoMP.Bot --at 671,132,591                        one bot orbiting those coords
@@ -167,6 +193,8 @@ Examples:
   LocoMP.Bot --build WRONG                           verify the host's mismatch screen
   LocoMP.Bot --consist 3 --at 671,132,591            a 3-car ghost train + an orbiting avatar
   LocoMP.Bot --consist 3 --livery LocoDE2,Boxcar     the same train as REAL spawned cars
-  LocoMP.Bot --listen --consist 3 --livery ...       host a session; join from the game");
+  LocoMP.Bot --listen --consist 3 --livery ...       host a session; join from the game
+  LocoMP.Bot --claim-first --report-interval 30      claim a captured job; report until paid
+  LocoMP.Bot --drive --drive-seconds 20              drive the host's loco from outside");
     }
 }

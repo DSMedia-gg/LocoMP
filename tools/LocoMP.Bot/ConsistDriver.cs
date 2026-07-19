@@ -21,7 +21,8 @@ public sealed class ConsistDriver
 
     private readonly TopologyWalker _walker;
     private readonly int _carCount;
-    private readonly double _speed;
+    private double _speed; // mutable: a granted player's throttle input scales it (M3.5c)
+    private readonly double _baseSpeed;
     private readonly Action<string> _log;
     private readonly string _name;
     private readonly uint _token;
@@ -42,6 +43,7 @@ public sealed class ConsistDriver
         _walker = new TopologyWalker(topology, seed, tailCapacityM: carCount * CarLength + 100, startEdgeId);
         _carCount = Math.Max(1, carCount);
         _speed = speed;
+        _baseSpeed = speed;
         _name = name;
         _log = log;
         _liveries = liveries ?? Array.Empty<string>();
@@ -139,6 +141,20 @@ public sealed class ConsistDriver
             if (token != _token) return;
             _trainsetId = def.Id;
             _log($"[{_name}] consist: registered as trainset {def.Id} (epoch {def.Epoch})");
+        };
+        // M3.5c: a grant holder's throttle drives OUR speed — in --listen mode a player can sit
+        // in the bot-hosted train's cab and actually drive it (throttle id 1 mirrors the Shim's
+        // ControlType mapping; full speed at ~2.5× the configured cruise).
+        client.Trains.ControlInputReceived += (carId, controlId, value) =>
+        {
+            if (controlId != 1 || _trainsetId < 0) return;
+            if (!client.Trains.View.Sets.TryGetValue(_trainsetId, out TrainsetDef? def)) return;
+            bool ours = false;
+            foreach (CarDef car in def.Cars)
+                if (car.Id == carId) { ours = true; break; }
+            if (!ours) return;
+            _speed = value * _baseSpeed * 2.5;
+            _log($"[{_name}] consist: throttle input {value:F2} → {_speed:F1} m/s");
         };
     }
 }

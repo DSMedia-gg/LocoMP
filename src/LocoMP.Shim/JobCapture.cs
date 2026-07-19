@@ -16,9 +16,14 @@ namespace LocoMP.Shim;
 /// native take (booklet → validator) becomes an OPTIMISTIC server claim rolled back on refusal,
 /// native completion (turn-in) becomes the payout report, native expiry retracts. The validator's
 /// money printer is silenced in-session: the wage rides the policy layer into the LocoMP wallet,
-/// never the game's. Scope note (M3.5a): only the HOST claims natively — remote players see
-/// captured jobs as read-only until real-car replication lands; their panel hides the Claim button
-/// for these.
+/// never the game's.
+///
+/// M3.5c remote claim parity: a REMOTE player's board claim is mirrored by taking the job natively
+/// on their behalf (<c>JobsManager.TakeJob</c> is public and DV's "taken" is global world state —
+/// no booklet prints, no player context needed); their completion report arrives back as a
+/// CompleteQuery the host answers from <c>TryToCompleteAJob</c> — the game's own task tree is the
+/// validator, wherever the claimant is. A released external claim kills the job everywhere
+/// (abandoned ≠ available in DV), so the board and the world can never disagree about liveness.
 /// </summary>
 public sealed class JobCapture : IDisposable
 {
@@ -108,10 +113,14 @@ public sealed class JobCapture : IDisposable
         _active = this;
 
         _client.Career.JobAdded += OnServerJobAdded;
+        _client.Career.JobChanged += OnServerJobChanged;
         _client.Career.RequestRejected += OnServerRejected;
+        _client.Career.CompleteQueryReceived += OnCompleteQuery;
         _client.Accepted += OnAccepted;
         if (_client.Joined) SweepExistingJobs();
     }
+
+    private bool _sweepDone; // the live world's jobs are known — board reconciliation may run
 
     private void OnAccepted(int _) => SweepExistingJobs();
 
@@ -121,6 +130,7 @@ public sealed class JobCapture : IDisposable
     {
         JobsManager? manager = JobsManager.Instance;
         if (manager == null) return;
+        _sweepDone = true;
         int offered = 0;
         foreach (Job job in manager.allJobs.ToList())
         {
@@ -157,9 +167,77 @@ public sealed class JobCapture : IDisposable
         string[] licenses = JobLicenseType_v2.ToV2List(job.requiredLicenses).Select(v2 => v2.id).ToArray();
         long payoutCents = (long)(job.GetBasePaymentForTheJob() * 100f);
         string destination = job.chainData.chainDestinationYardId;
-        var tasks = new[] { new JobTaskDef(JobTaskKind.Haul, destination) };
+        // The task param carries the REAL route (tracks, load/unload steps) read from the native
+        // task tree — the info the printed booklet would show. Without it a remote claimant (who
+        // gets no booklet until M4's item sync) cannot know which track completes the job.
+        string route = DescribeTaskTree(job);
+        var tasks = new[] { new JobTaskDef(JobTaskKind.Haul, route.Length > 0 ? route : destination) };
         return new JobDef(0, job.jobType.ToString(), job.chainData.chainOriginYardId, destination,
             "cars", carCount, payoutCents, licenses, tasks, job.ID);
+    }
+
+    /// <summary>The booklet's essence as one line: every leaf task in order, with its real track
+    /// ids ("load @ SM-A1-L, move → SM-B4-O"). TaskData is the game's own uniform flattening —
+    /// one recursive walk covers every job type, sequential and parallel alike.</summary>
+    private static string DescribeTaskTree(Job job)
+    {
+        try
+        {
+            var steps = new List<string>();
+            foreach (Task task in job.tasks) CollectSteps(task.GetTaskData(), steps);
+            string route = string.Join(", ", steps.ToArray());
+            return route.Length > 500 ? route.Substring(0, 500) + "…" : route;
+        }
+        catch
+        {
+            return ""; // the yard-level destination still rides the def — degrade, don't fail
+        }
+    }
+
+    private static void CollectSteps(TaskData? data, List<string> steps)
+    {
+        if (data == null) return;
+        if (data.nestedTasks != null && data.nestedTasks.Count > 0)
+        {
+            // nestedTasks holds live Task objects (not TaskData) — flatten each via GetTaskData.
+            foreach (Task nested in data.nestedTasks) CollectSteps(nested.GetTaskData(), steps);
+            return;
+        }
+        switch (data.type)
+        {
+            case TaskType.Transport:
+                steps.Add($"move{CarSpan(data.cars)} → {TrackName(data.destinationTrack)}");
+                break;
+            case TaskType.Warehouse:
+                string verb = data.warehouseTaskType == WarehouseTaskType.Loading ? "load" : "unload";
+                steps.Add($"{verb}{CarSpan(data.cars)} @ {TrackName(data.destinationTrack ?? data.startTrack)}");
+                break;
+        }
+    }
+
+    /// <summary>The step's exact cars as "[N× first … last]" — the warehouse machine services THE
+    /// job's specific cars, not any empty car of the right type, so without these ids a helper
+    /// assembles the wrong consist and gets "no loadable trains" (run-A finding).</summary>
+    private static string CarSpan(List<Car>? cars)
+    {
+        try
+        {
+            if (cars == null || cars.Count == 0) return "";
+            string first = cars[0] != null ? cars[0].ID : "?";
+            if (cars.Count == 1) return $" [{first}]";
+            string last = cars[cars.Count - 1] != null ? cars[cars.Count - 1].ID : "?";
+            return $" [{cars.Count}× {first} … {last}]";
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private static string TrackName(Track? track)
+    {
+        try { return track != null && track.ID != null ? track.ID.FullDisplayID : "?"; }
+        catch { return "?"; }
     }
 
     // ── native lifecycle → server proposals ──
@@ -183,14 +261,89 @@ public sealed class JobCapture : IDisposable
         _client.Career.ClaimJob(serverId);
     }
 
-    /// <summary>Turn-in: the game's own task tree validated the work. Report our single Haul step;
-    /// the server mints the payout into the claimant's policy-routed wallet.</summary>
+    /// <summary>Turn-in: the game's own task tree validated the work. When WE hold the claim,
+    /// report our single Haul step and the server mints the payout. When a REMOTE player holds it,
+    /// this completion happened inside <see cref="OnCompleteQuery"/>'s validation call — the reply
+    /// carries the verdict, so reporting here would only earn a "not claimed by you" rejection.</summary>
     private void OnNativeCompleted(Job job)
     {
-        if (!_serverIdByGameId.TryGetValue(job.ID, out int serverId)) return;
-        _client.Career.ReportTask(serverId, 0);
-        _log($"[career] {job.ID} completed natively — reporting for payout");
+        if (_serverIdByGameId.TryGetValue(job.ID, out int serverId))
+        {
+            bool mine = !_client.Career.Jobs.TryGetValue(serverId, out ClientJob? mirror) ||
+                        mirror.State != JobLifecycle.Claimed || mirror.ClaimantPeerId == _client.LocalId;
+            if (mine)
+            {
+                _client.Career.ReportTask(serverId, 0);
+                _log($"[career] {job.ID} completed natively — reporting for payout");
+            }
+            else
+            {
+                _log($"[career] {job.ID} completed natively for a remote claimant — verdict rides the reply");
+            }
+        }
         Forget(job);
+    }
+
+    /// <summary>M3.5c: mirror board-side lifecycle onto the native world. A remote claim takes the
+    /// job natively on the claimant's behalf (stops the host double-taking it and starts DV's own
+    /// bookkeeping); a released external claim (abandon/grace/TTL — broadcast as Expired) kills
+    /// the native job, because DV cannot re-shelve a taken job.</summary>
+    private void OnServerJobChanged(ClientJob job)
+    {
+        if (job.Def.GameId.Length == 0) return;
+        if (!_gameJobsById.TryGetValue(job.Def.GameId, out Job? native) || native == null)
+        {
+            // Should be unreachable now that ghosts are reconciled away — if a claim still lands
+            // on one, say so loudly instead of silently skipping the native take.
+            if (job.State == JobLifecycle.Claimed && job.ClaimantPeerId != _client.LocalId)
+                _log($"[career] WARNING: {job.Def.GameId} claimed by {job.ClaimantName} but has no " +
+                     "native job in this world — a GHOST claim; completion will be refused");
+            return;
+        }
+
+        if (job.State == JobLifecycle.Claimed &&
+            job.ClaimantPeerId != 0 && job.ClaimantPeerId != _client.LocalId &&
+            native.State == JobState.Available)
+        {
+            string who = job.ClaimantName.Length > 0 ? job.ClaimantName : $"player {job.ClaimantPeerId}";
+            RunNative(() => JobsManager.Instance?.TakeJob(native, false));
+            _log($"[career] {job.Def.GameId} claimed by {who} — taken natively on their behalf");
+        }
+        else if (job.State == JobLifecycle.Expired && native.State == JobState.InProgress)
+        {
+            RunNative(() => JobsManager.Instance?.AbandonJob(native));
+            _log($"[career] {job.Def.GameId} released — abandoned natively (a taken job cannot return to the world)");
+        }
+    }
+
+    /// <summary>M3.5c: the server asks whether a remotely claimed job is really finished. The
+    /// game's own completion check answers — <c>TryToCompleteAJob</c> walks the task tree and, on
+    /// success, completes the job for real (payout stays silenced by the money-printer prefix;
+    /// the wage is minted server-side into the claimant's policy wallet).</summary>
+    private void OnCompleteQuery(int serverJobId)
+    {
+        if (!_gameIdByServerId.TryGetValue(serverJobId, out string? gameId) ||
+            !_gameJobsById.TryGetValue(gameId, out Job? native) || native == null)
+        {
+            _client.Career.SendCompleteReply(serverJobId, false, "job not found in the host world");
+            return;
+        }
+        if (native.State != JobState.InProgress)
+        {
+            _client.Career.SendCompleteReply(serverJobId, native.State == JobState.Completed,
+                $"job is {native.State} in the host world");
+            return;
+        }
+
+        JobState verdict = JobState.InProgress;
+        RunNative(() =>
+        {
+            JobsManager? manager = JobsManager.Instance;
+            if (manager != null) verdict = manager.TryToCompleteAJob(native);
+        });
+        bool ok = verdict == JobState.Completed;
+        _client.Career.SendCompleteReply(serverJobId, ok, ok ? "" : "the cars are not delivered yet");
+        _log($"[career] {gameId}: remote completion check → {(ok ? "COMPLETE — claimant gets paid" : "not finished")}");
     }
 
     private void OnNativeAbandoned(Job job)
@@ -207,11 +360,15 @@ public sealed class JobCapture : IDisposable
 
     private void OnNativeExpired(Job job)
     {
+        // Claimed or not: a natively dead job can never complete, so the board entry goes —
+        // the server ends any claim honestly (the claimant gets an explicit toast). Far-station
+        // jobs expire under remote claimants because the world's lifecycle follows the HOST's
+        // presence (run-A finding); the dedicated server (M6) is the real fix for that.
         if (_serverIdByGameId.TryGetValue(job.ID, out int serverId) &&
-            _client.Career.Jobs.TryGetValue(serverId, out ClientJob? mirror) &&
-            mirror.State == JobLifecycle.Available)
+            _client.Career.Jobs.ContainsKey(serverId))
         {
             _client.Career.RetractJob(serverId);
+            _log($"[career] {job.ID} expired natively — retracting from the board (any claim ends)");
         }
         Forget(job);
     }
@@ -223,6 +380,18 @@ public sealed class JobCapture : IDisposable
         if (job.Def.GameId.Length == 0) return;
         _serverIdByGameId[job.Def.GameId] = job.Def.Id;
         _gameIdByServerId[job.Def.Id] = job.Def.GameId;
+
+        // Reconcile a RESUMED board against the live world (M3.5c run-A finding): a saved
+        // external job with no native counterpart here is a ghost — claimable, backed by
+        // nothing. Retract it before anyone wastes a claim. Only meaningful once the sweep has
+        // seen the live world; the saves no longer persist available externals, so this is
+        // strictly a cleaner for boards written before that change (and a belt-and-braces
+        // guard after it).
+        if (_sweepDone && job.State == JobLifecycle.Available && !_gameJobsById.ContainsKey(job.Def.GameId))
+        {
+            _client.Career.RetractJob(job.Def.Id);
+            _log($"[career] {job.Def.GameId} is on the saved board but not in this world — retracting (ghost)");
+        }
     }
 
     /// <summary>Our optimistic native take lost — a true race the pre-gate couldn't see (its
@@ -261,7 +430,9 @@ public sealed class JobCapture : IDisposable
     {
         _active = null;
         _client.Career.JobAdded -= OnServerJobAdded;
+        _client.Career.JobChanged -= OnServerJobChanged;
         _client.Career.RequestRejected -= OnServerRejected;
+        _client.Career.CompleteQueryReceived -= OnCompleteQuery;
         _client.Accepted -= OnAccepted;
         foreach (Job job in _subscribed)
         {
