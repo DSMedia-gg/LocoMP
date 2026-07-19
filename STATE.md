@@ -1,16 +1,57 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-19 late (O11+O12 RESOLVED by Cody → **D15 BUILT**: host grants gated to
-held licenses + auto-grant toggle, 134/134 ×3, full sln 0 warnings, payload staged, UNCOMMITTED ·
-**M4 OPENED**: item-system recon complete — 02 verification item 5 answered) · This
-is the **implementation** memory (burst cadence, D8).
+**Updated:** 2026-07-19 late — D15 PUSHED (`7b93bc8`/`0c1bfe9`), then **M4.1 (game-free Items core)
+BUILT**: ItemRegistry + protocol v6 + LMPS schema v4 + full session stack, 155/155 ×3, full sln
+0 warnings, payload staged, UNCOMMITTED. This is the **implementation** memory (burst cadence, D8).
 The **planning corpus** lives one level up at `../` (00–09, INDEX, research/) — strategic, kept private.
 Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current milestone in `../07-ROADMAP.md`.
 
 ## Where things stand
 
-- **D15 BURST 2026-07-19 (late): O11 + O12 RESOLVED (Cody) → D15 built + M4 opened. UNCOMMITTED
-  (134/134 ×3, full sln 0 warnings, payload staged to the game's Mods/ + dist/).**
+- **M4.1 — game-free Items core: BUILT 2026-07-19 (late), UNCOMMITTED. 155/155 ×3, full sln 0
+  warnings, payload staged to the game's Mods/ + dist/.** The M4 spine's authority layer, headless
+  and fuzzed — no Shim yet (that's M4.2). What exists:
+  - **`Items/` domain** (game-free, mirrors `Trains/` + `Career/`): `ItemDef` (id + prefabName +
+    opaque state; the recon confirmed DV has NO per-instance id, so LocoMP mints `ItemNetId`s — the
+    car-id pattern) + `ItemRecord` (def + location) + **`ItemRegistry`** — the authority enforcing
+    the **single-location invariant** (an item is World-at-a-pose XOR one scope's possession, never
+    both/neither) with an **item-conservation oracle** (`ItemConservationHolds`: live == spawned −
+    despawned, the ledger's money-conservation analog). Possession routes through the **policy layer**
+    (`ProgressionPolicy.InventoryScopeFor` — new; per-player keeps inventory private, shared-career
+    pools it "freely shared" per 02 §6, the same one-switch as the wallet). `ItemConfig` = shop
+    catalog (prefab→price) + pickup radius + host-capture gate.
+  - **Protocol v6** (MessageType 50–58: ItemRegister/Pickup/Drop/Purchase/Despawn requests +
+    ItemSpawned/Moved/Despawned/Rejected). A possession's SCOPE KEY never hits the wire — the holder
+    rides as (peer id, name) like a job's claimant; the SAVE keeps the key (it re-binds inventory
+    across a restart). `ItemCodec` shares the def between wire + save (can't drift), each side writes
+    its own location. `EconomyEventKind.ShopPurchase` added.
+  - **`ServerItems`/`ClientItems`** session modules beside the trains/career pair, wired into
+    NetServer/NetClient (dispatch tries trains → career → items; admit AFTER career maps peer↔key,
+    remove BEFORE it drops the map). **Purchase = charge THEN mint**: `ServerCareer.TryChargeShop
+    Purchase` burns from the policy wallet (overdraft-refused) and only then does the item mint, so
+    money + item move together — THE win condition: a *client's* purchase debits the *client's*
+    wallet, not the host's. Pickup is proximity-gated (claimant-pose vs item pose, the career task
+    gate's posture) and exclusive. World-item register/despawn are world-source-gated (D13 posture,
+    for M4.2 host capture; exercised now). Join burst delivers every item; leaver's held items are
+    retained + marked offline (rejoin rebinds), like a career claim under grace.
+  - **Persistence: LMPS schema v3 → v4** — the items half (world items + per-player inventory + id
+    counter) appended; a v3 file is refused cleanly (no migration, backups keep the bytes). Cold
+    restart resumes world items at their poses AND each player's inventory keyed to their scope.
+  - **Tests 134 → 155**: `ItemRegistryTests` (mint/pickup/drop/despawn, exclusivity, both presets'
+    scope routing, capture/restore, + a **2,000-op fuzz** asserting single-location + item
+    conservation after every op with a save/restore round-trip every 250) and `ItemSessionTests`
+    (the client-purchase win condition w/ money conservation, buy→drop→pickup lifecycle mirrored,
+    host-capture register + non-source refusal, despawn, proximity refusal, join burst, **cold
+    restart resumes world items + inventory + wallet**, shared-career pooled inventory).
+  - **O12 accepted earlier this session** already ratified LMPS as the save format, so schema v4 is
+    a clean extension of a settled format, not a new deviation.
+  - **Next — M4.2: Shim ItemSync** on the recon's event seams (`StorageBase.ItemAdded/ItemRemoved`,
+    `Inventory.InventoryStatusChanged`, `Grabber.GrabStarted/Stopped`; spawn via
+    `Resources.Load(prefabName)`; the `ItemDisablerGrid` only deactivates far items — a keep-alive/
+    exemption, NOT the M3.5b materialization machinery). Then comms-radio actions for all players
+    (summon/rerail/delete + fees) round out M4. **Commit+push of M4.1 awaits Cody's go.**
+- **D15 BURST 2026-07-19 (late): O11 + O12 RESOLVED (Cody) → D15 built + M4 opened. PUSHED
+  `7b93bc8` (feat) + `0c1bfe9` (docs), `2505e29..0c1bfe9`.**
   - **O12 accepted**: LMPS is the ratified career-save format (03 §7 amended; MessagePack stays
     reserved for bulk join snapshots). Standing flag closed, no code change.
   - **O11 → D15** (Cody's own design: "keep host grants, gate to what the host holds, plus an
