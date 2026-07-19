@@ -1,8 +1,8 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-19 (M3.5b VERIFIED IN-GAME — Runs A+B passed incl. the proximity-culling
-round-trip; uncommitted, push on Cody's go) · This is the **implementation** memory (burst
-cadence, D8).
+**Updated:** 2026-07-19 (M3.5c VERIFIED IN-GAME — runs A/B/C ALL PASSED after 8 live findings
+fixed same-day; 125/125 ×3, full sln 0 warnings; uncommitted, commit+push on Cody's go) · This
+is the **implementation** memory (burst cadence, D8).
 The **planning corpus** lives one level up at `../` (00–09, INDEX, research/) — strategic, kept private.
 Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current milestone in `../07-ROADMAP.md`.
 
@@ -203,9 +203,84 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
     booklet materialization + remote claim flow (the M3.5c core); derailed-at-registration spawn
     passes null tracks to SpawnLoadedCar (untested path — watch run A); crew-vehicle/garage
     spawns on a joined client re-create native cars after the clear.
-- **M3 remaining**: M3.5b in-game runs (checklist below) → commit+push (Cody's go) · M3.5c —
-  remote claim parity (job materialization, input routing, couple requests) · M3.2 join phases
-  (deferrable) · friend session upgrades exit wording.
+- **M3.5c BUILT 2026-07-19 (uncommitted, STAGED 16:51): REMOTE CLAIM PARITY + MULTI-CREW — the
+  pulled-forward M4 spine's second half.** Protocol v4→v5, messages 44–49. What shipped:
+  - **v4 wire bug FOUND + FIXED by code reading**: registration (`RegisterTrainset` →
+    `HandleRegister` → `Registry.Register`, all untouched since M2.1) silently STRIPPED
+    GameId/GameGuid/CargoId/CargoAmount — the v4 fields rode defs and saves but never survived
+    the only entry point. Every M3.5b remote spawn actually used the `LMP-N` fallback identity
+    and spawned cargo-empty (liveries worked — Kind flows — which is why the runs looked right).
+    Registration now rides the full CarDef codec; new regression test pins it.
+  - **Remote claims on captured jobs** (the M3.5c core): a joined player claims from the panel →
+    the host's JobCapture sees the JobState broadcast and calls `JobsManager.TakeJob` natively on
+    their behalf (public API; DV's "taken" is global world state — no booklet prints, reentry-
+    guarded via the existing `_applying`/`RunNative`). Their "Report delivery" DEFERS server-side:
+    `ServerCareer` stashes the report and sends `JobCompleteRequest` (46) to the world source →
+    host runs `JobsManager.TryToCompleteAJob` (DV's own task tree is the validator) →
+    `JobCompleteReply` (47) commits the stashed report and mints the payout to the CLAIMANT (by
+    key, so a mid-reconnect claimant still gets paid); refusals carry the native verdict as the
+    claimant's toast; 15 s timeout → "host did not confirm — try again". **Released external
+    claims (abandon/TTL/grace) retire the job EVERYWHERE** (broadcast as Expired; host abandons
+    natively) — DV cannot re-shelve a taken job, so the board never advertises one no world can
+    deliver. World-source direct reports keep the M3.5a path (no self-queries). Booklet
+    materialization for remotes = deliberate M4 deferral (a booklet is an ITEM + task-tree
+    reconstruction; the panel is the remote claim UX until then).
+  - **Multi-crew cab controls** (`CabControlSync`, new): one uniform surface —
+    `BaseControlsOverrider.GetControl(ControlType)` / `OverridableBaseControl` {Value, Set,
+    ControlUpdated}; the 42-value ControlType enum IS the wire byte. Holder side: in a remote cab
+    with the grant, lever moves send the existing `ControlInput` (28). Owner side: every control
+    on own bound cars is watched; committed values broadcast as `ControlState` (44) which the
+    server stores per (car, control) and REPLAYS in the join burst — a newcomer's replica levers
+    match reality. Input becomes state only through the owner (03 §3): the owner's apply is
+    deliberately un-guarded so its ControlUpdated echoes the committed state back out; replica
+    applies ARE guarded (+ skipped while we're the occupying grant holder — never fight the
+    player's hand). Sends rate-limited 10/s per touched control with trailing flush.
+  - **Couple/uncouple requests**: `ChainHook` (new Harmony pair on
+    `ChainCouplerCouplerAdapter.TryCouple/TryUncouple` — the single funnel under the chain FSM)
+    intercepts chain acts involving a remote-driven car BEFORE physics and sends
+    `CoupleRequest`/`UncoupleRequest` (48/49, car-relative ends via `Coupler.isFrontCoupler`);
+    the server routes to carA's sim owner; the owner performs the real `CoupleTo`/`Uncouple`
+    (explicit partners, ≤12 m sanity) and its NATIVE event drives the normal proposal→transaction
+    path — one authority chain, no second commit path. The M3.5b physical-couple revert stays as
+    a backstop and now also routes the intent.
+  - **Live cargo sync**: host POLLS logic-car cargo at 1 Hz (same no-delegate-guessing posture as
+    derail polling) → `CargoState` (45) → server folds it into the stored CarDef via
+    `Registry.TryUpdateCargo` (SAME epoch — cargo is not membership; late joiners + saves carry
+    the live load with NO schema change) → replicas re-mirror onto their logic cars.
+  - **Dynamic registration + streamed-back rebind** (host, 2 s scan, one-scan settle): live sets
+    whose cars are ALL unknown either re-bind to their existing server def by car GameId multiset
+    (closes the banked "respawn rebinding" debt — re-registering would duplicate the set after
+    DV's distance streaming rebuilds it) or register fresh (job-chain spawns, summons). Joined
+    clients CULL natively spawned cars post-clear (crew vehicle/garage) with a log line —
+    guarded by `RealCarSync.SpawningRemote` so our own spawns pass.
+  - **Bot**: `--claim-first` / `--report-interval` / `--abandon-after` (remote career loop
+    headless) + `--drive`/`--drive-value`/`--drive-seconds` (grant + throttle a host loco — the
+    host watches their own lever move); in `--listen` mode a granted player's throttle input now
+    drives the bot consist's speed (Cody can sit in its cab and DRIVE it). Headless listen smoke
+    passed on the v5 registration.
+  - Tests 110 → **122** (`RemoteParityTests`: registration identity regression, control
+    relay/join-burst replay/non-owner drop, grant→input→owner→state echo, cargo def-fold + late
+    join, couple/uncouple request routing with commit, deferred completion ok/refusal/timeout,
+    external abandon + grace death, world-source direct path). ×3 stable, full sln 0 warnings.
+  - **Banked debts**: physical overview leaflet behavior after a programmatic TakeJob = UNKNOWN
+    (watch in run; the pre-gate already refuses host takes on claimed jobs either way) ·
+    owner-side couple-request execution is core-tested but not one-PC-testable in-game (the
+    requester must be a joined GAME client; bot owners ignore requests — friend session verifies
+    live) · derailed-at-registration spawn path still untested (carried) · replica control apply
+    assumes controls exist once SimController does (VR interactions unverified).
+- **M3.5c RUNS CLOSED 2026-07-19 (one-PC wording): A/B/C all passed.** Run A = THE full remote
+  job loop live (`remote completion check → COMPLETE — claimant gets paid`, host wallet
+  untouched); Run B = input routing (bot drove Cody's L-013 throttle + brake by wire, grant
+  refusal while held, ControlState broadcast observed); Run C = client cab (Cody drove the bot's
+  train from its cab — 13 controls live — chain couple/uncouple intercepted + routed, world
+  handover + SP save intact, no spawn fights). Eight live findings fixed same-day (see session
+  log): claim eligibility, host license grants (NEW feature, msg 42 target peer), ghost-job
+  persistence, route visibility + car identity (booklet essence on the wire), far-station expiry
+  killing claims (world-is-truth retraction), `--drive-car` targeting, and the joined-client
+  spawn cull (removed — unwinnable vs DV's spawners). A2 leaflet question ANSWERED: survives the
+  programmatic take, self-cleans in the validator.
+- **M3 remaining**: commit+push M3.5c (Cody's go) · M3.2 join phases (deferrable) · friend
+  session upgrades exit wording + live-fires owner-side remote couple execution.
 
 **M3.5b CLOSED 2026-07-19: Run B №2 PASSED — "test success!" (Cody).** Real cars spawned on the
 joined client, and the proximity culling verified as a full round-trip: consist rolled out past
@@ -253,33 +328,51 @@ one log line while waiting); (b) adjacency coupling now uses EXPLICIT partner co
 `DistanceTrackingEnabled = false` (kills the traveller warning); spawn log now includes
 `~N m from you`.
 
-## M3.5b in-game runs (Cody at the PC; payload staged 14:31, game was not running)
+## M3.5c in-game runs (Cody at the PC; payload staged 16:51, game was not running)
 
-**Run A — host side (the existing rig, now with real cars):**
-1. Host per usual. NEW expected line: `bot livery hint: --livery <ids>` next to the `--at` and
-   `--start-edge` hints. Paste ALL THREE into the bot:
-   `LocoMP.Bot --consist 3 --livery <ids> --cargo Coal --at <coords> --start-edge <N>`.
-2. Expect `remote consist N (3 car(s)) — spawning on first snapshot` then
-   `remote consist N: 3 real car(s) on the rails (edge E)` — REAL cars with the right liveries
-   beside you, wagons visibly loaded (coal), rolling smoothly, switches still flipping ahead.
-3. Walk up: couplers/chains visible between its cars; car plates show BOT-… ids. Enter its cab →
-   `entered car N — requesting control grant` (controls won't drive it — M3.5c).
-4. Manually chain-couple YOUR loco to a bot car → expect the revert:
-   `coupling with a remote-driven car is not synced yet (M3.5c) — uncoupling` and no snap-back.
-5. Bot without `--livery` (old command) → ghost boxes as before (fallback regression).
-6. Quit-time teardown: expect the bot's cars despawned/unbound quietly, zero LocoMP exceptions.
+**Run A — remote career loop (normal rig: you host, the bot is the remote claimant):**
+1. Host per usual on your career save. Regression first: board 1:1 with world jobs, wallet mirror
+   lines, `host job capture installed`. NEW at load: `chain-coupler hook installed`.
+2. `LocoMP.Bot --claim-first --report-interval 30 --at <coords>`. Expect: bot logs
+   `claiming job N…` → `claimed job N`; HOST log: `<gameId> claimed by Bot — taken natively on
+   their behalf`; panel shows the job claimed by Bot. **WATCH the physical overview leaflet** at
+   that station's board — its fate after a programmatic take is the one unknown (if it lingers,
+   putting it through the validator must refuse via the pre-gate: "claimed by Bot", leaflet safe).
+3. Every 30 s the bot reports → host log `remote completion check → not finished`; bot logs the
+   refusal toast. **THE loop**: physically haul the job's cars to the destination yourself (your
+   physics, no booklet needed) → the next bot report → host log `… → COMPLETE — claimant gets
+   paid` → bot logs the payout + wallet. Your own wallet must NOT move.
+4. Abandon path: re-run the bot with `--claim-first --abandon-after 45`. On abandon: host log
+   `<gameId> released — abandoned natively (…)`, job disappears from the board AND the world.
+5. Regressions alongside: your own native take on a different job (booklet → validator) still
+   works; load/unload any synced car at a warehouse → `car N cargo → … — announced`; complete a
+   job so a chained one spawns new cars → `mid-session consist registered (…)`; drive far from a
+   consist until `left the streamed world — unbound`, come back → `consist N streamed back in —
+   re-bound to its live cars`.
 
-**Run B — client side (the NEW rig: bot hosts, the game joins):**
-1. `LocoMP.Bot --listen --consist 3 --livery <ids from run A> --cargo Coal --behavior idle`
-   (add `--start-edge <N>` from run A so the train is near your spawn).
-2. In-game (load your SP save, ideally on foot): Join `127.0.0.1`. Expect:
-   `cleared N local car(s) — this session runs the host's world (…)`, then the bot's REAL train
-   spawning and rolling. Your money/licenses stay native (wallet mirror is host-only).
-3. THE critical assertion — SP save integrity: while joined, try to sleep/save (should silently
-   not save), then Leave → quit to menu → reload your save → your own world, cars, and money are
-   EXACTLY as before the session (the deleted cars are back because nothing ever saved).
-4. Watch for: joining while inside one of your cars (warning line + you fall — acceptable),
-   respawn-loop lines (`lost car(s) locally — respawning`), any exception.
+**Run B — drive test (input routing; you host, STAY OUT of your loco's cab):**
+1. `LocoMP.Bot --drive --drive-seconds 20 --at <coords>` → bot requests the grant on your first
+   loco (`requesting control grant for car N (<livery>)`), then: **your throttle lever moves to
+   ~0.35 by itself and the train brake releases** (the loco may creep — that's the point). After
+   20 s: throttle back to 0, grant released.
+2. While the bot holds the grant, enter that cab → your grant request is refused (log shows the
+   holder). After release, cab entry grants normally again.
+3. With no bot driving, move your own loco's throttle → the bot logs
+   `control state: car N throttle = …` (the owner-state broadcast, join-burst-backed).
+
+**Run C — client side (listen rig: bot hosts, you join; M3.5b regressions ride along):**
+1. `LocoMP.Bot --listen --consist 3 --livery <ids> --behavior idle --start-edge <N>`; join
+   `127.0.0.1` from the game. Expect the M3.5b flow: world clear, real cars, proximity
+   materialization, saves blocked.
+2. Enter the bot loco's cab → grant → `cab controls live: your inputs in car N now drive the
+   owner's loco` → **move the throttle: the bot logs `throttle input 0.35 → 7.0 m/s` and its
+   consist visibly speeds up/slows — you are driving the bot's train from its cab.**
+3. Chain-interact on a bot car (unhook a chain): expect
+   `chain uncouple on a remote-driven car — asked its simulating player (car N)` and NO local
+   split (the bot ignores the request — interception + no-desync is the assertion; owner-side
+   execution is core-tested and live-fires at the first friend session).
+4. Leave → reload your save (SP integrity regression — quick check).
+5. Watch everywhere: zero LocoMP exceptions; any wallet drift; double-fires on the chain hook.
 
 ## M3.5a run №2 — PASSED 2026-07-19 (checklist retired)
 
@@ -477,11 +570,123 @@ career" toggle or delete the .lmps to re-mint).
 - Staged payload in the game's `Mods/LocoMP/` = **2026-07-19 13:22 build** = the verified commit.
 
 ## Blockers
-- None technical. Next step needs Cody at the PC: the two M3.5b in-game runs (checklist above).
-  After they pass: commit + push on his go, then M3.5c (job materialization + remote claim
-  parity + input routing over grants).
+- None. M3.5c verified in-game; awaiting Cody's go to commit + push. Then M3.2 (join phases —
+  deferrable) or onward to M4 proper (items/inventory — booklet materialization for remotes and
+  real warehouse ops for remote players land there).
 
 ## Session log
+- **2026-07-19** — **RUN C PASSED — M3.5c RUNS CLOSED.** Evidence, all with log lines and zero
+  LocoMP exceptions: world handover (9 cars cleared, no post-clear spawn fights), real cars at
+  60 m, cab entry → grant → `cab controls live … (13 controls)` → Cody DROVE the bot's train
+  from its cab (bot console: throttle input → speed), grant released on exit, chain uncouple AND
+  couple both intercepted + routed (`asked its simulating player`), leave → save reload intact.
+  M3.5c complete (one-PC wording). Next: commit + push on Cody's go.
+- **2026-07-19** — **Run C attempt №2 still spammed — the restoration locos are
+  `playerSpawnedCar == true` (DV flags personal restoration projects as player-spawned), so the
+  narrowed cull filter didn't exclude them. CULL REMOVED ENTIRELY** (back to pure M3.5b join
+  behavior: one clear at join, whatever the client's world spawns afterwards coexists unsynced).
+  Two melted runs = enough evidence that deleting world spawns on a live client is unwinnable;
+  CHANGELOG claim corrected. 125/125, staged via waiter.
+- **2026-07-19** — **Run B PASSED (with `--drive-car <plate>` added — the bot first drove L-014
+  instead of Cody's L-013; "first loco on the wire" isn't "the loco you're next to"; pipeline
+  itself worked). Run C blocker: the joined-client stray-spawn CULL fought DV's world spawners —
+  the three RESTORATION locos (DE2/DH4/S060) respawned every frame (per-frame
+  LocoRestorationController log spam = Cody's "repeatedly grants licences"), client slowdown.
+  Fixed: cull narrowed to `TrainCar.playerSpawnedCar` only (crew vehicle/garage); world-driven
+  spawns (station loco spawners, restoration controllers, streamer restorations) are left to
+  coexist unsynced — deleting them is a fight we can't win; true world suppression = dedicated
+  server (M6). 125/125, staged via waiter.**
+- **2026-07-19** — **A4 PASSED — THE FULL REMOTE LOOP IS LIVE: `SM-FH-80: remote completion check
+  → COMPLETE — claimant gets paid`; host wallet stayed $2000 (personal-scope payout = policy
+  working). Same log surfaced finding №6: FAR-STATION EXPIRY under a claim** — GF-FH-32 (Golden
+  Falls) was claimed + taken on behalf, then DV expired it natively while the host stayed at SM:
+  in host-native mode the world's job lifecycle follows the HOST's presence, so a remote claim on
+  a far station's job can die under its claimant (left a zombie: board claim + reports into a
+  void until TTL). Fixed (125/125 ×3): `TryRetract` now retracts CLAIMED external jobs (the world
+  is the truth — a claim on a dead native job can never complete; core-generated claims stay
+  protected), ServerCareer drops pending completes + toasts the claimant ("the host world expired
+  this job — claim released"), JobCapture retracts on native expiry regardless of claim state.
+  CareerSessionTests' "claimed is protected" pin rewritten to the new rule. **BANKED for
+  08-RISKS/M6:** remote claims are only reliable near the host in host-native mode — cars stream
+  out and jobs expire with host distance; real fix = dedicated server (M6) or host-presence
+  scoping; friend-session guidance = crew together around the host.
+- **2026-07-19** — **run A finding №5: CAR IDENTITY in routes — "no loadable trains parked on the
+  track" despite empties at the bay; the warehouse machine services THE job's exact logic cars
+  (task.cars), not any empty of the right type. Route steps now carry the step's car span
+  ("load [5× G-123 … G-130] @ SM-A1-L") from TaskData.cars (logic Car.ID). 125/125, staged via
+  waiter.** Also recon-confirmed en route: WarehouseMachine is pure logic layer with NO player
+  concept — readyForMachine flips on the JobTaken event, which the programmatic take fires, so
+  take-on-behalf satisfies the machine by construction.
+- **2026-07-19** — **run A finding №4: ROUTE VISIBILITY — remote claims got no booklet, so nobody
+  could see the destination TRACK; fixed (125/125 ×3).** Cody's observation: the overview leaflet
+  survives a programmatic take (and self-cleans if put through the validator), but the actual
+  spotting tracks only exist in the BOOKLET the native claim swap prints — which a take-on-behalf
+  never prints. Fix: JobCapture now extracts the booklet's essence at capture time —
+  `Task.GetTaskData()` is DV's own uniform recursive flattening (nestedTasks holds live Task
+  objects, not TaskData — DV quirk); leaf steps render as "load @ SM-A1-L, move → SM-B4-O" via
+  `TrackID.FullDisplayID` — and rides it in the captured JobDef's task Param (opaque string, no
+  protocol change; 500-char cap well under the 4096 wire cap; yard-name fallback on any
+  extraction failure). Shown on: the claimant's MY JOB row, the others-row (the host hauling for
+  a remote claimant needs it — the rig's A4 flow literally is that), and the bot's claim log
+  (`route: …`). ALSO verified by this run: A2 leaflet fate answered (survives, self-cleans),
+  host grants work live (`Shunting → Bot` — DV's SL jobs DO require the Shunting license, banked),
+  claim → native take → refused-completion loop all green, ghost cleanup ran (3 retracted; 2
+  claimed ghosts from the old bot's grace correctly refused retraction — they die on expiry).
+- **2026-07-19** — **run A blocker №3: GHOST JOBS — bot claimed a board job with no native
+  counterpart; root-caused + fixed (125/125 ×3, waiter re-armed).** The career save persisted the
+  WHOLE board incl. available external jobs; a re-host resumes them, but DV's world has different
+  jobs by then — a saved external with no live native job is claimable yet backed by nothing
+  (take-on-behalf silently no-ops, completion can only reply "not found"). The earlier
+  "already registered" sweep refusals were the smoke: only 3 saved entries matched the live
+  world. Fix (both halves): (a) Core — `Capture` no longer persists AVAILABLE external jobs
+  (they're live-world mirrors; the join sweep re-offers them every session; CLAIMED externals
+  still persist for the grace story); (b) Shim — JobCapture reconciles a resumed board on
+  JobAdded: available external + no native job (post-sweep) → `RetractJob` with a "ghost" log
+  line (cleans saves written before (a)); plus a loud WARNING if a claim ever lands on a ghost
+  anyway. Note: an existing save's CLAIMED ghost (e.g. the bot's, random key) self-heals via
+  claim-TTL/grace expiry → external release → job dies.
+- **2026-07-19** — **HOST LICENSE GRANTS built (run A follow-up, Cody: "we need a way for the bot
+  to gain licences").** The eligibility scan confirmed the diagnosis: the board's jobs all gate
+  on licenses a fresh profile doesn't hold, and no starting wallet ($2000) can buy them
+  ($30k–$200k) — which is also the REAL design gap for a fresh friend joining a mature world
+  (flag for Cody/00: guest progression on mature hosts; host grants are the interim answer).
+  Implemented: `LicenseGrantExternal` (42) gains a target peer id (0 = own scope — the D14
+  native-mirror path unchanged; v5 is unpublished so the shape change is free), world-source-
+  gated, charge-free, idempotent; panel section "Grant licenses to a player (host)" (pick player
+  → catalog Grant buttons, toast + log line). The BOT needed zero changes — its rescan already
+  triggers on LicenseGranted, so a grant → claim happens automatically. Tests 122 → **124/124
+  ×3** (grant unlocks a gated claim + host scope untouched + conservation; refusals for unknown
+  peers / non-world-source). Payload restage waiter still armed on game exit.
+- **2026-07-19** — **M3.5c run A №1: BLOCKED at the remote claim — bot's claim refused; fixed
+  same hour (restage waiter armed).** Two findings: (a) `--claim-first` claimed the lowest-id
+  board job blindly, but the bot is a FRESH profile holding only the starting-license floor
+  (Transport requirements) while the host's mature save satisfies everything — the claim bounced
+  on the license gate. Bot now claims only ELIGIBLE jobs (license-subset check against its
+  mirror), logs each skip with the exact missing license (useful data: settles empirically what
+  DV's SL/SU shunting jobs require), blacklists refused ids, and re-scans every 2 s + on
+  JobAdded/LicenseGranted. (b) Server-side refusals go only to the requesting peer — the HOST
+  log never showed the reason (diagnosis needed the bot console). SessionController now logs
+  `_server.Career.RequestRejected` + `_server.Trains.ProposalRejected` as `[server] … refused
+  (peer N)` lines. Also seen in the log, benign: panel license-shop Buy clicks refused on
+  insufficient funds ($2000 vs $30k–$200k DV prices) — expected; and the mid-session native save
+  correctly wrote the real SP balance (D14 AboutToSave regression passing live).
+- **2026-07-19** — **M3.5c BUILT (remote claim parity + multi-crew) + STAGED 16:51, uncommitted.**
+  Recon-first over B99.7: `JobsManager.TakeJob/TryToCompleteAJob` public (programmatic take +
+  native task-tree validation — the remote-claim architecture unlock), `OverridableBaseControl`
+  {ControlType, Value, Set, ControlUpdated} + `BaseControlsOverrider.GetControl` (one generic cab
+  surface; the 42-value enum fits the wire byte), `ChainCouplerCouplerAdapter.TryCouple/
+  TryUncouple` (the single chain funnel), logic-car cargo via polling. **Found a real M3.5b wire
+  bug by code reading**: registration stripped identity/cargo (v4 added them to defs, never to
+  the registration message) — remote spawns actually ran on fallback identity; fixed in the v5
+  bump. Core: messages 44–49, deferred completion verification w/ timeout, external-release-
+  retires-job semantics, cargo folded into defs epoch-stable, control state stored + join-burst
+  replayed, couple/uncouple routed to sim owner. Shim: `CabControlSync` + `ChainHook` (new),
+  JobCapture remote-claim mirror (take/abandon on behalf, CompleteQuery answered natively),
+  TrainSync dynamic registration + GameId rebind (closes the banked respawn-rebinding debt) +
+  1 Hz cargo polling + joined-client stray-spawn cull, panel remote Claim/Report. Bot:
+  `--claim-first/--report-interval/--abandon-after/--drive`; listen-mode consist obeys throttle
+  input. Tests 110 → **122/122 ×3**, full sln 0 warnings, headless listen smoke passed. Next:
+  Cody's three runs (checklist above), then commit + push.
 - **2026-07-19** — **M3.5b BUILT (real-car replication) + STAGED 14:31, uncommitted.** Recon-first
   over B99.7 nailed the whole surface as first-class API: `CarSpawner.SpawnLoadedCar` (savegame
   restore = identity-preserving per-bogie spawn), `Bogie.SetTrack`, `Coupler.preventAutoCouple`/

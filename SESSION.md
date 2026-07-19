@@ -5,6 +5,115 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-19 — M3.5c runs day: eight findings, three passes — a friend can now WORK in your world 💰
+
+The heaviest run cadence yet — one evening, eight live findings, every one root-caused and fixed
+inside the hour, and all three runs green by the end. What the runs proved: a remote player can
+claim a real job from the host's world, the host's own game validates their delivery (nobody gets
+paid for an unfinished haul), the payout lands in the claimant's policy wallet with the host's
+untouched — and both directions of multi-crew work: a remote hand drove the host's throttle by
+wire (Run B), and the host drove a remote consist from inside its cab (Run C, 13 controls live).
+
+The findings, in the order the runs surfaced them:
+1. **Claim eligibility** — the bot claimed the lowest-id job blind; a fresh profile holds only
+   the starting floor. Now it claims only what its licenses allow and logs exactly what each
+   skipped job needs (which empirically settled: DV shunting jobs require the Shunting license).
+2. **Host license grants** (new feature, not a test hack) — msg 42 gained a target peer; the
+   host panel grants catalog licenses to connected players, charge-free and logged. This is the
+   interim answer to a REAL design gap: a fresh guest on a mature world faces license-gated
+   boards no starting wallet can unlock. The deeper progression question is flagged for 00.
+3. **Ghost jobs** — the career save persisted available captured jobs; a re-host resumed entries
+   whose native counterparts no longer existed (claimable, backed by nothing). Available externals
+   are no longer persisted at all, and a resumed board reconciles against the live world.
+4. **Route visibility** — the booklet the native claim-swap prints is the ONLY place DV shows the
+   destination track, and a take-on-behalf prints none. The captured job now carries the
+   booklet's essence (real track ids from the task tree) in its task param.
+5. **Car identity** — "no loadable trains parked on the track": the warehouse machine services
+   THE job's exact cars, not any empty of the right type. Route steps now carry car spans
+   ("load [5× G-123 … G-130] @ SM-A1-L").
+6. **Far-station expiry** — DV expired a Golden Falls job under its remote claimant while the
+   host stayed at Steel Mill: the world's job lifecycle follows the HOST's presence. A natively
+   dead external job now retracts even under a claim (the world is the truth; the claimant gets
+   an explicit toast). Banked as the host-native mode's core limitation — remote claims are only
+   reliable near the host; the dedicated server (M6) is the real fix.
+7. **`--drive-car <plate>`** — "first loco on the wire" drove L-014 while the host stood by
+   L-013. Explicit plate targeting (possible only because v5 put real GameIds on the wire).
+8. **The spawn-cull war** — the joined-client cull of native spawns melted the client twice: DV's
+   restoration controllers respawn their locos every frame (and flag them playerSpawnedCar, so
+   even the narrowed filter lost). The cull is GONE — one world-clear at join, everything the
+   client's world spawns afterwards coexists unsynced. You cannot win a deletion war against a
+   live game's spawn systems; world suppression belongs to the dedicated server.
+
+Also answered en route: the overview leaflet SURVIVES a programmatic take and self-cleans if put
+through the validator (the pre-gate protects it for claimed jobs); and the warehouse machine has
+no player concept at all — the take-on-behalf satisfies it by construction.
+
+125/125 ×3 at close, full sln 0 warnings, zero LocoMP exceptions across every passing run.
+Uncommitted; commit + push on Cody's go. Then M3.2 (deferrable) or M4 — items, where remote
+booklets and remote warehouse ops live.
+
+---
+
+## 2026-07-19 — M3.5c: remote claim parity + multi-crew — friends become players, not spectators 🎛️
+
+The pulled-forward M4 spine's second half. Recon-first again, and again the game handed over
+first-class API for everything: `JobsManager.TakeJob(Job, bool)` is public and DV's "taken" is
+global world state (no player context, no booklet print — a remote player's claim can be mirrored
+natively with one call), `TryToCompleteAJob(Job)` returns a verdict from the game's own task tree
+(the host can VALIDATE a remote claimant's turn-in without trusting them), and every cab control
+in the game — throttle to firedoor — lives behind one uniform `OverridableBaseControl` surface
+whose 42-value ControlType enum happens to fit the wire's byte.
+
+**The recon also caught a real M3.5b bug before it could bite M3.5c.** Protocol v4 added car
+identity + cargo to the defs, the saves, and the codec — but the REGISTRATION message (untouched
+since M2.1) still stripped everything to kind+derailed. Every "real" remote spawn in the M3.5b
+runs actually ran on the `LMP-N` fallback identity and spawned cargo-empty; the liveries worked
+because Kind flows, which is why it looked right. M3.5c's whole job-paperwork story names cars by
+GameId, so registration now rides the full CarDef codec — protocol v5, with a regression test.
+
+**Remote claims (the core).** A joined player claims a captured job from the panel; the host's
+JobCapture sees the claim broadcast and takes the job natively on their behalf. Their "Report
+delivery" defers server-side into a `JobCompleteRequest` the world source answers from
+`TryToCompleteAJob` — nobody gets paid for an unfinished haul, and the claimant's toast carries
+the native verdict on a refusal (15 s timeout fails safe and retryable). The sharp-edged design
+call: a RELEASED external claim — abandon, TTL, reconnect-grace lapse — retires the job
+everywhere, because DV cannot re-shelve a taken job (abandoned ≠ available, the D14 lesson) and a
+board must never advertise a job no world can deliver. Booklet materialization for remotes is a
+deliberate M4 deferral: a booklet is an ITEM plus task-tree reconstruction, and M4 is the items
+milestone — the panel is the remote claim UX until then.
+
+**Multi-crew cab controls.** Holder side: sitting in a remote cab with the control grant, lever
+moves ride the existing `ControlInput` routing to the sim owner. Owner side: every control on
+owned cars is watched and committed values broadcast as `ControlState`, which the server stores
+per (car, control) and replays in the join burst — a newcomer's replica levers match reality.
+Input becomes state only through the owner (03 §3): the owner's apply deliberately lets its own
+ControlUpdated fire so the committed value echoes to every replica; replica applies are
+reentry-guarded and skipped while we're the occupying grant holder. Chain couples/uncouples on
+remote cars are intercepted BEFORE physics (`ChainCouplerCouplerAdapter.TryCouple/TryUncouple` is
+the single funnel under the chain FSM) and routed to the owner, whose native event drives the
+normal proposal path — one authority chain, no second commit path.
+
+**The rest of the debt list.** Live cargo syncs by 1 Hz polling (the derail-polling posture — no
+delegate-signature guessing) and folds into the stored CarDef at the SAME epoch, so late joiners
+and saves carry the live load with no schema change. The host's 2 s scan registers mid-session
+spawns (job chains! crew vehicles) and — nicer — re-binds a consist DV's distance streaming
+destroyed and rebuilt by matching car GameIds against the still-live server def, closing the
+banked "respawn rebinding" debt instead of duplicating sets. Joined clients cull native spawns
+after the world clear. The bot learned the whole remote-player repertoire: `--claim-first` /
+`--report-interval` / `--abandon-after` for the career loop (host hauls, bot gets paid — the full
+remote loop on one PC), `--drive` to grant-and-throttle a host loco (the host watches their own
+lever move), and in `--listen` mode a granted player's throttle drives the bot consist's speed —
+Cody can climb into its cab and drive it.
+
+Tests 110 → **122/122 ×3** (deferred-completion ok/refusal/timeout, external death on
+abandon/grace, control relay + join-burst replay, cargo folding, request routing, the
+registration-identity regression), full sln 0 warnings, headless listen smoke green, payload
+staged 16:51. Next: Cody's three runs per STATE (career loop / drive test / client cab), then
+commit + push. Known unknown to watch: the physical overview leaflet's fate after a programmatic
+TakeJob.
+
+---
+
 ## 2026-07-19 — M3.5b: real-car replication — the ghosts get bodies 🚃
 
 The pulled-forward M4 spine's first half, recon-first as always. The reflection sweep turned up
