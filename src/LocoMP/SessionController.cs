@@ -39,6 +39,7 @@ public sealed class SessionController
     private NetClient? _client;
     private ITransport? _clientTransport;
     private TrainSync? _trains;
+    private CabControlSync? _cabControls;
 
     private double _poseAccum;
     private double _timeAccum;
@@ -61,7 +62,10 @@ public sealed class SessionController
     private bool _sharedCareer;
     private bool _freshCareer;
     private bool _showShop;
+    private bool _showGrant;
+    private int _grantTarget;
     private Vector2 _jobsScroll;
+    private Vector2 _grantScroll;
 
     public SessionController(Action<string> log) => _log = log;
 
@@ -108,6 +112,7 @@ public sealed class SessionController
         }
 
         _trains?.Tick(dt);
+        _cabControls?.Tick((float)dt);
         _walletMirror?.Tick(dt);
         _autosaver?.Tick();
         if (_worldUnloaded)
@@ -194,9 +199,27 @@ public sealed class SessionController
         {
             JobTaskDef task = job.Def.Tasks[Math.Min(job.NextTaskIndex, job.Def.Tasks.Count - 1)];
             GUILayout.BeginHorizontal();
-            GUILayout.Label($"MY JOB {Describe(job.Def)} — next: {task.Kind} @ {task.Param}");
-            if (GUILayout.Button($"Report {task.Kind}", GUILayout.Width(130)))
-                career.ReportTask(job.Def.Id, job.NextTaskIndex);
+            if (job.Def.GameId.Length > 0 && _mode == Mode.Hosting)
+            {
+                // Host-claimed captured job: the booklet is the claim and the validator is the
+                // turn-in — the panel only mirrors it (D13 native UX).
+                GUILayout.Label($"MY JOB {Describe(job.Def)} — turn in at the {job.Def.Destination} validator");
+            }
+            else if (job.Def.GameId.Length > 0)
+            {
+                // Remote claim on a captured job (M3.5c): the report becomes a completion query
+                // the host answers from the game's own task tree. The task param carries the
+                // booklet's essence — the actual tracks — captured from the native job.
+                GUILayout.Label($"MY JOB {Describe(job.Def)} — {task.Param}");
+                if (GUILayout.Button("Report delivery", GUILayout.Width(130)))
+                    career.ReportTask(job.Def.Id, job.NextTaskIndex);
+            }
+            else
+            {
+                GUILayout.Label($"MY JOB {Describe(job.Def)} — next: {task.Kind} @ {task.Param}");
+                if (GUILayout.Button($"Report {task.Kind}", GUILayout.Width(130)))
+                    career.ReportTask(job.Def.Id, job.NextTaskIndex);
+            }
             if (GUILayout.Button("Abandon", GUILayout.Width(80)))
                 career.AbandonJob(job.Def.Id);
             GUILayout.EndHorizontal();
@@ -210,14 +233,11 @@ public sealed class SessionController
         foreach (ClientJob job in available)
         {
             GUILayout.BeginHorizontal();
-            if (job.Def.GameId.Length > 0 && _mode != Mode.Hosting)
+            if (job.Def.GameId.Length > 0 && _mode == Mode.Hosting)
             {
-                // Captured game jobs are claimed the native way (booklet → validator) — which only
-                // the host's world can do until real-car replication lands (D13 scope note).
-                GUILayout.Label($"      {Describe(job.Def)}  [at the {job.Def.Origin} validator]");
-            }
-            else if (job.Def.GameId.Length > 0)
-            {
+                // On the host, captured jobs are claimed the native way (booklet → validator) —
+                // the game IS the UX (D13). Remote players claim from the panel (M3.5c): the host
+                // takes the job natively on their behalf when the claim commits.
                 GUILayout.Label($"      {Describe(job.Def)}  [claim at the {job.Def.Origin} validator]");
             }
             else
@@ -230,7 +250,10 @@ public sealed class SessionController
         foreach (ClientJob job in others)
         {
             string who = job.ClaimantName.Length > 0 ? job.ClaimantName : "?";
-            GUILayout.Label($"     {Describe(job.Def)} — claimed by {who}{(job.ClaimantPeerId == 0 ? " (offline)" : "")}");
+            // Captured jobs show their route here too: in a shared cab the OTHER crew often does
+            // the physical haul for the claimant (the one-PC rig's A4 flow literally is that).
+            string route = job.Def.GameId.Length > 0 && job.Def.Tasks.Count > 0 ? $" — {job.Def.Tasks[0].Param}" : "";
+            GUILayout.Label($"     {Describe(job.Def)} — claimed by {who}{(job.ClaimantPeerId == 0 ? " (offline)" : "")}{route}");
         }
         GUILayout.EndScrollView();
 
@@ -250,7 +273,48 @@ public sealed class SessionController
             }
         }
 
+        DrawHostGrants(career);
+
         if (_careerToast.Length > 0) GUILayout.Label("» " + _careerToast);
+    }
+
+    /// <summary>Host-admin license grants (M3.5c): a fresh guest on a mature world faces a board
+    /// of license-gated jobs with a starting wallet that can't buy any of them — the host hands
+    /// out what's needed, charge-free and explicit. Only sends proposals; the server commits and
+    /// the grantee's own client confirms via its license state.</summary>
+    private void DrawHostGrants(ClientCareer career)
+    {
+        if (_mode != Mode.Hosting || _client is null || _client.Players.Count == 0 || career.LicenseCatalog.Count == 0)
+            return;
+
+        _showGrant = GUILayout.Toggle(_showGrant, "Grant licenses to a player (host)");
+        if (!_showGrant) return;
+
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("To:", GUILayout.Width(30));
+        foreach (var p in _client.Players.Values.OrderBy(p => p.Id).ToList())
+        {
+            if (GUILayout.Toggle(_grantTarget == p.Id, $"{p.Name} (id {p.Id})", GUI.skin.button, GUILayout.Width(140)))
+                _grantTarget = p.Id;
+        }
+        GUILayout.EndHorizontal();
+
+        if (_grantTarget == 0 || !_client.Players.ContainsKey(_grantTarget)) return;
+        _grantScroll = GUILayout.BeginScrollView(_grantScroll, GUILayout.Height(150));
+        foreach (var entry in career.LicenseCatalog.OrderBy(kv => kv.Key).ToList())
+        {
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Grant", GUILayout.Width(60)))
+            {
+                career.GrantExternalLicense(entry.Key, _grantTarget);
+                string who = _client.Players[_grantTarget].Name;
+                _careerToast = $"granted {entry.Key} to {who}";
+                _log($"[career] host grant: {entry.Key} → {who} (peer {_grantTarget})");
+            }
+            GUILayout.Label(entry.Key);
+            GUILayout.EndHorizontal();
+        }
+        GUILayout.EndScrollView();
     }
 
     private static string Describe(JobDef def)
@@ -303,12 +367,17 @@ public sealed class SessionController
                 _clock, restore);
             _server.PlayerAdmitted += p => _log($"[session] admitted {p.Name} (id {p.Id}) — {_server!.PlayerCount} player(s)");
             _server.PlayerRemoved += id => _log($"[session] removed id {id} — {_server!.PlayerCount} player(s)");
+            // Server-side refusals go to the requesting PEER; without these lines a remote
+            // player's rejection (e.g. a bot's claim) is invisible in the host log.
+            _server.Career.RequestRejected += (peer, reason) => _log($"[server] career refused (peer {peer}): {reason}");
+            _server.Trains.ProposalRejected += (peer, reason) => _log($"[server] trains refused (peer {peer}): {reason}");
             _autosaver = new Autosaver(_clock, intervalMs: 120_000, storage,
                 () => SaveCodec.Write(_server!.CaptureSave()));
 
             _client = MakeClient(_hub.Connect(out _)); // the host is just client #1, zero latency
             _trains = new TrainSync(_client, isHost: true, _log);
             _trains.WorldUnloaded += () => _worldUnloaded = true;
+            _cabControls = new CabControlSync(_client, _trains, _log);
             // D13: the HOST keeps DV's native generation running — JobCapture mirrors every
             // generated job onto the server board. Only joining CLIENTS suppress.
             JobGenSuppressor.Active = false;
@@ -341,6 +410,7 @@ public sealed class SessionController
             _client = MakeClient(_clientTransport);
             _trains = new TrainSync(_client, isHost: false, _log);
             _trains.WorldUnloaded += () => _worldUnloaded = true;
+            _cabControls = new CabControlSync(_client, _trains, _log);
             JobGenSuppressor.Active = true;            // clients never generate either (02 §4)
             JobGenSuppressor.StopAll(_log);
             // M3.5b: the joined world is session-modified (own cars cleared, host's spawned in) —
@@ -416,6 +486,8 @@ public sealed class SessionController
         _careerToast = "";
 
         if (_client is { Joined: true }) { _client.Leave(); _client.Poll(); }
+        _cabControls?.Dispose();
+        _cabControls = null;
         _trains?.Dispose();
         _trains = null;
         _client?.Dispose();
