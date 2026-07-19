@@ -97,9 +97,11 @@ public sealed class LoopbackNetwork
         public void Dispose()
         {
             // Match UDP semantics: disposing your transport drops the link, and the OTHER side
-            // observes PeerDisconnected (LiteNetLib does this on socket close). A client endpoint
-            // deregisters from the hub; no-op if the hub already disconnected it.
+            // observes PeerDisconnected (LiteNetLib sends disconnects on Stop/socket close). A
+            // client endpoint deregisters from the hub; the SERVER endpoint drops every client —
+            // that's how a joined client learns the host died (the session-lost seam).
             if (_id != ServerPeer) _net.Disconnect(_id);
+            else foreach (int id in new List<int>(_net._clients.Keys)) _net.Disconnect(id);
             _events.Clear();
         }
     }

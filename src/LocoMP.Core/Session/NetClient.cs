@@ -75,6 +75,12 @@ public sealed class NetClient : IDisposable
     public event Action<int>? PlayerLeft;
     public event Action<int, Pose>? PlayerMoved;    // args: id, new pose
 
+    /// <summary>The transport link to the server dropped AFTER we had been admitted (host died,
+    /// eviction, network loss). Not raised for failed joins — those surface via timeout/Rejected.
+    /// The mirrors are already reset when this fires; the frontend decides what "session lost"
+    /// means for its world (the joined Shim must NOT silently unblock native saving, 03 §10).</summary>
+    public event Action? Disconnected;
+
     public void Poll() => _transport.Poll();
 
     /// <summary>Announce the local player's pose to the server (sequenced-unreliable — latest wins).</summary>
@@ -113,10 +119,12 @@ public sealed class NetClient : IDisposable
 
     private void OnDisconnected(int serverPeer)
     {
+        bool wasJoined = LocalId.HasValue;
         LocalId = null;
         _players.Clear();
         Trains.Reset();
         Career.Reset();
+        if (wasJoined) Disconnected?.Invoke();
     }
 
     private void OnReceived(int fromPeer, byte[] payload)

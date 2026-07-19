@@ -38,7 +38,14 @@ public sealed class LiteNetLibTransport : ITransport
     {
         _isServer = isServer;
         _connectKey = connectKey ?? throw new ArgumentNullException(nameof(connectKey));
-        _net = new NetManager(_listener);
+        _net = new NetManager(_listener)
+        {
+            // LiteNetLib's 5 s default evicted a joined game client mid save-load freeze
+            // (observed 2026-07-19: evicted as id 2, re-handshook as id 3). Loading hitches are
+            // normal for DV; a genuinely dead peer just lingers 10 s longer, which the server's
+            // park-on-disconnect + career grace absorb by design.
+            DisconnectTimeout = 15000,
+        };
 
         _listener.ConnectionRequestEvent += OnConnectionRequest;
         _listener.PeerConnectedEvent += OnPeerConnected;
