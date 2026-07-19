@@ -557,6 +557,12 @@ career" toggle or delete the .lmps to re-mint).
 6. **Repo residuals, whenever** (05 §7): branch protection, DCO app (optional), repo topics.
 
 ## Push state
+- **PUSHED 2026-07-19 (Cody's go): M3.5c as three dependency-ordered commits** `7b25f3d` (Core
+  protocol v5 + tests) → `5f4ae98` (Shim/mod/bot in-game half) → `00677a8` (docs). Remote was
+  unchanged since the M3.5b push (no canary movement). Push-tooling note: PowerShell 5.1 mangles
+  embedded double quotes in `git commit -m` here-strings (commit 1's message lost a clause and
+  had to be history-rewritten pre-push) — ALWAYS use `git commit -F <file>` for multiline
+  messages from this shell.
 - **PUSHED 2026-07-19 (Cody's go): M3.5b as three dependency-ordered commits** `102ba8f` (Core
   protocol v4) → `cb259bf` (Shim/mod/bot real-car replication) → `ab5cd4a` (docs). Remote was
   unchanged since the M3.5a push (no canary movement).
