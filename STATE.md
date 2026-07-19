@@ -464,6 +464,9 @@ career" toggle or delete the .lmps to re-mint).
 6. **Repo residuals, whenever** (05 §7): branch protection, DCO app (optional), repo topics.
 
 ## Push state
+- **PUSHED 2026-07-19 (Cody's go): M3.5b as three dependency-ordered commits** `102ba8f` (Core
+  protocol v4) → `cb259bf` (Shim/mod/bot real-car replication) → `ab5cd4a` (docs). Remote was
+  unchanged since the M3.5a push (no canary movement).
 - **Everything through M3.1 is PUSHED** (M2 arc `ce41556..8594e4f`; M3.1 `53d642b`, Cody's go 2026-07-18). Post-push CI as always: `build.yml` red at the Steam step (accepted until contributors).
 - **PUSHED 2026-07-19 (Cody's go): three dependency-ordered commits** `48e72a1` (Core career
   sync + tests) → `ae97710` (Shim/mod in-game integration) → `94d1957` (docs/CI), rebased over
