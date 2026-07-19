@@ -368,10 +368,13 @@ public class RemoteParityTests
         Pump(server, new[] { a, b });
         Assert.Contains("missing license: S1", refusal);   // the gate holds for a fresh profile
 
+        // D15: host-admin grants share progression — the host must HOLD the license first (here
+        // via the native-mirror self-grant), then hands it to the guest.
+        a.Career.GrantExternalLicense("S1");
+        Pump(server, new[] { a, b });
         a.Career.GrantExternalLicense("S1", b.LocalId!.Value); // the host-admin grant (M3.5c)
         Pump(server, new[] { a, b });
         Assert.Equal("S1", granted);                       // grantee's client learned it
-        Assert.DoesNotContain("S1", a.Career.Licenses);    // the HOST's own scope is untouched
 
         b.Career.ClaimJob(jobId);
         Pump(server, new[] { a, b });

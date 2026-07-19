@@ -372,4 +372,91 @@ public class CareerSessionTests
         Assert.Equal(500_00, b.Career.BalanceCents);
         Assert.True(server.Career.Registry.Ledger.ConservationHolds);
     }
+
+    [Fact]
+    public void Host_grant_of_a_held_license_reaches_the_target_player()
+    {
+        var (_, _, server, a, b) = Session(); // a joined first — it is the world source
+
+        a.Career.GrantExternalLicense("de2");                 // native-mirror: a now holds it
+        Pump(server, new[] { a, b });
+        a.Career.GrantExternalLicense("de2", b.LocalId!.Value);
+        Pump(server, new[] { a, b });
+
+        Assert.Contains("de2", b.Career.Licenses);
+        Assert.Equal(500_00, a.Career.BalanceCents);          // grants never charge, either side
+        Assert.Equal(500_00, b.Career.BalanceCents);
+        Assert.True(server.Career.Registry.Ledger.ConservationHolds);
+    }
+
+    [Fact]
+    public void Host_grant_of_an_unheld_license_is_refused()
+    {
+        var (_, _, server, a, b) = Session();
+
+        var rejections = new List<string>();
+        a.Career.RequestRejected += (reason, _) => rejections.Add(reason);
+
+        a.Career.GrantExternalLicense("de6", b.LocalId!.Value); // D15 gate: a does not hold de6
+        Pump(server, new[] { a, b });
+
+        Assert.Contains(rejections, r => r.Contains("do not hold de6"));
+        Assert.DoesNotContain("de6", b.Career.Licenses);
+        Assert.Empty(server.Career.Registry.LicensesFor("key-bob"));
+    }
+
+    [Fact]
+    public void Auto_grant_copies_host_licenses_into_the_join_burst()
+    {
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        var server = new NetServer(hub.Server, new ServerConfig(Identity, career: Career()), clock);
+        var a = new NetClient(hub.Connect(out _), Identity, "Alice", clock, playerKey: "key-alice");
+        Pump(server, new[] { a });
+
+        server.Career.AutoGrantHostLicenses = true;
+        a.Career.GrantExternalLicense("de2");
+        a.Career.GrantExternalLicense("hazmat");
+        Pump(server, new[] { a });
+
+        var b = new NetClient(hub.Connect(out _), Identity, "Bob", clock, playerKey: "key-bob");
+        Pump(server, new[] { a, b });
+
+        Assert.Contains("de2", b.Career.Licenses);
+        Assert.Contains("hazmat", b.Career.Licenses);
+        Assert.Equal(500_00, b.Career.BalanceCents);          // inherited progression, not money
+        Assert.True(server.Career.Registry.Ledger.ConservationHolds);
+    }
+
+    [Fact]
+    public void Auto_grant_propagates_new_host_licenses_live()
+    {
+        var (_, _, server, a, b) = Session();
+        server.Career.AutoGrantHostLicenses = true;
+
+        a.Career.GrantExternalLicense("de2");                 // native-mirror path
+        Pump(server, new[] { a, b });
+        Assert.Contains("de2", b.Career.Licenses);
+
+        a.Career.PurchaseLicense("hazmat");                   // panel-shop path
+        Pump(server, new[] { a, b });
+        Assert.Contains("hazmat", b.Career.Licenses);
+        Assert.Equal(350_00, a.Career.BalanceCents);          // only the buyer paid
+        Assert.Equal(500_00, b.Career.BalanceCents);
+        Assert.True(server.Career.Registry.Ledger.ConservationHolds);
+    }
+
+    [Fact]
+    public void Auto_grant_toggle_on_sweeps_already_connected_players()
+    {
+        var (_, _, server, a, b) = Session();
+
+        a.Career.GrantExternalLicense("de2");                 // acquired while the toggle is OFF
+        Pump(server, new[] { a, b });
+        Assert.DoesNotContain("de2", b.Career.Licenses);
+
+        server.Career.AutoGrantHostLicenses = true;           // the setter sweeps immediately
+        Pump(server, new[] { a, b });
+        Assert.Contains("de2", b.Career.Licenses);
+    }
 }

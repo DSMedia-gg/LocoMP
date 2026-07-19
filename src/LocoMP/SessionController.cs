@@ -63,6 +63,7 @@ public sealed class SessionController
     private string _password = "";
     private bool _sharedCareer;
     private bool _freshCareer;
+    private bool _autoGrant;
     private bool _showShop;
     private bool _showGrant;
     private int _grantTarget;
@@ -171,6 +172,7 @@ public sealed class SessionController
                 _sharedCareer = GUILayout.Toggle(_sharedCareer, "Shared career (classic co-op)");
                 _freshCareer = GUILayout.Toggle(_freshCareer, "Fresh career (ignore saved)");
                 GUILayout.EndHorizontal();
+                _autoGrant = GUILayout.Toggle(_autoGrant, "Auto-grant my licenses to joining players");
 
                 if (GUILayout.Button("Host session", GUILayout.Width(160))) Host();
 
@@ -302,15 +304,26 @@ public sealed class SessionController
         if (_careerToast.Length > 0) GUILayout.Label("» " + _careerToast);
     }
 
-    /// <summary>Host-admin license grants (M3.5c): a fresh guest on a mature world faces a board
-    /// of license-gated jobs with a starting wallet that can't buy any of them — the host hands
-    /// out what's needed, charge-free and explicit. Only sends proposals; the server commits and
-    /// the grantee's own client confirms via its license state.</summary>
+    /// <summary>Host-admin license grants (M3.5c, hardened per D15): a fresh guest on a mature
+    /// world faces a board of license-gated jobs with a starting wallet that can't buy any of
+    /// them — the host hands out what's needed, charge-free and explicit. The list offers only
+    /// licenses the host itself HOLDS (the server enforces the same gate — grants share
+    /// progression, they never mint it), and the auto-grant toggle hands the whole set to every
+    /// joining player. Only sends proposals; the server commits and the grantee's own client
+    /// confirms via its license state.</summary>
     private void DrawHostGrants(ClientCareer career)
     {
-        if (_mode != Mode.Hosting || _client is null || _client.Players.Count == 0 || career.LicenseCatalog.Count == 0)
-            return;
+        if (_mode != Mode.Hosting || _client is null) return;
 
+        bool autoGrant = GUILayout.Toggle(_autoGrant, "Auto-grant my licenses to joining players");
+        if (autoGrant != _autoGrant)
+        {
+            _autoGrant = autoGrant;
+            if (_server != null) _server.Career.AutoGrantHostLicenses = autoGrant;
+            _log($"[career] auto-grant {(autoGrant ? "ON — connected and joining players inherit your licenses" : "off")}");
+        }
+
+        if (_client.Players.Count == 0 || career.Licenses.Count == 0) return;
         _showGrant = GUILayout.Toggle(_showGrant, "Grant licenses to a player (host)");
         if (!_showGrant) return;
 
@@ -325,17 +338,17 @@ public sealed class SessionController
 
         if (_grantTarget == 0 || !_client.Players.ContainsKey(_grantTarget)) return;
         _grantScroll = GUILayout.BeginScrollView(_grantScroll, GUILayout.Height(150));
-        foreach (var entry in career.LicenseCatalog.OrderBy(kv => kv.Key).ToList())
+        foreach (string licenseId in career.Licenses.OrderBy(l => l).ToList())
         {
             GUILayout.BeginHorizontal();
             if (GUILayout.Button("Grant", GUILayout.Width(60)))
             {
-                career.GrantExternalLicense(entry.Key, _grantTarget);
+                career.GrantExternalLicense(licenseId, _grantTarget);
                 string who = _client.Players[_grantTarget].Name;
-                _careerToast = $"granted {entry.Key} to {who}";
-                _log($"[career] host grant: {entry.Key} → {who} (peer {_grantTarget})");
+                _careerToast = $"granted {licenseId} to {who}";
+                _log($"[career] host grant: {licenseId} → {who} (peer {_grantTarget})");
             }
-            GUILayout.Label(entry.Key);
+            GUILayout.Label(licenseId);
             GUILayout.EndHorizontal();
         }
         GUILayout.EndScrollView();
@@ -395,6 +408,8 @@ public sealed class SessionController
             // player's rejection (e.g. a bot's claim) is invisible in the host log.
             _server.Career.RequestRejected += (peer, reason) => _log($"[server] career refused (peer {peer}): {reason}");
             _server.Trains.ProposalRejected += (peer, reason) => _log($"[server] trains refused (peer {peer}): {reason}");
+            // D15: joining players inherit the host's licenses (and live acquisitions) while on.
+            _server.Career.AutoGrantHostLicenses = _autoGrant;
             _autosaver = new Autosaver(_clock, intervalMs: 120_000, storage,
                 () => SaveCodec.Write(_server!.CaptureSave()));
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using LocoMP.Core.Career;
 using LocoMP.Core.Net;
 using LocoMP.Core.Persistence;
@@ -65,6 +66,27 @@ public sealed class ServerCareer
     /// <summary>The authoritative career state. Exposed for the host UI, admin, and tests.</summary>
     public CareerRegistry Registry { get; }
 
+    private bool _autoGrantHostLicenses;
+
+    /// <summary>D15's auto-grant half: when on, joining players inherit the world source's current
+    /// license scope on admit (riding the career burst), and licenses that newly enter the world
+    /// source's scope mid-session propagate to every connected player live. Flipping it ON
+    /// mid-session sweeps immediately, so the checkbox works whenever it's ticked. Grants are
+    /// charge-free — progression is shared, money is not. The host UI sets this in-proc; the
+    /// dedicated server leaves it off.</summary>
+    public bool AutoGrantHostLicenses
+    {
+        get => _autoGrantHostLicenses;
+        set
+        {
+            bool turnedOn = value && !_autoGrantHostLicenses;
+            _autoGrantHostLicenses = value;
+            if (turnedOn && KeyOf(_worldSourcePeer) is string hostKey)
+                foreach (string lic in Registry.LicensesFor(hostKey).ToArray())
+                    PropagateHostLicense(lic);
+        }
+    }
+
     /// <summary>A career proposal failed validation: (peerId, reason). Also sent to the requester
     /// as CareerRejected — "missing license: hazmat" is UX, not just a host log line.</summary>
     public event Action<int, string>? RequestRejected;
@@ -83,6 +105,16 @@ public sealed class ServerCareer
         _keyByPeer[peerId] = playerKey;
         _peerByKey[playerKey] = peerId;
         Registry.Connect(playerKey, name);
+
+        // D15 auto-grant, join half: copy the world source's license scope onto the newcomer
+        // BEFORE the burst below is built, so the licenses arrive inside their CareerState
+        // instead of trickling in as N separate updates. Idempotent into a set — rejoins re-copy.
+        if (AutoGrantHostLicenses && peerId != _worldSourcePeer &&
+            KeyOf(_worldSourcePeer) is string hostKey && hostKey != playerKey)
+        {
+            foreach (string lic in Registry.LicensesFor(hostKey).ToArray())
+                Registry.TryGrantExternal(playerKey, lic, out _, out _);
+        }
 
         _transport.Send(peerId, BuildCareerState(playerKey), DeliveryMethod.ReliableOrdered);
         foreach (JobRecord job in Registry.Jobs.Values)
@@ -342,6 +374,9 @@ public sealed class ServerCareer
             SendLicenseUpdate(key, licenseId);
             SendWalletUpdate(key);
             SendEconomyEvent(key, EconomyEventKind.LicenseFee, price, $"license {licenseId}");
+            // The world source buying from the PANEL shop skips the native-mirror echo path (the
+            // reverse-applied native grant comes back idempotent), so auto-grant triggers here.
+            if (peerId == _worldSourcePeer) PropagateHostLicense(licenseId);
         }
         else
         {
@@ -358,24 +393,56 @@ public sealed class ServerCareer
     {
         string licenseId = r.ReadString();
         int targetPeer = (int)r.ReadVarUInt();
-        if (peerId != _worldSourcePeer)
+        if (peerId != _worldSourcePeer || KeyOf(peerId) is not string senderKey)
         {
             Reject(peerId, "grant: only the world source grants licenses");
             return;
         }
-        string? targetKey = targetPeer == 0 ? KeyOf(peerId) : KeyOf(targetPeer);
+        string? targetKey = targetPeer == 0 ? senderKey : KeyOf(targetPeer);
         if (targetKey is null)
         {
             Reject(peerId, $"grant: player {targetPeer} is not connected");
             return;
         }
+        // D15 gate: a grant to ANOTHER player shares the host's progression — it never mints
+        // beyond it. Self-grants stay scope-agnostic: they mirror native acquisitions, where the
+        // game is the authority on what exists (D14).
+        if (!string.Equals(targetKey, senderKey, StringComparison.Ordinal) &&
+            !Registry.LicensesFor(senderKey).Contains(licenseId))
+        {
+            Reject(peerId, $"grant: you do not hold {licenseId} — grants share progression, they never mint it");
+            return;
+        }
         if (Registry.TryGrantExternal(targetKey, licenseId, out bool newlyGranted, out string? reason))
         {
-            if (newlyGranted) SendLicenseUpdate(targetKey, licenseId);
+            if (newlyGranted)
+            {
+                SendLicenseUpdate(targetKey, licenseId);
+                // A license newly entering the world source's own scope is the auto-grant trigger
+                // (native purchase or acquisition mirrored up through this same message).
+                if (string.Equals(targetKey, senderKey, StringComparison.Ordinal))
+                    PropagateHostLicense(licenseId);
+            }
         }
         else
         {
             Reject(peerId, $"grant: {reason}");
+        }
+    }
+
+    /// <summary>D15 auto-grant, live half: a license just entered the world source's scope — copy
+    /// it to every other connected player, charge-free. No-op when the toggle is off, and in the
+    /// shared preset (one scope means nothing is ever newly granted here). Players inside their
+    /// reconnect grace catch up on the admit-time copy instead.</summary>
+    private void PropagateHostLicense(string licenseId)
+    {
+        if (!AutoGrantHostLicenses) return;
+        if (KeyOf(_worldSourcePeer) is not string hostKey) return;
+        foreach (KeyValuePair<int, string> kv in _keyByPeer)
+        {
+            if (string.Equals(kv.Value, hostKey, StringComparison.Ordinal)) continue;
+            if (Registry.TryGrantExternal(kv.Value, licenseId, out bool newly, out _) && newly)
+                SendLicenseUpdate(kv.Value, licenseId);
         }
     }
 
