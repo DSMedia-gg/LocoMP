@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Native economy unification for the host (D14): while hosting, the game's money display is a live
+  view of the LocoMP wallet (the pre-session balance is restored on leave) and the native career
+  manager is the shop — license purchases and fees paid at any cash register burn from the
+  server-side ledger, native license grants sync into the career (both directions, including a
+  join-time sweep of licenses the save already held), and job takes are pre-gated at the order
+  validator so a take the server would refuse is rejected *before* the game consumes the overview
+  (previously the rollback destroyed the physical leaflet). Two new world-source-gated protocol
+  messages carry the mirrored grants and fees. Host-native careers start at $2000, matching the
+  game's own career mode — the wallet doubles as the license budget.
 - M3 career core (game-free): server-authoritative jobs and economy behind the **progression policy
   layer** — per-player careers (default) and shared "classic co-op" ship as one switch, routing every
   payout, fee, and license to the right wallet/scope. Jobs are generated deterministically
