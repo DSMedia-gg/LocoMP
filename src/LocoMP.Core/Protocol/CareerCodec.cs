@@ -21,6 +21,9 @@ public enum EconomyEventKind : byte
     StartingGrant = 1,
     JobPayout = 2,
     LicenseFee = 3,
+
+    /// <summary>D14: a native register purchase burned from the mirrored wallet.</summary>
+    ExternalFee = 4,
 }
 
 /// <summary>
@@ -53,6 +56,7 @@ internal static class CareerCodec
             w.WriteByte((byte)task.Kind);
             w.WriteString(task.Param);
         }
+        w.WriteString(def.GameId);
     }
 
     public static JobDef ReadJobDef(PacketReader r)
@@ -78,7 +82,8 @@ internal static class CareerCodec
             string param = r.ReadString();
             tasks[i] = new JobTaskDef(kind, param);
         }
-        return new JobDef(id, jobType, origin, destination, cargoKind, carCount, payout, licenses, tasks);
+        string gameId = r.ReadString();
+        return new JobDef(id, jobType, origin, destination, cargoKind, carCount, payout, licenses, tasks, gameId);
     }
 
     public static void WriteLicenses(PacketWriter w, IReadOnlyCollection<string> licenses)

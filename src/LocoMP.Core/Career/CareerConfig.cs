@@ -4,13 +4,17 @@ using System.Collections.Generic;
 namespace LocoMP.Core.Career;
 
 /// <summary>One generatable job shape: the deterministic generator picks a type, a distinct
-/// station pair, and a car count in [MinCars, MaxCars]; payout scales linearly with car count.</summary>
+/// station pair, and a car count in [MinCars, MaxCars]; payout scales with car count and — when
+/// the host supplies a distance table — with the real route distance.</summary>
 public sealed class JobTypeSpec
 {
     public JobTypeSpec(string jobType, string cargoKind, long payoutPerCarCents, int minCars, int maxCars,
-        IReadOnlyList<string>? requiredLicenses = null)
+        IReadOnlyList<string>? requiredLicenses = null,
+        IReadOnlyList<string>? origins = null, IReadOnlyList<string>? destinations = null,
+        long payoutPerCarKmCents = 0)
     {
         if (payoutPerCarCents < 0) throw new ArgumentOutOfRangeException(nameof(payoutPerCarCents));
+        if (payoutPerCarKmCents < 0) throw new ArgumentOutOfRangeException(nameof(payoutPerCarKmCents));
         if (minCars < 1 || maxCars < minCars) throw new ArgumentOutOfRangeException(nameof(maxCars));
         JobType = jobType ?? throw new ArgumentNullException(nameof(jobType));
         CargoKind = cargoKind ?? throw new ArgumentNullException(nameof(cargoKind));
@@ -18,14 +22,47 @@ public sealed class JobTypeSpec
         MinCars = minCars;
         MaxCars = maxCars;
         RequiredLicenses = requiredLicenses ?? Array.Empty<string>();
+        Origins = origins ?? Array.Empty<string>();
+        Destinations = destinations ?? Array.Empty<string>();
+        PayoutPerCarKmCents = payoutPerCarKmCents;
     }
 
     public string JobType { get; }
     public string CargoKind { get; }
+
+    /// <summary>Flat payout per car; the distance term below adds on top.</summary>
     public long PayoutPerCarCents { get; }
+
     public int MinCars { get; }
     public int MaxCars { get; }
     public IReadOnlyList<string> RequiredLicenses { get; }
+
+    /// <summary>Stations this shape can start from; empty = any. Lets the host mirror the real
+    /// map's per-station cargo routes (a spec per origin/cargo-group) instead of uniform pairs.</summary>
+    public IReadOnlyList<string> Origins { get; }
+
+    /// <summary>Stations this shape can deliver to; empty = any (the origin is always excluded).</summary>
+    public IReadOnlyList<string> Destinations { get; }
+
+    /// <summary>Per car per km of route distance (from <see cref="CareerConfig.StationDistancesKm"/>;
+    /// pairs missing from the table contribute nothing).</summary>
+    public long PayoutPerCarKmCents { get; }
+}
+
+/// <summary>A station's absolute world position (the same coordinate space presence poses use), for
+/// the server-side task proximity check. Plain data — Core never touches Unity types.</summary>
+public readonly struct StationLocation
+{
+    public StationLocation(float x, float y, float z)
+    {
+        X = x;
+        Y = y;
+        Z = z;
+    }
+
+    public float X { get; }
+    public float Y { get; }
+    public float Z { get; }
 }
 
 /// <summary>
@@ -69,4 +106,24 @@ public sealed class CareerConfig
 
     /// <summary>Purchasable licenses and their prices. Fees are burned, never moved (ledger).</summary>
     public IReadOnlyDictionary<string, long> LicensePrices { get; set; } = new Dictionary<string, long>(StringComparer.Ordinal);
+
+    /// <summary>Route distances keyed by <see cref="DistanceKey"/>; either direction is looked up.
+    /// Feeds the per-km payout term — missing pairs simply contribute nothing.</summary>
+    public IReadOnlyDictionary<string, float> StationDistancesKm { get; set; } = new Dictionary<string, float>(StringComparer.Ordinal);
+
+    /// <summary>Absolute station positions for the task proximity check (02 §4 — the server
+    /// validates task transitions from owner-reported world state, and presence poses ARE that
+    /// state). Stations missing here are simply not proximity-checked.</summary>
+    public IReadOnlyDictionary<string, StationLocation> StationLocations { get; set; } = new Dictionary<string, StationLocation>(StringComparer.Ordinal);
+
+    /// <summary>How close (metres, horizontal) the claimant must be to a task's station to report
+    /// that step. 0 (default) disables the check.</summary>
+    public float TaskProximityRadiusM { get; set; }
+
+    /// <summary>D13 host-capture: accept jobs registered by the session's world source (the game's
+    /// own generator running on the host) instead of/alongside the deterministic generator. Leave
+    /// false on the dedicated server, where the core generator is the source.</summary>
+    public bool AcceptExternalJobs { get; set; }
+
+    public static string DistanceKey(string a, string b) => a + "|" + b;
 }

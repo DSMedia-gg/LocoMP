@@ -28,7 +28,8 @@ public sealed class NetServer : IDisposable
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
 
         Trains = new ServerTrains(_transport, _clock, () => _players.Keys);
-        Career = new ServerCareer(_transport, _clock, _config.Career, () => _players.Keys, restore?.Career);
+        Career = new ServerCareer(_transport, _clock, _config.Career, () => _players.Keys, restore?.Career,
+            id => _players.TryGetValue(id, out PlayerState? p) ? p.Pose : (Pose?)null);
         if (restore != null) Trains.Restore(restore.Trains);
 
         _transport.Received += OnReceived;

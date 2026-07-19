@@ -31,6 +31,7 @@ public sealed class ClientCareer
     private readonly ITransport _transport;
     private readonly Func<bool> _joined;
     private readonly HashSet<string> _licenses = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _licenseCatalog = new(StringComparer.Ordinal);
     private readonly Dictionary<int, ClientJob> _jobs = new();
 
     internal ClientCareer(ITransport transport, Func<bool> joined)
@@ -48,6 +49,9 @@ public sealed class ClientCareer
     /// <summary>Our effective license scope (own set per-player; the shared set in shared career).</summary>
     public IReadOnlyCollection<string> Licenses => _licenses;
 
+    /// <summary>What the server sells: licenseId → price in cents (from the career burst).</summary>
+    public IReadOnlyDictionary<string, long> LicenseCatalog => _licenseCatalog;
+
     /// <summary>The mirrored job board, keyed by job id. Completed jobs leave the board after
     /// <see cref="JobChanged"/> fires for them.</summary>
     public IReadOnlyDictionary<int, ClientJob> Jobs => _jobs;
@@ -59,8 +63,9 @@ public sealed class ClientCareer
     public event Action<string>? LicenseGranted;                    // licenseId
     public event Action<EconomyEventKind, long, string>? EconomyEventReceived; // (kind, cents, reason)
 
-    /// <summary>The server refused one of our proposals; carries the exact reason (03 §10 spirit).</summary>
-    public event Action<string>? RequestRejected;
+    /// <summary>The server refused one of our proposals: (reason, jobId — 0 when not job-related).
+    /// The job id lets an optimistic native claim roll itself back (D13).</summary>
+    public event Action<string, int>? RequestRejected;
 
     // ── send side (all silently no-op until joined, matching the other subsystems) ──
 
@@ -80,12 +85,51 @@ public sealed class ClientCareer
 
     public void AbandonJob(int jobId) => SendIdOnly(MessageType.JobAbandonRequest, jobId);
 
+    /// <summary>World source only (D13): mirror a game-generated job onto the server board. The
+    /// proposal's id is ignored — the commit comes back as JobCreated with the server's id and
+    /// the same GameId for correlation.</summary>
+    public void RegisterExternalJob(JobDef proposal)
+    {
+        if (!_joined()) return;
+        var w = new PacketWriter(128).WriteByte((byte)MessageType.JobRegister);
+        CareerCodec.WriteJobDef(w, proposal);
+        _transport.Send(NetProtocol.ServerPeer, w.ToArray(), DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>World source only (D13): drop an unclaimed job whose native counterpart expired.</summary>
+    public void RetractJob(int jobId) => SendIdOnly(MessageType.JobRetract, jobId);
+
     public void PurchaseLicense(string licenseId)
     {
         if (!_joined()) return;
         byte[] payload = new PacketWriter(16)
             .WriteByte((byte)MessageType.LicensePurchaseRequest)
             .WriteString(licenseId)
+            .ToArray();
+        _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>World source only (D14): the game granted a license natively — mirror it into the
+    /// policy scope, charge-free (the register payment reports separately as an external fee).</summary>
+    public void GrantExternalLicense(string licenseId)
+    {
+        if (!_joined()) return;
+        byte[] payload = new PacketWriter(16)
+            .WriteByte((byte)MessageType.LicenseGrantExternal)
+            .WriteString(licenseId)
+            .ToArray();
+        _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>World source only (D14): a native register finalized a purchase against the
+    /// mirrored wallet; the server burns the amount from the policy wallet.</summary>
+    public void ReportExternalFee(long amountCents, string label)
+    {
+        if (!_joined()) return;
+        byte[] payload = new PacketWriter(32)
+            .WriteByte((byte)MessageType.FeeExternal)
+            .WriteInt64(amountCents)
+            .WriteString(label)
             .ToArray();
         _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
     }
@@ -102,6 +146,15 @@ public sealed class ClientCareer
                 BalanceCents = r.ReadInt64();
                 _licenses.Clear();
                 foreach (string lic in CareerCodec.ReadLicenses(r)) _licenses.Add(lic);
+                int catalogCount = (int)r.ReadVarUInt();
+                if (catalogCount > CareerCodec.MaxLicenses)
+                    throw new System.IO.InvalidDataException($"catalog count {catalogCount} out of range");
+                _licenseCatalog.Clear();
+                for (int i = 0; i < catalogCount; i++)
+                {
+                    string id = r.ReadString();
+                    _licenseCatalog[id] = r.ReadInt64();
+                }
                 CareerStateReceived?.Invoke();
                 return true;
             }
@@ -126,7 +179,7 @@ public sealed class ClientCareer
                 job.ClaimantName = claimantName;
                 job.NextTaskIndex = nextTask;
                 JobChanged?.Invoke(job);
-                if (state == JobLifecycle.Completed) _jobs.Remove(jobId);
+                if (state == JobLifecycle.Completed || state == JobLifecycle.Expired) _jobs.Remove(jobId);
                 return true;
             }
             case MessageType.WalletState:
@@ -154,7 +207,9 @@ public sealed class ClientCareer
             }
             case MessageType.CareerRejected:
             {
-                RequestRejected?.Invoke(r.ReadString());
+                string reason = r.ReadString();
+                int jobId = (int)r.ReadVarUInt();
+                RequestRejected?.Invoke(reason, jobId);
                 return true;
             }
             default:
@@ -166,6 +221,7 @@ public sealed class ClientCareer
     internal void Reset()
     {
         _licenses.Clear();
+        _licenseCatalog.Clear();
         _jobs.Clear();
         BalanceCents = 0;
     }
