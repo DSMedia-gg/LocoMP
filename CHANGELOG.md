@@ -10,6 +10,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Remote claim parity (M3.5c): players who JOIN a session can now claim the host world's real jobs
+  from the board — the host takes the job natively on their behalf, "Report delivery" is verified
+  by the host's own game (the native task tree is the validator, so nobody gets paid for an
+  unfinished haul), and the payout lands in the claimant's policy-routed wallet. A released
+  external claim (abandon, claim TTL, or reconnect-grace lapse) retires the job everywhere — the
+  game cannot re-shelve a taken job, so the board never advertises one it can't deliver.
+- Multi-crew cab controls (M3.5c): with a control grant, a remote player's lever moves in a
+  replica cab drive the owner's real locomotive — every cab control in the game rides one uniform
+  surface — and the owner's committed control state mirrors back onto everyone's replica levers
+  (and into the join burst, so a newcomer's cab reads true). Physical chain couples/uncouples
+  involving a remote-driven car are routed to the simulating player as requests and committed
+  through the normal transaction path.
+- Live cargo sync (M3.5c): loading or unloading a synced car announces the new load to everyone
+  (and into late-join defs and saves); remote replicas mirror it onto their logic cars.
+- Mid-session consist registration (M3.5c): trains that appear after hosting started — new job
+  chains, crew vehicle summons — register automatically, and a consist DV's distance streaming
+  destroyed and later rebuilt is re-bound to its existing sync identity by car id instead of
+  being duplicated. (Native cars a joined client's own world spawns mid-session — restoration
+  locos, station spawners — deliberately coexist unsynced: DV respawns them endlessly if
+  deleted, and real world suppression belongs to the dedicated server.)
+- Host license grants (M3.5c): the host can grant catalog licenses to any connected player from
+  the session panel — charge-free, explicit, and logged. A fresh guest joining a mature world
+  faces a board of license-gated jobs no starting wallet can unlock; the host hands out what's
+  needed. The host log now also shows every server-side refusal of any player's proposal
+  (`[server] … refused (peer N): reason`) — previously a remote player's rejection was visible
+  only on their own screen.
+- Bot: `--claim-first` / `--report-interval` / `--abandon-after` exercise the remote career loop
+  headlessly, and `--drive` requests a control grant on a host locomotive and pushes its throttle
+  over the wire. In `--listen` mode a throttle input from a granted player now drives the bot's
+  consist speed — you can sit in its cab and drive it. The claim rig only claims jobs its
+  license set allows, logging exactly what each skipped job would need.
+
 - Real-car replication (M3.5b): consists simulated by other players now spawn as REAL train cars —
   correct liveries, the source world's car identity (ids/guids, so job paperwork can name them),
   and their loaded cargo — placed per-bogie on the exact track and span from the sync stream and
@@ -81,6 +113,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the host logs paste-ready `--at` and `--start-edge` hints so the ghost spawns next to the player.
 
 ### Fixed
+- Consist registration was silently stripping car identity and cargo from the wire (a v4 gap):
+  every remote spawn fell back to synthetic car ids and spawned empty. Registration now carries
+  the full car spec — network protocol is v5.
+- Resumed career saves no longer advertise "ghost" jobs: available host-captured jobs are pure
+  mirrors of the live world and are not persisted anymore (the join sweep re-offers them each
+  session), and a resumed board is reconciled against the world on hosting — saved entries with
+  no native counterpart are retracted instead of sitting claimable while backed by nothing.
+  Claimed captured jobs still persist for the reconnect-grace story.
 - Remote-player name tags no longer read as doubled text up close: the drop-shadow copy sits at a
   quarter of its previous offset with near-zero depth separation (the old 3 cm behind-the-text gap
   parallaxed visibly off-axis).
