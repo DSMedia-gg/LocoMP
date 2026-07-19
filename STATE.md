@@ -1,6 +1,6 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-18 (M3.1 career core built) · This is the **implementation** memory (burst cadence, D8).
+**Updated:** 2026-07-19 (M3.5a + D14 VERIFIED IN-GAME — run №2 passed, zero bugs/regressions; committed, push pending Cody's go) · This is the **implementation** memory (burst cadence, D8).
 The **planning corpus** lives one level up at `../` (00–09, INDEX, research/) — strategic, kept private.
 Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current milestone in `../07-ROADMAP.md`.
 
@@ -50,10 +50,159 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
     resumes world + a rejoin finishes a job across it**, preset-mismatch throw), and a **2,000-op
     career fuzz × both presets with the conservation oracle asserted after every op and a
     save/restore round-trip every 250 ops** (persistence proven under arbitrary mid-flight state).
-- **M3 remaining**: M3.2 — late-join phased snapshot + join queue (03 §7; current join burst is
-  fine at this scale, phases/compression when the world grows) · M3.3 — Shim career integration
-  (the game half: real station/job/license data into `CareerConfig`, job generation interception
-  [02 verification item 4], booklet/board UI, money/license application in-game) · M3 exit run.
+- **M3.3 — Shim career integration: CODE-COMPLETE + BUILT 2026-07-18 (uncommitted; payload staging
+  pending — game was running and held the DLL lock; a background waiter stages on exit). M3.1
+  pushed same day (`53d642b`, Cody's go).** What was built:
+  - **02 verification item 4 ANSWERED: interception is CLEAN.** Every DV generation path (zone
+    entry, RegenerateJobs, expiry attempts) funnels through
+    `StationProceduralJobsController.TryToGenerateJobs` — one Harmony false-prefix
+    (`JobGenSuppressor`, Active only in sessions, both host AND clients) plus `StopAll()` for
+    coroutines already mid-flight at session start. Pre-session jobs are left as props.
+  - **`CareerConfigBuilder` (Shim)**: real `CareerConfig` from the live world — station YardIDs +
+    ABSOLUTE positions (− OriginShift.currentMove, presence-pose space), route distances via the
+    game's own `JobPaymentCalculator.GetDistanceBetweenStations`, one `JobTypeSpec` per (station ×
+    output CargoGroup) with licenses from `LicenseManager.GetRequiredLicensesForJobType/CargoTypes`
+    (v2 `.id` strings), license catalog + prices from `Globals.G.Types.jobLicenses`. Payout feel
+    constants $100/car + $10/car/km (NOT the game's exact formula — that needs car/cargo value data
+    = M4); car counts capped at 8 (no train-length licensing yet). All typed access compiled first
+    try against B99.7 — the reflection recon signatures were exact.
+  - **Core additions**: `JobTypeSpec.Origins/Destinations` + `PayoutPerCarKmCents` +
+    `CareerConfig.StationDistancesKm/StationLocations/TaskProximityRadiusM` (generator now follows
+    real cargo routes with distance-scaled payouts) · **server-side task proximity validation** —
+    the claimant's own presence pose (server-known) must be within the radius of the task's station
+    (horizontal; missing data passes through so the check only ever ADDS a refusal). CareerState
+    now also carries the license-price catalog (clients can't render a shop otherwise).
+  - **Shim UX**: UMM panel career section — wallet/licenses/preset line, MY JOB rows with `Report
+    <next step>` + Abandon, scrollable board with Claim buttons + others' claims (name + offline
+    marker), collapsible license shop, toast line (rejections + economy events). Idle panel gains
+    "Shared career (classic co-op)" + "Fresh career" toggles.
+  - **`PlayerKeyStore`**: identity GUID at `%USERPROFILE%\AppData\LocalLow\AltFuture\Derail
+    Valley\locomp-player-key.txt` (persistentDataPath — survives restages + game updates; deleting
+    it = fresh career). Career saves: `locomp-career-<preset>.lmps` beside it, per-preset filenames
+    so a preset switch can't hit the mismatch throw. Host auto-resumes unless "Fresh career";
+    2-min autosave + SaveNow on Leave/world-unload. **Host-mode resume restores the CAREER half
+    only** — the host's live world is the physical truth and re-registers consists fresh;
+    restoring saved trainsets would duplicate them as ghosts (full-world restore = dedicated
+    server, M6).
+  - Tests 100 → **102** (route-constrained generation w/ distance payout; proximity gate over the
+    session stack). Suite ×3 green (one localhost-UDP flake retried clean ×3), full sln 0 warnings.
+- **D13 RECORDED (Cody, 2026-07-18) + M3.5a BUILT same evening (uncommitted, STAGED 22:36):
+  host-native job capture.** Cody's UI/X 180 → "full native, pull M4 forward" → Route A approved:
+  DV's generator keeps running ON THE HOST (real cars/booklets/yard logic); LocoMP mirrors every
+  job onto the server board and routes claims/completions/payouts through the policy layer. The
+  M3.1 core generator is RESERVED for the dedicated server (both feed the same board machinery).
+  What shipped:
+  - **Blocker fix (live-found)**: DV grants Freight Haul at career start; our career didn't →
+    board fully license-locked with an unaffordable buy-out. `CareerConfigBuilder` now sets
+    `StartingLicenses` from `GetRequiredLicensesForJobType(Transport)`, and starting licenses are
+    a **floor applied on every connect** (idempotent) — existing saves heal on next join.
+  - **Core**: MessageType 40/41 (JobRegister/JobRetract, world-source-gated = first admitted
+    peer), `JobDef.GameId`, `CareerConfig.AcceptExternalJobs`, `TryRegisterExternal` (server
+    assigns id; GameId deduped) + `TryRetract` (never retracts a claimed job), CareerRejected now
+    carries the jobId (native rollback needs to know WHICH claim lost), save schema → v2 (v1
+    files refused cleanly; backups keep the bytes). Proximity gate EXEMPTS captured jobs — the
+    game's own task tree is their validator.
+  - **Shim `JobCapture`**: `JobsManager.RegisterGeneratedJob` postfix (THE single point every
+    real job passes) + join-time sweep of pre-existing available jobs; native take (booklet →
+    validator `ProcessJobOverview` → `TakeJob`) = OPTIMISTIC server claim, rolled back via native
+    `AbandonJob` on refusal (reentry-guarded); native completion (turn-in `ValidateJob` →
+    `Job.JobCompleted`) reports the single Haul step → server pays the claimant;
+    `JobExpired` → retract; **`MoneyPrinterJobValidator.PrintPayment` false-prefixed in-session**
+    (the wage rides the ledger, never the game's cash — SP economy stays a bystander).
+    Host runs with `JobGenSuppressor.Active = false`; only joining clients suppress.
+    CareerConfigBuilder no longer emits synthetic job shapes (kept: stations/locations/distances,
+    starting licenses, license catalog).
+  - Panel: captured jobs show "[claim at the <yard> validator]" instead of a Claim button (native
+    claiming is host-only until real-car replication; remotes read-only). 104/104 ×3, 0 warnings.
+  - **Known M3.5b list**: native AbandonJob rollback may touch the debt system (fees) — audit;
+    remote claim/abandon semantics + chain lifetime once real cars exist; wage = base payment
+    only (bonus needs server-side time model); booklet materialization for remote players;
+    **a native mid-session game save may persist the MIRRORED balance into the SP save** (D14
+    accepted cost — the in-memory restore on Leave can't rewrite a save already written);
+    remote players' local career managers are untouched (their native world is their own SP save).
+- **D14 RECORDED (Cody, 2026-07-19) + BUILT same day: full native wallet unification.** M3.5a run
+  №1 (Phase 1) found the seam D13 left open: the career manager is a second license-granting and
+  money-spending path invisible to LocoMP — a native license purchase let the native validator
+  approve a take the server then refused, and the AbandonJob rollback DESTROYED the physical
+  leaflet (abandoned ≠ available in DV; the old "returned to the world" log line was wrong).
+  Chosen over grant-sync-only and suppress-native-buying. What shipped (109/109 ×3, 0 warnings):
+  - **Core**: MessageType **42 `LicenseGrantExternal` / 43 `FeeExternal`** (both
+    world-source-gated like JobRegister), `EconomyEventKind.ExternalFee`,
+    `CareerRegistry.TryGrantExternal` (idempotent, CHARGE-FREE — the register fee arrives
+    separately, charging twice was the trap) + `TryChargeExternalFee` (policy-routed burn,
+    overdraft-refused), ClientCareer senders. Grants accept ids the price catalog doesn't know —
+    the game is the authority on what exists.
+  - **Shim `LicenseSync`** (host-only, Harmony-free — LicenseManager's `JobLicenseAcquired`/
+    `LicenseAcquired` EVENTS): native grants → server (reentry-guarded); server grants
+    (panel shop, starting floor, resumed saves) → applied natively via
+    `Globals.G.Types.TryGetJobLicense/TryGetGeneralLicense` + Acquire; join-time sweep mirrors a
+    mature save's whole license set (the host's progression IS the world, like its jobs/consists).
+  - **Shim `WalletMirror`** (host-only): saves native money on session start, restores on
+    Leave/dispose; `Inventory.PlayerMoney` reconciled to the ledger every 0.75 s BUT ONLY while
+    no register holds deposited cash (deposit → Buy → leftover-return ordering races otherwise);
+    Harmony prefix+postfix on **both** `CashRegisterCareerManager.Buy` and
+    `CashRegisterWithModules.Buy` (Buy is virtual — patching the base body catches nothing; cost
+    read in the PREFIX because a committed transaction clears it) → finalized purchases become
+    `FeeExternal`. Career-manager DEBT payments ride the same hook — part of the M3.5b debt audit
+    landed free. Unmirrored native income is deliberately reverted by the reconcile (ledger =
+    truth, 03 §9).
+  - **Validator pre-gate** (in JobCapture): prefix on `JobValidator.ProcessJobOverview` refuses a
+    doomed take BEFORE the game consumes the overview (leaflet kept, error sound, panel toast via
+    new `TakeRefused` event) using the client mirror (not-on-board-yet / claimed-by-other).
+    License refusals can't happen anymore (the native check IS the synced check). The optimistic
+    rollback stays as a true-race backstop but now also RETRACTS the board entry (no ghost jobs)
+    and logs honestly that the leaflet is lost.
+  - **CareerConfigBuilder**: general licenses join the price catalog (career manager sells them;
+    remotes need prices); `MaxConcurrentClaims = 99` in host-native mode — DV's own
+    concurrent-jobs licensing governs, a stricter core limit would refuse takes the native
+    validator already allowed (dedicated server keeps the default 3).
+  - **New game ref: DV.Inventory** (targets ×2 + build.yml + release.yml heredocs).
+- **M3.5a CLOSED 2026-07-19: run №2 PASSED — zero bugs, zero regressions** (whole D14 surface +
+  all run-№1 regressions: mirror boot, native license buy → licensed claim with leaflet safe,
+  panel-shop reverse sync, haul/turn-in, deposit/cancel settle, persistence + grace, bot).
+- **M3 remaining**: push (Cody's go) · M3.5b/c — remote claim parity + REAL-CAR replication
+  replacing ghost consists (the pulled-forward M4 spine) · M3.2 join phases (deferrable) ·
+  friend session upgrades exit wording.
+
+## M3.5a run №2 — PASSED 2026-07-19 (checklist retired)
+
+Full D14 surface + all regressions verified in-game by Cody: "All testing done - Zero bugs or
+regressions!" Standing money facts for future sessions: host-native careers start at $2000
+(matches SP; core/dedicated default stays $500); on Host the money display IS the LocoMP balance
+and the SP amount restores on Leave; starting grants mint on FIRST profile sight only ("Fresh
+career" toggle or delete the .lmps to re-mint).
+
+1. Boot + mirror (regression): Host per-player on the new save. Expect the run-№1 lines
+   (`built from the live world` — now with MORE purchasable licenses since general ones joined —
+   `host job capture installed`, `offered N existing world job(s)`), plus NEW:
+   `wallet mirror hooks installed`, `native money now mirrors the LocoMP wallet ($…; $… restored
+   on leave)`, and `mirrored N natively-held license(s) to the career` (FH at minimum — the sweep).
+   In-game money display == panel wallet from here on.
+2. **The run-№1 killer, fixed — native license buy**: buy a license at the CAREER MANAGER with
+   in-game money. Expect: purchase works natively, log shows `native purchase captured: $… at the
+   career manager` and `native license grant captured: <id>`, panel licenses line gains it, panel
+   wallet drops by the price, in-game money re-syncs to match (≤1 s). Then claim a job needing that
+   license through the validator → booklet prints, MY JOB appears, **no refusal, leaflet safe**.
+3. Panel-shop reverse sync: buy a cheap license from the LocoMP panel shop. Expect wallet drop +
+   the game's own license UI/validator recognizes it (native grant applied; log stays quiet or
+   shows the apply failure loudly — the latter is a bug).
+4. Haul + turn-in (regression): NO validator cash print; `completed natively — reporting for
+   payout`; wallet (both displays) up by base payment.
+5. **Pre-gate**: with a session job visibly on the board, try to validate an overview for a job
+   the board does NOT have yet (freshly generated — put it through within ~a second) — if you can
+   catch one, expect the error sound + toast `not on the multiplayer board yet` and the LEAFLET
+   SURVIVES. (Hard to time; skipping is fine — the important part is no leaflet is ever consumed
+   on a refusal.)
+6. Deposit/cancel economy edge: insert money at a register, CANCEL, walk away. Expect money
+   returns and settles back to exactly the panel wallet (the reconcile waits for idle registers).
+7. Persistence + grace (regression): Leave → money restores to the pre-session SP amount →
+   re-Host → wallet/licenses/claims back (bought licenses included). Leave mid-job, re-host
+   within 10 min → claim intact.
+8. Bot regression: presence + trains unchanged (`--at` + `--start-edge` hints as before).
+9. Watch for: double-take at the validator, native abandon at the career manager (should release
+   the server claim; note any DEBT/fee side effects — M3.5b audit), job expiry → board entry
+   vanishes, zero LocoMP exceptions, and any wallet drift between the two money displays that
+   does NOT converge within a second.
 - **Milestone:** **M2 — Trains: COMPLETE 2026-07-18** (one-PC exit wording; friend session upgrades
   to official). M2.1 core + M2.2 extractor + M2.3 Shim integration all verified in-game; the exit
   scenario (couple → merge → uncouple → derail → rerail, no snap-back) passed on run №5 with every
@@ -198,15 +347,49 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
 6. **Repo residuals, whenever** (05 §7): branch protection, DCO app (optional), repo topics.
 
 ## Push state
-- **All M2.1 work PUSHED 2026-07-18** (`ce41556..cc615d2`: train core `1bc5a96`, UDP integration test `1ece517`, tag-shadow fix + banked findings `cc615d2`; Cody's go after the in-game regression passed). Post-push CI as expected: `build.yml` red at the Steam step (accepted until contributors).
-- **M2.2 PUSHED 2026-07-18** (`4d8e33c..9614a45`, Cody's explicit go). Expect `build.yml` red at the Steam step as usual (accepted until contributors).
-- **M2.3 PUSHED 2026-07-18** (`9614a45..8594e4f`, Cody's emphatic go). Expect the usual red `build.yml` at the Steam step (accepted until contributors).
-- Staged payload in the game's `Mods/LocoMP/` = current (18:21 build + exit-run fixes, the exact build that passed run №5).
+- **Everything through M3.1 is PUSHED** (M2 arc `ce41556..8594e4f`; M3.1 `53d642b`, Cody's go 2026-07-18). Post-push CI as always: `build.yml` red at the Steam step (accepted until contributors).
+- **COMMITTED 2026-07-19 (run №2 passed): three dependency-ordered commits** — Core career sync
+  (M3.3/M3.5a/M3.5a-D14 Core halves + tests), then Shim/mod in-game integration, then docs/CI.
+  Ordered so every commit builds (the planned per-feature split wasn't honest: M3.3, D13, and D14
+  edits interleave within the same files, and file-level surgery would have produced non-building
+  intermediates). **Push pending Cody's explicit go (hard rule 7).**
+- Staged payload in the game's `Mods/LocoMP/` = **2026-07-19 13:22 build** = the verified commit.
 
 ## Blockers
-- None. M2.1 verified headless; M2.2/M2.3 need the game (Cody at the PC), M2 exit ideally a friend session.
+- None technical. Next step needs Cody at the PC: the M3.5a in-game run (checklist above). After
+  it passes: commit + push on his go, then M3.5b/c (remote claim parity + real-car replication —
+  the pulled-forward M4 spine).
 
 ## Session log
+- **2026-07-19** — **M3.5a run №1: Phase 1 PASSED, Phase 2 blocked → D14 recorded + built + staged
+  (13:14).** Cody's findings: board 1:1 with world jobs, FH granted; BUT a native career-manager
+  license purchase was invisible to LocoMP → validator-approved take → server refusal → AbandonJob
+  rollback DESTROYED the leaflet (log claimed "returned to world" — wrong; abandoned ≠ available,
+  no lost-items-shed recovery). Root cause: D13 unified jobs but not licenses/money. D14 = full
+  wallet unification (options were suppress / sync-grants-only / unify — Cody picked unify).
+  Built: Core 42/43 external grant+fee (grant charge-free + idempotent, fee = policy burn),
+  LicenseSync (event-driven, both directions + mature-save sweep, host-only), WalletMirror
+  (PlayerMoney = ledger view; Buy() prefix+postfix on BOTH register overrides — virtual, base
+  patch catches nothing; reconcile idles while registers hold cash), validator pre-gate (leaflet
+  never consumed on a doomed take; backstop rollback now retracts the board entry + honest log),
+  MaxConcurrentClaims=99 host-native (DV's own licensing governs), general licenses in catalog,
+  DV.Inventory ref ×4 spots. 104 → **109/109 ×3**, full sln 0 warnings. Payload staged via
+  game-exit waiter. Follow-up (Cody): host-native StartingBalanceCents → **$2000** to match SP —
+  under D14 the wallet IS the license budget and $500 can't buy a license (value hardcoded in
+  CareerConfigBuilder; not exposed via GameParams, re-check on B100; grant mints on FIRST sight
+  only, so run №2 needs "Fresh career"). Restaged 13:22. **Run №2 PASSED same day — zero bugs,
+  zero regressions; M3.5a CLOSED; committed (core → shim/mod → docs); push on Cody's go.**
+- **2026-07-18** — **M3.1 PUSHED (`53d642b`, Cody's go) + M3.3 built (Shim career integration),
+  uncommitted.** Recon by reflection (scratch/dv-reflect.ps1 outside the repo): 02 item 4 = CLEAN —
+  `StationProceduralJobsController.TryToGenerateJobs` is the single generation choke point.
+  JobGenSuppressor (false-prefix + StopAll), CareerConfigBuilder (real stations/absolute
+  positions/route distances/cargo-route specs/license catalog from the live world),
+  PlayerKeyStore (persistentDataPath), host career resume (CAREER HALF ONLY in host mode — live
+  world re-registers consists; full restore = dedicated path) + 2-min autosave, panel job
+  board/shop/toasts. Core: route-constrained specs w/ distance payouts + server-side task
+  proximity vs the claimant's own pose; CareerState carries the license catalog now. 102/102 ×3,
+  full sln 0 warnings. Payload staging deferred — game running held the DLL lock (background
+  waiter). Next: Cody's in-game M3 run (checklist above), then commit + push.
 - **2026-07-18** — **M3.1 built (game-free career core), committed.** Protocol v3 (stable player
   key in the handshake — reconnect credential, never broadcast; career messages 29–39),
   `CareerRegistry`/`EconomyLedger`/`ProgressionPolicy` (both D3 presets behind one switch; exact
