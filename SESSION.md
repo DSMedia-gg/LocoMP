@@ -11,7 +11,7 @@ narrative history. See `../CLAUDE.md` for the discipline.
 registry + protocol + persistence + fuzz, headless (no Shim), the way M2.1/M3.1 opened their
 milestones. Cody picked M4 for the burst.
 
-**Done — M4.1 (155/155 ×3, full sln 0 warnings, staged to Mods/ + dist/, uncommitted):**
+**Done — M4.1 (155/155 ×3, full sln 0 warnings, staged to Mods/ + dist/, PUSHED `6064759`/`31d1f5c`):**
 - `Items/` domain mirroring `Trains/`+`Career/`: `ItemDef`/`ItemRecord`/`ItemRegistry` +
   `ItemConfig`. The registry mints its own `ItemNetId` (the recon confirmed DV has no per-instance
   id), enforces the single-location invariant (World-pose XOR one scope's possession) and carries an
@@ -35,7 +35,6 @@ native. So M4.2 (Shim ItemSync) is event hooks + `Resources.Load`, not the M3.5b
 machinery; a far-item keep-alive/exemption is the one wrinkle.
 
 **Next:** M4.2 Shim ItemSync on the recon's event seams, then comms-radio actions for all players.
-Commit+push of M4.1 on Cody's go.
 
 ---
 

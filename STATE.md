@@ -1,16 +1,17 @@
 # STATE — LocoMP (implementation)
 
 **Updated:** 2026-07-19 late — D15 PUSHED (`7b93bc8`/`0c1bfe9`), then **M4.1 (game-free Items core)
-BUILT**: ItemRegistry + protocol v6 + LMPS schema v4 + full session stack, 155/155 ×3, full sln
-0 warnings, payload staged, UNCOMMITTED. This is the **implementation** memory (burst cadence, D8).
+BUILT + PUSHED** (`6064759` feat/`31d1f5c` docs, `0c1bfe9..31d1f5c`): ItemRegistry + protocol v6 +
+LMPS schema v4 + full session stack, 155/155 ×3, full sln 0 warnings, payload staged. This is the
+**implementation** memory (burst cadence, D8).
 The **planning corpus** lives one level up at `../` (00–09, INDEX, research/) — strategic, kept private.
 Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current milestone in `../07-ROADMAP.md`.
 
 ## Where things stand
 
-- **M4.1 — game-free Items core: BUILT 2026-07-19 (late), UNCOMMITTED. 155/155 ×3, full sln 0
-  warnings, payload staged to the game's Mods/ + dist/.** The M4 spine's authority layer, headless
-  and fuzzed — no Shim yet (that's M4.2). What exists:
+- **M4.1 — game-free Items core: BUILT + PUSHED 2026-07-19 (late)** (`6064759` feat/`31d1f5c` docs).
+  **155/155 ×3, full sln 0 warnings, payload staged to the game's Mods/ + dist/.** The M4 spine's
+  authority layer, headless and fuzzed — no Shim yet (that's M4.2). What exists:
   - **`Items/` domain** (game-free, mirrors `Trains/` + `Career/`): `ItemDef` (id + prefabName +
     opaque state; the recon confirmed DV has NO per-instance id, so LocoMP mints `ItemNetId`s — the
     car-id pattern) + `ItemRecord` (def + location) + **`ItemRegistry`** — the authority enforcing
@@ -49,7 +50,7 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
     `Inventory.InventoryStatusChanged`, `Grabber.GrabStarted/Stopped`; spawn via
     `Resources.Load(prefabName)`; the `ItemDisablerGrid` only deactivates far items — a keep-alive/
     exemption, NOT the M3.5b materialization machinery). Then comms-radio actions for all players
-    (summon/rerail/delete + fees) round out M4. **Commit+push of M4.1 awaits Cody's go.**
+    (summon/rerail/delete + fees) round out M4.
 - **D15 BURST 2026-07-19 (late): O11 + O12 RESOLVED (Cody) → D15 built + M4 opened. PUSHED
   `7b93bc8` (feat) + `0c1bfe9` (docs), `2505e29..0c1bfe9`.**
   - **O12 accepted**: LMPS is the ratified career-save format (03 §7 amended; MessagePack stays
