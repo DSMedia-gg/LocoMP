@@ -1,7 +1,11 @@
 using System;
 using System.Globalization;
+using System.IO;
+using System.Linq;
 using System.Reflection;
+using LocoMP.Core.Career;
 using LocoMP.Core.Net;
+using LocoMP.Core.Persistence;
 using LocoMP.Core.Protocol;
 using LocoMP.Core.Session;
 using LocoMP.Shim;
@@ -41,11 +45,23 @@ public sealed class SessionController
     private string _lastError = "";
     private bool _worldUnloaded;
 
+    // M3 career state
+    private string? _playerKey;
+    private Autosaver? _autosaver;
+    private JobCapture? _jobCapture;
+    private LicenseSync? _licenseSync;
+    private WalletMirror? _walletMirror;
+    private string _careerToast = "";
+
     // IMGUI field state
     private string _playerName = Environment.UserName;
     private string _address = "127.0.0.1";
     private string _portText = NetDefaults.Port.ToString(CultureInfo.InvariantCulture);
     private string _password = "";
+    private bool _sharedCareer;
+    private bool _freshCareer;
+    private bool _showShop;
+    private Vector2 _jobsScroll;
 
     public SessionController(Action<string> log) => _log = log;
 
@@ -92,6 +108,8 @@ public sealed class SessionController
         }
 
         _trains?.Tick(dt);
+        _walletMirror?.Tick(dt);
+        _autosaver?.Tick();
         if (_worldUnloaded)
         {
             // Flagged from inside the tick; tear down afterwards so we never dispose mid-callback.
@@ -123,6 +141,11 @@ public sealed class SessionController
                 _password = GUILayout.TextField(_password, GUILayout.Width(120));
                 GUILayout.EndHorizontal();
 
+                GUILayout.BeginHorizontal();
+                _sharedCareer = GUILayout.Toggle(_sharedCareer, "Shared career (classic co-op)");
+                _freshCareer = GUILayout.Toggle(_freshCareer, "Fresh career (ignore saved)");
+                GUILayout.EndHorizontal();
+
                 if (GUILayout.Button("Host session", GUILayout.Width(160))) Host();
 
                 GUILayout.Space(6);
@@ -144,6 +167,7 @@ public sealed class SessionController
                     foreach (var p in _client.Players.Values)
                         GUILayout.Label($"  • {p.Name} (id {p.Id}) @ {p.Pose}");
                 }
+                DrawCareer();
                 if (GUILayout.Button("Leave", GUILayout.Width(100))) Leave();
                 break;
         }
@@ -152,23 +176,148 @@ public sealed class SessionController
         GUILayout.EndVertical();
     }
 
+    /// <summary>The M3 career section: wallet + licenses, my claims with a report button for the
+    /// next step, the board, and the license shop. Everything here only SENDS proposals — all the
+    /// state it draws came back from the server (03 §3).</summary>
+    private void DrawCareer()
+    {
+        if (_client is not { Joined: true }) return;
+        ClientCareer career = _client.Career;
+
+        GUILayout.Space(4);
+        string licenses = career.Licenses.Count == 0 ? "none" : string.Join(", ", career.Licenses.ToArray());
+        string preset = career.Preset == ProgressionPreset.SharedCareer ? "shared career" : "per-player careers";
+        GUILayout.Label($"Wallet: {Money(career.BalanceCents)}   Licenses: {licenses}   ({preset})");
+
+        int myId = _client.LocalId!.Value;
+        foreach (ClientJob job in career.Jobs.Values.Where(j => j.State == JobLifecycle.Claimed && j.ClaimantPeerId == myId).ToList())
+        {
+            JobTaskDef task = job.Def.Tasks[Math.Min(job.NextTaskIndex, job.Def.Tasks.Count - 1)];
+            GUILayout.BeginHorizontal();
+            GUILayout.Label($"MY JOB {Describe(job.Def)} — next: {task.Kind} @ {task.Param}");
+            if (GUILayout.Button($"Report {task.Kind}", GUILayout.Width(130)))
+                career.ReportTask(job.Def.Id, job.NextTaskIndex);
+            if (GUILayout.Button("Abandon", GUILayout.Width(80)))
+                career.AbandonJob(job.Def.Id);
+            GUILayout.EndHorizontal();
+        }
+
+        var available = career.Jobs.Values.Where(j => j.State == JobLifecycle.Available)
+            .OrderBy(j => j.Def.Id).ToList();
+        var others = career.Jobs.Values.Where(j => j.State == JobLifecycle.Claimed && j.ClaimantPeerId != myId).ToList();
+        GUILayout.Label($"Job board — {available.Count} available:");
+        _jobsScroll = GUILayout.BeginScrollView(_jobsScroll, GUILayout.Height(200));
+        foreach (ClientJob job in available)
+        {
+            GUILayout.BeginHorizontal();
+            if (job.Def.GameId.Length > 0 && _mode != Mode.Hosting)
+            {
+                // Captured game jobs are claimed the native way (booklet → validator) — which only
+                // the host's world can do until real-car replication lands (D13 scope note).
+                GUILayout.Label($"      {Describe(job.Def)}  [at the {job.Def.Origin} validator]");
+            }
+            else if (job.Def.GameId.Length > 0)
+            {
+                GUILayout.Label($"      {Describe(job.Def)}  [claim at the {job.Def.Origin} validator]");
+            }
+            else
+            {
+                if (GUILayout.Button("Claim", GUILayout.Width(60))) career.ClaimJob(job.Def.Id);
+                GUILayout.Label(Describe(job.Def));
+            }
+            GUILayout.EndHorizontal();
+        }
+        foreach (ClientJob job in others)
+        {
+            string who = job.ClaimantName.Length > 0 ? job.ClaimantName : "?";
+            GUILayout.Label($"     {Describe(job.Def)} — claimed by {who}{(job.ClaimantPeerId == 0 ? " (offline)" : "")}");
+        }
+        GUILayout.EndScrollView();
+
+        if (career.LicenseCatalog.Count > 0)
+        {
+            _showShop = GUILayout.Toggle(_showShop, $"License shop ({career.LicenseCatalog.Count})");
+            if (_showShop)
+            {
+                foreach (var entry in career.LicenseCatalog.OrderBy(kv => kv.Key).ToList())
+                {
+                    if (career.Licenses.Contains(entry.Key)) continue;
+                    GUILayout.BeginHorizontal();
+                    if (GUILayout.Button("Buy", GUILayout.Width(50))) career.PurchaseLicense(entry.Key);
+                    GUILayout.Label($"{entry.Key} — {Money(entry.Value)}");
+                    GUILayout.EndHorizontal();
+                }
+            }
+        }
+
+        if (_careerToast.Length > 0) GUILayout.Label("» " + _careerToast);
+    }
+
+    private static string Describe(JobDef def)
+    {
+        string needs = def.RequiredLicenses.Count > 0 ? $" (needs {string.Join("+", def.RequiredLicenses.ToArray())})" : "";
+        return $"[{def.Id}] {def.JobType} {def.Origin}→{def.Destination}  {def.CarCount}× {def.CargoKind}  {Money(def.PayoutCents)}{needs}";
+    }
+
     private void Host()
     {
         try
         {
             _lastError = "";
             int port = ParsePort();
+
+            // M3 career: real map data in, saved career back (host-mode resume restores the CAREER
+            // half only — the host's live game world is the physical truth and re-registers its
+            // consists fresh; restoring saved trainsets here would duplicate them as ghosts. The
+            // full-world restore is the dedicated server's path, M6).
+            ProgressionPreset preset = _sharedCareer ? ProgressionPreset.SharedCareer : ProgressionPreset.PerPlayer;
+            CareerConfigBuilder.TryBuild(preset, out CareerConfig careerConfig, _log);
+            var storage = new FileSaveStorage(CareerSavePath(preset));
+            ServerSaveData? restore = null;
+            if (_freshCareer)
+            {
+                _log("[career] fresh career requested — ignoring any saved one");
+            }
+            else
+            {
+                try
+                {
+                    byte[]? saved = storage.TryLoad();
+                    if (saved != null)
+                    {
+                        restore = new ServerSaveData(SaveCodec.Read(saved).Career, new TrainsSaveData());
+                        _log("[career] resumed saved career (wallets, licenses, board, claims)");
+                    }
+                }
+                catch (Exception e)
+                {
+                    _log($"[career] saved career unreadable ({e.Message}) — starting fresh (backups sit beside it)");
+                }
+            }
+
             _hub = new LoopbackNetwork();
             var udp = LiteNetLibTransport.StartServer(port, NetDefaults.ConnectKey);
             _serverTransport = new CompositeTransport(_hub.Server, udp);
             _server = new NetServer(_serverTransport,
-                new ServerConfig(Identity(), _password.Length > 0 ? _password : null), _clock);
+                new ServerConfig(Identity(), _password.Length > 0 ? _password : null, career: careerConfig),
+                _clock, restore);
             _server.PlayerAdmitted += p => _log($"[session] admitted {p.Name} (id {p.Id}) — {_server!.PlayerCount} player(s)");
             _server.PlayerRemoved += id => _log($"[session] removed id {id} — {_server!.PlayerCount} player(s)");
+            _autosaver = new Autosaver(_clock, intervalMs: 120_000, storage,
+                () => SaveCodec.Write(_server!.CaptureSave()));
 
             _client = MakeClient(_hub.Connect(out _)); // the host is just client #1, zero latency
             _trains = new TrainSync(_client, isHost: true, _log);
             _trains.WorldUnloaded += () => _worldUnloaded = true;
+            // D13: the HOST keeps DV's native generation running — JobCapture mirrors every
+            // generated job onto the server board. Only joining CLIENTS suppress.
+            JobGenSuppressor.Active = false;
+            _jobCapture = new JobCapture(_client, _log);
+            _jobCapture.TakeRefused += reason => _careerToast = reason;
+            // D14: the native career manager is the shop and native money is the wallet's view —
+            // licenses sync both ways, register purchases burn through the ledger.
+            _licenseSync = new LicenseSync(_client, _log);
+            _walletMirror = new WalletMirror(_client, _log);
             _mode = Mode.Hosting;
 
             _log($"[session] hosting on UDP {port} (game reports version '{PresenceShim.ReportedGameVersion}', handshake build '{PresenceShim.GameBuild}')");
@@ -192,6 +341,8 @@ public sealed class SessionController
             _client = MakeClient(_clientTransport);
             _trains = new TrainSync(_client, isHost: false, _log);
             _trains.WorldUnloaded += () => _worldUnloaded = true;
+            JobGenSuppressor.Active = true;            // clients never generate either (02 §4)
+            JobGenSuppressor.StopAll(_log);
             _mode = Mode.Joined;
             _log($"[session] joining {_address}:{_portText}…");
         }
@@ -205,20 +356,61 @@ public sealed class SessionController
 
     private NetClient MakeClient(ITransport transport)
     {
+        _playerKey ??= PlayerKeyStore.GetOrCreate(_log);
         var client = new NetClient(transport, Identity(),
             _playerName.Length > 0 ? _playerName : "Player", _clock,
-            _password.Length > 0 ? _password : null);
+            _password.Length > 0 ? _password : null, _playerKey);
         client.Accepted += id => _log($"[session] joined as id {id} (server offset {client.ServerTimeOffsetMs} ms)");
         client.Rejected += reason => { _lastError = reason; _log($"[session] REJECTED: {reason}"); };
         client.PlayerJoined += p => { _avatars.AddOrUpdate(p.Id, p.Name, p.Pose); _log($"[session] player joined: {p.Name} (id {p.Id})"); };
         client.PlayerLeft += id => { _avatars.Remove(id); _log($"[session] player left: id {id}"); };
         client.PlayerMoved += (id, pose) => _avatars.Move(id, pose);
+
+        client.Career.RequestRejected += (r, _) => { _careerToast = r; _log("[career] refused: " + r); };
+        client.Career.EconomyEventReceived += (kind, cents, reason) =>
+        {
+            _careerToast = $"{kind}: {Money(cents)} — {reason}";
+            _log($"[career] {kind}: {Money(cents)} — {reason}");
+        };
+        client.Career.JobChanged += job =>
+        {
+            if (job.State == JobLifecycle.Completed && job.ClaimantPeerId == client.LocalId)
+                _log($"[career] job {job.Def.Id} DELIVERED — payout incoming");
+        };
         return client;
     }
+
+    private static string Money(long cents) => "$" + (cents / 100.0).ToString("N2", CultureInfo.InvariantCulture);
+
+    private static string CareerSavePath(ProgressionPreset preset) =>
+        // Per-preset files: wallet migration between presets is undefined, so they never collide.
+        Path.Combine(Application.persistentDataPath, $"locomp-career-{preset}.lmps");
 
     /// <summary>Tear the whole session down (also called on mod toggle-off). Safe when idle.</summary>
     public void Leave()
     {
+        if (_autosaver != null && _server != null)
+        {
+            try
+            {
+                _autosaver.SaveNow();
+                _log("[career] career saved");
+            }
+            catch (Exception e)
+            {
+                _log("[career] final save FAILED: " + e.Message);
+            }
+        }
+        _autosaver = null;
+        _jobCapture?.Dispose();
+        _jobCapture = null;
+        _walletMirror?.Dispose();                      // restores the pre-session native money
+        _walletMirror = null;
+        _licenseSync?.Dispose();
+        _licenseSync = null;
+        JobGenSuppressor.Active = false;               // DV's own generation resumes outside sessions
+        _careerToast = "";
+
         if (_client is { Joined: true }) { _client.Leave(); _client.Poll(); }
         _trains?.Dispose();
         _trains = null;

@@ -96,6 +96,7 @@ jobs:
               <Reference Include="BezierCurves"><HintPath>$(DvManaged)/BezierCurves.dll</HintPath><Private>false</Private></Reference>
               <Reference Include="DV.PointSet"><HintPath>$(DvManaged)/DV.PointSet.dll</HintPath><Private>false</Private></Reference>
               <Reference Include="net.smkd.vector3d"><HintPath>$(DvManaged)/net.smkd.vector3d.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="DV.Inventory"><HintPath>$(DvManaged)/DV.Inventory.dll</HintPath><Private>false</Private></Reference>
               <Reference Include="DV.ThingTypes"><HintPath>$(DvManaged)/DV.ThingTypes.dll</HintPath><Private>false</Private></Reference>
               <Reference Include="DV.OriginShiftInfo"><HintPath>$(DvManaged)/DV.OriginShiftInfo.dll</HintPath><Private>false</Private></Reference>
               <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(DvManaged)/UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
