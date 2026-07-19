@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using LocoMP.Core.Career;
 using LocoMP.Core.Net;
 using LocoMP.Core.Persistence;
+using LocoMP.Core.Presence;
 using LocoMP.Core.Protocol;
 
 namespace LocoMP.Core.Session;
@@ -18,15 +19,24 @@ namespace LocoMP.Core.Session;
 public sealed class ServerCareer
 {
     private readonly ITransport _transport;
+    private readonly CareerConfig _config;
     private readonly Func<IEnumerable<int>> _connectedIds;
+    private readonly Func<int, Pose?> _poseOf;
     private readonly Dictionary<int, string> _keyByPeer = new();
     private readonly Dictionary<string, int> _peerByKey = new(StringComparer.Ordinal);
 
+    // The first admitted peer is the world source (host-embedded: the host's loopback client
+    // always joins first, before the UDP port has anyone). Only it may register/retract external
+    // jobs (D13). Dedicated-server mode never sets AcceptExternalJobs, so this never matters there.
+    private int _worldSourcePeer;
+
     internal ServerCareer(ITransport transport, IClock clock, CareerConfig config,
-        Func<IEnumerable<int>> connectedIds, CareerSaveData? restore)
+        Func<IEnumerable<int>> connectedIds, CareerSaveData? restore, Func<int, Pose?> poseOf)
     {
         _transport = transport;
+        _config = config;
         _connectedIds = connectedIds;
+        _poseOf = poseOf;
         Registry = new CareerRegistry(config, clock, restore);
     }
 
@@ -47,6 +57,7 @@ public sealed class ServerCareer
     /// here too — Connect cancels the hold and the untouched claims simply stream back out.</summary>
     internal void OnPlayerAdmitted(int peerId, string playerKey, string name)
     {
+        if (_worldSourcePeer == 0) _worldSourcePeer = peerId;
         _keyByPeer[peerId] = playerKey;
         _peerByKey[playerKey] = peerId;
         Registry.Connect(playerKey, name);
@@ -90,6 +101,10 @@ public sealed class ServerCareer
             case MessageType.JobTaskReport: HandleTaskReport(peerId, r); return true;
             case MessageType.JobAbandonRequest: HandleAbandon(peerId, r); return true;
             case MessageType.LicensePurchaseRequest: HandlePurchase(peerId, r); return true;
+            case MessageType.JobRegister: HandleJobRegister(peerId, r); return true;
+            case MessageType.JobRetract: HandleJobRetract(peerId, r); return true;
+            case MessageType.LicenseGrantExternal: HandleLicenseGrantExternal(peerId, r); return true;
+            case MessageType.FeeExternal: HandleFeeExternal(peerId, r); return true;
             default: return false;
         }
     }
@@ -115,7 +130,35 @@ public sealed class ServerCareer
         if (Registry.TryClaim(key, jobId, out JobRecord? job, out string? reason))
             Broadcast(BuildJobState(job!));
         else
-            Reject(peerId, $"claim: {reason}");
+            Reject(peerId, $"claim: {reason}", jobId);
+    }
+
+    private void HandleJobRegister(int peerId, PacketReader r)
+    {
+        JobDef proposal = CareerCodec.ReadJobDef(r);
+        if (peerId != _worldSourcePeer)
+        {
+            Reject(peerId, "register: only the world source registers jobs");
+            return;
+        }
+        if (Registry.TryRegisterExternal(proposal, out JobRecord? job, out string? reason))
+            Broadcast(BuildJobCreated(job!.Def));
+        else
+            Reject(peerId, $"register: {reason}");
+    }
+
+    private void HandleJobRetract(int peerId, PacketReader r)
+    {
+        int jobId = (int)r.ReadVarUInt();
+        if (peerId != _worldSourcePeer)
+        {
+            Reject(peerId, "retract: only the world source retracts jobs", jobId);
+            return;
+        }
+        if (Registry.TryRetract(jobId, out JobRecord? job, out string? reason))
+            Broadcast(BuildJobState(job!));
+        else
+            Reject(peerId, $"retract: {reason}", jobId);
     }
 
     private void HandleTaskReport(int peerId, PacketReader r)
@@ -123,6 +166,15 @@ public sealed class ServerCareer
         int jobId = (int)r.ReadVarUInt();
         int taskIndex = (int)r.ReadVarUInt();
         if (KeyOf(peerId) is not string key) return;
+
+        // 02 §4: task transitions validated from owner-reported world state — and the claimant's
+        // presence pose IS that state. Runs before the registry so order errors still get their
+        // exact registry reason when the reporter is standing in the right place.
+        if (!TaskLocationOk(peerId, jobId, taskIndex, out string? whereReason))
+        {
+            Reject(peerId, $"task: {whereReason}", jobId);
+            return;
+        }
 
         if (Registry.TryReportTask(key, jobId, taskIndex, out JobRecord? job, out bool completed,
                 out long payout, out string? reason))
@@ -136,7 +188,7 @@ public sealed class ServerCareer
         }
         else
         {
-            Reject(peerId, $"task: {reason}");
+            Reject(peerId, $"task: {reason}", jobId);
         }
     }
 
@@ -148,7 +200,7 @@ public sealed class ServerCareer
         if (Registry.TryAbandon(key, jobId, out JobRecord? job, out string? reason))
             Broadcast(BuildJobState(job!));
         else
-            Reject(peerId, $"abandon: {reason}");
+            Reject(peerId, $"abandon: {reason}", jobId);
     }
 
     private void HandlePurchase(int peerId, PacketReader r)
@@ -166,6 +218,80 @@ public sealed class ServerCareer
         {
             Reject(peerId, $"purchase: {reason}");
         }
+    }
+
+    /// <summary>D14: the game granted a license natively on the host — mirror it into the policy
+    /// scope, charge-free (the register's payment arrives as FeeExternal). Idempotent grants that
+    /// change nothing are silently fine: they're echoes of our own server-side grants landing in
+    /// the native LicenseManager and coming back around.</summary>
+    private void HandleLicenseGrantExternal(int peerId, PacketReader r)
+    {
+        string licenseId = r.ReadString();
+        if (KeyOf(peerId) is not string key) return;
+        if (peerId != _worldSourcePeer)
+        {
+            Reject(peerId, "grant: only the world source mirrors native grants");
+            return;
+        }
+        if (Registry.TryGrantExternal(key, licenseId, out bool newlyGranted, out string? reason))
+        {
+            if (newlyGranted) SendLicenseUpdate(key, licenseId);
+        }
+        else
+        {
+            Reject(peerId, $"grant: {reason}");
+        }
+    }
+
+    /// <summary>D14: a native register finalized a purchase against the mirrored wallet — burn it
+    /// through the policy layer. A refusal here means the mirror drifted from the ledger; the
+    /// rejection tells the Shim to resynchronize loudly rather than let them diverge further.</summary>
+    private void HandleFeeExternal(int peerId, PacketReader r)
+    {
+        long amountCents = r.ReadInt64();
+        string label = r.ReadString();
+        if (KeyOf(peerId) is not string key) return;
+        if (peerId != _worldSourcePeer)
+        {
+            Reject(peerId, "fee: only the world source reports native fees");
+            return;
+        }
+        if (Registry.TryChargeExternalFee(key, amountCents, out string? reason))
+        {
+            SendWalletUpdate(key);
+            SendEconomyEvent(key, EconomyEventKind.ExternalFee, amountCents, label);
+        }
+        else
+        {
+            Reject(peerId, $"fee: {reason}");
+        }
+    }
+
+    /// <summary>The proximity gate: with a radius configured and a location known for the task's
+    /// station, the reporter's last pose must be within it (horizontal). Missing data — no radius,
+    /// unknown station, no pose yet, or an id the registry will reject anyway — passes through so
+    /// the check can only ever ADD a refusal, never mask a better one.</summary>
+    private bool TaskLocationOk(int peerId, int jobId, int taskIndex, out string? reason)
+    {
+        reason = null;
+        float radius = _config.TaskProximityRadiusM;
+        if (radius <= 0) return true;
+        if (!Registry.Jobs.TryGetValue(jobId, out JobRecord? job)) return true;
+        // Host-captured jobs (D13) are validated by the GAME's own task tree — the report arrives
+        // from the world source at turn-in, wherever the validator happens to stand.
+        if (job.Def.GameId.Length > 0) return true;
+        if (taskIndex < 0 || taskIndex >= job.Def.Tasks.Count) return true;
+        JobTaskDef task = job.Def.Tasks[taskIndex];
+        if (!_config.StationLocations.TryGetValue(task.Param, out StationLocation loc)) return true;
+        if (_poseOf(peerId) is not Pose pose) return true;
+
+        float dx = pose.Px - loc.X;
+        float dz = pose.Pz - loc.Z;
+        if (dx * dx + dz * dz <= radius * radius) return true;
+
+        double away = Math.Sqrt(dx * dx + dz * dz);
+        reason = $"you must be at {task.Param} to report this step ({away:F0} m away)";
+        return false;
     }
 
     // ── routed sends (the policy decides who a wallet/license change is FOR) ──
@@ -201,12 +327,13 @@ public sealed class ServerCareer
             _transport.Send(peer, payload, DeliveryMethod.ReliableOrdered);
     }
 
-    private void Reject(int peerId, string reason)
+    private void Reject(int peerId, string reason, int jobId = 0)
     {
         RequestRejected?.Invoke(peerId, reason);
         byte[] payload = new PacketWriter(32)
             .WriteByte((byte)MessageType.CareerRejected)
             .WriteString(reason)
+            .WriteVarUInt((uint)jobId)
             .ToArray();
         _transport.Send(peerId, payload, DeliveryMethod.ReliableOrdered);
     }
@@ -220,6 +347,13 @@ public sealed class ServerCareer
             .WriteByte((byte)Registry.Policy.Preset)
             .WriteInt64(Registry.BalanceFor(playerKey));
         CareerCodec.WriteLicenses(w, Registry.LicensesFor(playerKey));
+        // The purchasable-license catalog: clients can't render a shop from gate failures alone.
+        w.WriteVarUInt((uint)_config.LicensePrices.Count);
+        foreach (KeyValuePair<string, long> kv in _config.LicensePrices)
+        {
+            w.WriteString(kv.Key);
+            w.WriteInt64(kv.Value);
+        }
         return w.ToArray();
     }
 

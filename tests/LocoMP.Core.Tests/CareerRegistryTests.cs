@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using LocoMP.Core.Career;
+using LocoMP.Core.Persistence;
 using LocoMP.Core.Session;
 using Xunit;
 
@@ -87,6 +88,33 @@ public class CareerRegistryTests
     }
 
     [Fact]
+    public void Starting_licenses_are_a_floor_that_heals_profiles_from_older_saves()
+    {
+        CareerConfig config = Config();
+        config.StartingLicenses = new[] { "FH1" };
+        var (career, _) = Fresh(config);
+        career.Connect("alice", "Alice");
+        Assert.Contains("FH1", career.LicensesFor("alice"));
+
+        // A save written BEFORE the baseline existed: the profile has no licenses at all (the
+        // live deadlock of 2026-07-18 — every job gated, wallet too small to buy out).
+        CareerSaveData save = career.Capture();
+        save.Profiles.Clear();
+        save.Profiles.Add(new ProfileSave("alice", "Alice", new List<string>()));
+        var healed = new CareerRegistry(config, new ManualClock(), save);
+        Assert.DoesNotContain("FH1", healed.LicensesFor("alice")); // restored exactly as saved...
+        healed.Connect("alice", "Alice");
+        Assert.Contains("FH1", healed.LicensesFor("alice"));       // ...and healed on join
+
+        // Shared preset: the same floor seeds the shared set on every connect.
+        CareerConfig shared = Config(ProgressionPreset.SharedCareer);
+        shared.StartingLicenses = new[] { "FH1" };
+        var (coop, _) = Fresh(shared);
+        coop.Connect("bob", "Bob");
+        Assert.Contains("FH1", coop.SharedLicenses);
+    }
+
+    [Fact]
     public void Generation_is_deterministic_across_instances_and_runtimes()
     {
         var (a, _) = Fresh();
@@ -105,6 +133,29 @@ public class CareerRegistryTests
             Assert.Equal(ja.PayoutCents, jb.PayoutCents);
             Assert.NotEqual(ja.Origin, ja.Destination);        // distinct station pair by construction
             Assert.Equal(ja.CarCount * 100_00L, ja.PayoutCents);
+        }
+    }
+
+    [Fact]
+    public void Route_constrained_specs_generate_real_routes_with_distance_payouts()
+    {
+        var config = Config();
+        config.JobTypes = new[]
+        {
+            new JobTypeSpec("FH", "steel", 100_00, 2, 4,
+                origins: new[] { "SM" }, destinations: new[] { "GF" }, payoutPerCarKmCents: 10_00),
+        };
+        config.StationDistancesKm = new Dictionary<string, float> { [CareerConfig.DistanceKey("SM", "GF")] = 30f };
+        var (career, _) = Fresh(config);
+        career.Tick();
+
+        Assert.Equal(4, career.Jobs.Count);
+        foreach (JobRecord job in career.Jobs.Values)
+        {
+            Assert.Equal("SM", job.Def.Origin);                // the spec's route, not a uniform pair
+            Assert.Equal("GF", job.Def.Destination);
+            long perCar = 100_00 + 30 * 10_00;                 // flat + 30 km distance term
+            Assert.Equal(perCar * job.Def.CarCount, job.Def.PayoutCents);
         }
     }
 
@@ -277,5 +328,65 @@ public class CareerRegistryTests
         Assert.StartsWith("insufficient funds", reason);
         Assert.Equal(100_00, broke.BalanceFor("carol"));
         Assert.Equal(0, broke.Ledger.TotalBurned);
+    }
+
+    [Fact]
+    public void External_grant_is_idempotent_charge_free_and_catalog_agnostic()
+    {
+        var (career, _) = Fresh();
+        career.Connect("alice", "Alice");
+
+        // "de2" is not in the price catalog — the game is the authority on what exists (D14).
+        Assert.True(career.TryGrantExternal("alice", "de2", out bool newlyGranted, out string? reason), reason);
+        Assert.True(newlyGranted);
+        Assert.Contains("de2", career.LicensesFor("alice"));
+        Assert.Equal(500_00, career.BalanceFor("alice")); // no ledger charge rides with the grant
+        Assert.Equal(0, career.Ledger.TotalBurned);
+
+        // The echo of our own server-side grant coming back around must be a success no-op.
+        Assert.True(career.TryGrantExternal("alice", "de2", out newlyGranted, out _));
+        Assert.False(newlyGranted);
+
+        Assert.False(career.TryGrantExternal("ghost", "de2", out _, out reason));
+        Assert.Equal("no profile", reason);
+        Assert.False(career.TryGrantExternal("alice", "", out _, out reason));
+        Assert.Equal("empty license id", reason);
+        Assert.True(career.Ledger.ConservationHolds);
+    }
+
+    [Fact]
+    public void External_fee_burns_through_the_policy_wallet_and_refuses_overdraft()
+    {
+        var (career, _) = Fresh();
+        career.Connect("alice", "Alice");
+
+        Assert.True(career.TryChargeExternalFee("alice", 150_00, out string? reason), reason);
+        Assert.Equal(350_00, career.BalanceFor("alice"));
+        Assert.Equal(150_00, career.Ledger.TotalBurned);
+        Assert.True(career.Ledger.ConservationHolds);
+
+        Assert.False(career.TryChargeExternalFee("alice", 999_00, out reason));
+        Assert.StartsWith("insufficient funds", reason);
+        Assert.Equal(350_00, career.BalanceFor("alice"));
+
+        Assert.False(career.TryChargeExternalFee("alice", 0, out reason));
+        Assert.Equal("fee must be positive", reason);
+        Assert.False(career.TryChargeExternalFee("ghost", 100, out reason));
+        Assert.Equal("no profile", reason);
+    }
+
+    [Fact]
+    public void Shared_preset_routes_external_grants_and_fees_to_the_shared_scope()
+    {
+        var (career, _) = Fresh(Config(ProgressionPreset.SharedCareer));
+        career.Connect("alice", "Alice");
+        career.Connect("bob", "Bob");
+
+        Assert.True(career.TryGrantExternal("alice", "de2", out _, out _));
+        Assert.Contains("de2", career.LicensesFor("bob"));    // shared set: everyone holds it
+
+        Assert.True(career.TryChargeExternalFee("alice", 100_00, out _));
+        Assert.Equal(400_00, career.BalanceFor("bob"));       // the one shared wallet paid
+        Assert.True(career.Ledger.ConservationHolds);
     }
 }

@@ -131,6 +131,30 @@ public enum MessageType : byte
     EconomyEvent = 38,
 
     /// <summary>server → requester: a career proposal was refused, with the exact reason (unlike
-    /// train proposals, a refusal here is first-class UX — "missing license: hazmat").</summary>
+    /// train proposals, a refusal here is first-class UX — "missing license: hazmat") and the job
+    /// id it concerned (0 = none), so an optimistic native claim can roll itself back (D13).</summary>
     CareerRejected = 39,
+
+    // ── M3.5 (D13): host-native job capture. In host-embedded mode the game's own generator runs
+    // on the host and the results are mirrored into the server career; the deterministic core
+    // generator remains the dedicated server's source. ──
+
+    /// <summary>world source → server: a game-generated job exists; register it on the board.</summary>
+    JobRegister = 40,
+
+    /// <summary>world source → server: an unclaimed game job expired natively; drop it.</summary>
+    JobRetract = 41,
+
+    // ── D14: native economy unification. On the host, native money is a live VIEW of the LocoMP
+    // wallet and the game's own career manager is the shop: native license grants and finalized
+    // register purchases are mirrored into the policy layer instead of running beside it. ──
+
+    /// <summary>world source → server: the game granted a license natively (career manager);
+    /// mirror it into the policy scope. No ledger charge rides with the grant — the money side
+    /// arrives separately as <see cref="FeeExternal"/> from the register that took the payment.</summary>
+    LicenseGrantExternal = 42,
+
+    /// <summary>world source → server: a native register finalized a purchase against the mirrored
+    /// wallet (license, fee, shop); burn the amount from the sender's policy wallet.</summary>
+    FeeExternal = 43,
 }

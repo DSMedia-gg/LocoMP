@@ -35,7 +35,8 @@ public sealed class JobTaskDef
 public sealed class JobDef
 {
     public JobDef(int id, string jobType, string origin, string destination, string cargoKind,
-        int carCount, long payoutCents, IReadOnlyList<string> requiredLicenses, IReadOnlyList<JobTaskDef> tasks)
+        int carCount, long payoutCents, IReadOnlyList<string> requiredLicenses, IReadOnlyList<JobTaskDef> tasks,
+        string gameId = "")
     {
         if (carCount < 1) throw new ArgumentOutOfRangeException(nameof(carCount));
         if (payoutCents < 0) throw new ArgumentOutOfRangeException(nameof(payoutCents));
@@ -49,6 +50,7 @@ public sealed class JobDef
         PayoutCents = payoutCents;
         RequiredLicenses = requiredLicenses ?? throw new ArgumentNullException(nameof(requiredLicenses));
         Tasks = tasks;
+        GameId = gameId ?? string.Empty;
     }
 
     /// <summary>Server-assigned job id, unique for the world (persists across restarts).</summary>
@@ -68,6 +70,10 @@ public sealed class JobDef
 
     /// <summary>Ordered steps; the claimant reports each in sequence.</summary>
     public IReadOnlyList<JobTaskDef> Tasks { get; }
+
+    /// <summary>The game's own job id ("SM-FH-04") for host-captured jobs (D13) — the key the
+    /// Shim maps native booklets/validation onto. Empty for core-generated jobs.</summary>
+    public string GameId { get; }
 
     public override string ToString() => $"job {Id} {JobType} {Origin}→{Destination} ({CarCount}× {CargoKind})";
 }

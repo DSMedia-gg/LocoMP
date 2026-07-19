@@ -91,20 +91,24 @@ public sealed class CareerRegistry
                 if (!_sharedGrantIssued)
                 {
                     Ledger.Mint(ProgressionPolicy.SharedAccount, _config.StartingBalanceCents);
-                    foreach (string lic in _config.StartingLicenses) _sharedLicenses.Add(lic);
                     _sharedGrantIssued = true;
                 }
             }
             else
             {
                 Ledger.Mint(playerKey, _config.StartingBalanceCents);
-                foreach (string lic in _config.StartingLicenses) profile.Licenses.Add(lic);
             }
         }
         else
         {
             profile.Name = name;
         }
+
+        // Starting licenses are a FLOOR applied on every connect (idempotent — the scope is a
+        // set), not a one-time grant: a config that gains a baseline license later must not
+        // strand existing profiles, and saves from before a baseline change heal on next join.
+        ICollection<string> scope = Policy.LicensesShared ? _sharedLicenses : profile.Licenses;
+        foreach (string lic in _config.StartingLicenses) scope.Add(lic);
 
         _online.Add(playerKey);
         return profile;
@@ -250,6 +254,50 @@ public sealed class CareerRegistry
         return true;
     }
 
+    /// <summary>
+    /// Admit an externally generated job (D13 host-capture: the world source mirrors the game's
+    /// own generated jobs onto the board). The server assigns the id — the proposal's is ignored —
+    /// and the game's job id is deduped so a re-registration after a reload can't double a job.
+    /// </summary>
+    public bool TryRegisterExternal(JobDef proposal, out JobRecord? job, out string? reason)
+    {
+        job = null;
+        if (!_config.AcceptExternalJobs) { reason = "external jobs are not accepted here"; return false; }
+        if (proposal.GameId.Length == 0) { reason = "external job has no game id"; return false; }
+        foreach (JobRecord existing in _jobs.Values)
+        {
+            if (existing.Def.GameId == proposal.GameId)
+            {
+                reason = $"game job {proposal.GameId} already registered";
+                return false;
+            }
+        }
+
+        var def = new JobDef(_nextJobId++, proposal.JobType, proposal.Origin, proposal.Destination,
+            proposal.CargoKind, proposal.CarCount, proposal.PayoutCents, proposal.RequiredLicenses,
+            proposal.Tasks, proposal.GameId);
+        var record = new JobRecord(def);
+        _jobs[def.Id] = record;
+        job = record;
+        reason = null;
+        return true;
+    }
+
+    /// <summary>Drop an unclaimed external job whose native counterpart expired. A claimed job is
+    /// never retracted out from under its claimant — the refusal tells the world source so.</summary>
+    public bool TryRetract(int jobId, out JobRecord? job, out string? reason)
+    {
+        job = null;
+        if (!_jobs.TryGetValue(jobId, out JobRecord? record)) { reason = $"unknown job {jobId}"; return false; }
+        if (record.State != JobLifecycle.Available) { reason = $"job {jobId} is not available"; return false; }
+
+        record.State = JobLifecycle.Expired;
+        _jobs.Remove(jobId);
+        job = record;
+        reason = null;
+        return true;
+    }
+
     /// <summary>Buy a license: the fee is burned from the policy-routed wallet and the license
     /// lands in the policy-routed scope (per-player profile or the shared set).</summary>
     public bool TryPurchaseLicense(string playerKey, string licenseId, out long priceCents, out string? reason)
@@ -265,6 +313,39 @@ public sealed class CareerRegistry
         scope.Add(licenseId);
         priceCents = price;
         return true;
+    }
+
+    /// <summary>
+    /// Mirror a NATIVE license grant (D14): the license lands in the policy scope with NO ledger
+    /// charge — the native register's payment arrives separately as an external fee against the
+    /// mirrored wallet, so charging here would bill twice. Idempotent: an already-owned license is
+    /// a success no-op (<paramref name="newlyGranted"/> false) so grant echoes can't loop. Ids the
+    /// price catalog doesn't know are accepted — the game is the authority on what exists.
+    /// </summary>
+    public bool TryGrantExternal(string playerKey, string licenseId, out bool newlyGranted, out string? reason)
+    {
+        newlyGranted = false;
+        if (licenseId.Length == 0) { reason = "empty license id"; return false; }
+        if (!_profiles.TryGetValue(playerKey, out PlayerProfile? profile)) { reason = "no profile"; return false; }
+
+        ICollection<string> scope = Policy.LicensesShared ? _sharedLicenses : profile.Licenses;
+        if (!scope.Contains(licenseId))
+        {
+            scope.Add(licenseId);
+            newlyGranted = true;
+        }
+        reason = null;
+        return true;
+    }
+
+    /// <summary>Burn a finalized native purchase from the policy wallet (D14). The amount is the
+    /// register's total — only overdraft is re-validated here, because the native UI gated
+    /// affordability against the SAME balance (the mirror). A refusal means the mirror drifted.</summary>
+    public bool TryChargeExternalFee(string playerKey, long amountCents, out string? reason)
+    {
+        if (amountCents <= 0) { reason = "fee must be positive"; return false; }
+        if (!_profiles.ContainsKey(playerKey)) { reason = "no profile"; return false; }
+        return Ledger.TryBurn(Policy.WalletAccountFor(playerKey), amountCents, out reason);
     }
 
     // ── persistence (v1) ──
@@ -362,12 +443,22 @@ public sealed class CareerRegistry
     private JobRecord GenerateJob()
     {
         JobTypeSpec spec = _config.JobTypes[NextInt(_config.JobTypes.Count)];
-        int originIdx = NextInt(_config.Stations.Count);
-        int destIdx = NextInt(_config.Stations.Count - 1);
-        if (destIdx >= originIdx) destIdx++; // distinct destination, uniform over the rest
-        string origin = _config.Stations[originIdx];
-        string destination = _config.Stations[destIdx];
+
+        IReadOnlyList<string> originPool = spec.Origins.Count > 0 ? spec.Origins : _config.Stations;
+        string origin = originPool[NextInt(originPool.Count)];
+
+        // Destination: the spec's route list when it has one, minus the origin; a spec whose only
+        // destination IS the origin falls back to the full map (stations >= 2 guarantees a pick).
+        List<string> destPool = (spec.Destinations.Count > 0 ? spec.Destinations : _config.Stations)
+            .Where(s => !string.Equals(s, origin, StringComparison.Ordinal)).ToList();
+        if (destPool.Count == 0)
+        {
+            destPool = _config.Stations.Where(s => !string.Equals(s, origin, StringComparison.Ordinal)).ToList();
+        }
+        string destination = destPool[NextInt(destPool.Count)];
+
         int cars = spec.MinCars + NextInt(spec.MaxCars - spec.MinCars + 1);
+        long payoutPerCar = spec.PayoutPerCarCents + (long)(spec.PayoutPerCarKmCents * DistanceKm(origin, destination));
 
         var tasks = new[]
         {
@@ -376,8 +467,15 @@ public sealed class CareerRegistry
             new JobTaskDef(JobTaskKind.Unload, destination),
         };
         var def = new JobDef(_nextJobId++, spec.JobType, origin, destination, spec.CargoKind, cars,
-            spec.PayoutPerCarCents * cars, spec.RequiredLicenses, tasks);
+            payoutPerCar * cars, spec.RequiredLicenses, tasks);
         return new JobRecord(def);
+    }
+
+    private float DistanceKm(string a, string b)
+    {
+        if (_config.StationDistancesKm.TryGetValue(CareerConfig.DistanceKey(a, b), out float km)) return km;
+        if (_config.StationDistancesKm.TryGetValue(CareerConfig.DistanceKey(b, a), out km)) return km;
+        return 0f;
     }
 
     private static void Release(JobRecord job, CareerTick tick)

@@ -18,8 +18,10 @@ namespace LocoMP.Core.Persistence;
 /// </summary>
 public static class SaveCodec
 {
-    /// <summary>Bump on ANY incompatible layout change; the reader refuses newer schemas.</summary>
-    public const uint SchemaVersion = 1;
+    /// <summary>Bump on ANY incompatible layout change; the reader refuses other schemas.</summary>
+    /// <remarks>v2: JobDef gained GameId (D13 host-capture). Pre-release, so no v1 migration —
+    /// a v1 file is refused cleanly and the host starts fresh (backups keep the old bytes).</remarks>
+    public const uint SchemaVersion = 2;
 
     private const int MaxCollection = 100_000; // hygiene cap for any one saved collection
 

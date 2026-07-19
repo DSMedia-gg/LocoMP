@@ -60,6 +60,7 @@ public class CareerSessionTests
 
         Assert.Equal(ProgressionPreset.PerPlayer, a.Career.Preset);
         Assert.Equal(500_00, a.Career.BalanceCents);
+        Assert.Equal(150_00, a.Career.LicenseCatalog["hazmat"]); // the shop travels with the burst
         Assert.Equal(3, a.Career.Jobs.Count);                 // TargetAvailableJobs, generated on first poll
         Assert.Equal(3, b.Career.Jobs.Count);
         Assert.All(a.Career.Jobs.Values, j => Assert.Equal(JobLifecycle.Available, j.State));
@@ -132,12 +133,14 @@ public class CareerSessionTests
         var (_, _, server, a, b) = Session();
 
         string? reason = null;
-        a.Career.RequestRejected += r => reason = r;
+        int rejectedJobId = 0;
+        a.Career.RequestRejected += (r, jobId) => { reason = r; rejectedJobId = jobId; };
 
         a.Career.ClaimJob(9999);
         Pump(server, new[] { a, b });
 
         Assert.Equal("claim: unknown job 9999", reason);
+        Assert.Equal(9999, rejectedJobId);                    // the id rides along for native rollback
     }
 
     [Fact]
@@ -203,6 +206,96 @@ public class CareerSessionTests
     }
 
     [Fact]
+    public void External_jobs_register_from_the_world_source_only_and_retract_cleanly()
+    {
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        CareerConfig career = Career();
+        career.JobTypes = System.Array.Empty<JobTypeSpec>();  // D13 host mode: no core generation
+        career.AcceptExternalJobs = true;
+        var server = new NetServer(hub.Server, new ServerConfig(Identity, career: career), clock);
+        var host = new NetClient(hub.Connect(out _), Identity, "Host", clock, playerKey: "key-host");
+        Pump(server, new[] { host });                          // first admitted = world source
+        var b = new NetClient(hub.Connect(out _), Identity, "Bob", clock, playerKey: "key-bob");
+        Pump(server, new[] { host, b });
+
+        JobDef proposal = new(0, "Transport", "SM", "GF", "steel", 3, 4_000_00,
+            System.Array.Empty<string>(), new[] { new JobTaskDef(JobTaskKind.Haul, "GF") }, gameId: "SM-FH-04");
+        host.Career.RegisterExternalJob(proposal);
+        Pump(server, new[] { host, b });
+
+        ClientJob mirrored = b.Career.Jobs.Values.Single();
+        Assert.Equal("SM-FH-04", mirrored.Def.GameId);         // correlation key for native booklets
+        Assert.Equal(4_000_00, mirrored.Def.PayoutCents);
+        int serverId = mirrored.Def.Id;
+
+        // Duplicate game ids and non-world-source registrations are refused.
+        string? reason = null;
+        host.Career.RequestRejected += (r, _) => reason = r;
+        host.Career.RegisterExternalJob(proposal);
+        Pump(server, new[] { host, b });
+        Assert.Equal("register: game job SM-FH-04 already registered", reason);
+        b.Career.RegisterExternalJob(new JobDef(0, "T", "A", "B", "c", 1, 1,
+            System.Array.Empty<string>(), new[] { new JobTaskDef(JobTaskKind.Haul, "B") }, gameId: "X-1"));
+        Pump(server, new[] { host, b });
+        Assert.Single(server.Career.Registry.Jobs);
+
+        // Native expiry retracts an unclaimed job everywhere; a claimed one is protected.
+        b.Career.ClaimJob(serverId);
+        Pump(server, new[] { host, b });
+        host.Career.RetractJob(serverId);
+        Pump(server, new[] { host, b });
+        Assert.Equal(JobLifecycle.Claimed, server.Career.Registry.Jobs[serverId].State);
+
+        b.Career.AbandonJob(serverId);
+        Pump(server, new[] { host, b });
+        host.Career.RetractJob(serverId);
+        Pump(server, new[] { host, b });
+        Assert.Empty(server.Career.Registry.Jobs);
+        Assert.Empty(b.Career.Jobs);                           // Expired jobs leave every mirror
+    }
+
+    [Fact]
+    public void Task_reports_are_proximity_gated_against_the_reporters_own_pose()
+    {
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        CareerConfig career = Career();
+        career.TaskProximityRadiusM = 500f;
+        career.StationLocations = new Dictionary<string, LocoMP.Core.Career.StationLocation>
+        {
+            ["SM"] = new(0f, 100f, 0f),
+            ["GF"] = new(10_000f, 100f, 0f),
+            ["HB"] = new(0f, 100f, 10_000f),
+        };
+        var server = new NetServer(hub.Server, new ServerConfig(Identity, career: career), clock);
+        var a = new NetClient(hub.Connect(out _), Identity, "Alice", clock, playerKey: "key-alice");
+        Pump(server, new[] { a });
+
+        string? rejection = null;
+        a.Career.RequestRejected += (r, _) => rejection = r;
+        int jobId = a.Career.Jobs.Keys.First();
+        string origin = a.Career.Jobs[jobId].Def.Origin;
+        LocoMP.Core.Career.StationLocation at = career.StationLocations[origin];
+        a.Career.ClaimJob(jobId);
+        Pump(server, new[] { a });
+
+        // Standing at the world origin (no pose sent yet ⇒ Identity), every station is >500 m away.
+        a.Career.ReportTask(jobId, 0);
+        Pump(server, new[] { a });
+        Assert.NotNull(rejection);
+        Assert.StartsWith($"task: you must be at {origin}", rejection);
+        Assert.Equal(0, a.Career.Jobs[jobId].NextTaskIndex);
+
+        // Walk to the origin station (height differences don't count — the check is horizontal).
+        a.SendPose(new LocoMP.Core.Presence.Pose(at.X + 100f, 300f, at.Z, 0f, 0f, 0f, 1f));
+        Pump(server, new[] { a });
+        a.Career.ReportTask(jobId, 0);
+        Pump(server, new[] { a });
+        Assert.Equal(1, a.Career.Jobs[jobId].NextTaskIndex);   // Load accepted at the origin
+    }
+
+    [Fact]
     public void Grace_expiry_releases_the_claim_for_everyone()
     {
         var (_, clock, server, a, b) = Session();
@@ -238,5 +331,45 @@ public class CareerSessionTests
         var a2 = new NetClient(hub.Connect(out _), Identity, "Alice", clock, playerKey: "key-alice");
         Pump(server, new[] { a2, b });
         Assert.Equal(a2.LocalId, a2.Career.Jobs[jobId].ClaimantPeerId);
+    }
+
+    [Fact]
+    public void World_source_external_grant_and_fee_commit_and_mirror_back()
+    {
+        var (_, _, server, a, b) = Session(); // a joined first — it is the world source
+
+        var events = new List<(EconomyEventKind kind, long cents, string reason)>();
+        a.Career.EconomyEventReceived += (kind, cents, reason) => events.Add((kind, cents, reason));
+
+        a.Career.GrantExternalLicense("de2");
+        Pump(server, new[] { a, b });
+        Assert.Contains("de2", a.Career.Licenses);
+        Assert.Equal(500_00, a.Career.BalanceCents);          // grants never charge (D14)
+
+        a.Career.ReportExternalFee(150_00, "career manager");
+        Pump(server, new[] { a, b });
+        Assert.Equal(350_00, a.Career.BalanceCents);
+        Assert.Equal(500_00, b.Career.BalanceCents);          // per-player: only the buyer paid
+        Assert.Contains((EconomyEventKind.ExternalFee, 150_00, "career manager"), events);
+        Assert.True(server.Career.Registry.Ledger.ConservationHolds);
+    }
+
+    [Fact]
+    public void Non_world_source_external_grant_and_fee_are_refused()
+    {
+        var (_, _, server, a, b) = Session();
+
+        var rejections = new List<string>();
+        b.Career.RequestRejected += (reason, _) => rejections.Add(reason);
+
+        b.Career.GrantExternalLicense("de2");
+        b.Career.ReportExternalFee(100_00, "shop");
+        Pump(server, new[] { a, b });
+
+        Assert.Contains("grant: only the world source mirrors native grants", rejections);
+        Assert.Contains("fee: only the world source reports native fees", rejections);
+        Assert.DoesNotContain("de2", b.Career.Licenses);
+        Assert.Equal(500_00, b.Career.BalanceCents);
+        Assert.True(server.Career.Registry.Ledger.ConservationHolds);
     }
 }
