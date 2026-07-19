@@ -38,6 +38,7 @@ public sealed class BotOptions
     public string[] Liveries = Array.Empty<string>(); // real livery ids for the consist (host logs a hint)
     public string CargoId = "";         // cargo id loaded onto the consist's wagons
     public float CargoAmount = 0f;      // 0 = the car's capacity
+    public int DerailCar = 0;           // 1-based consist car streamed as DERAILED at --at (0 = none)
 
     // M3.5c remote-parity rig: exercise career + cab-input flows as the "remote player".
     public bool ClaimFirst;             // claim the first available job after the career burst
@@ -101,6 +102,7 @@ public sealed class BotOptions
                         if (parts.Length > 1) o.CargoAmount = float.Parse(parts[1], CultureInfo.InvariantCulture);
                         break;
                     }
+                    case "--derail-car": o.DerailCar = Math.Max(0, int.Parse(Next(), CultureInfo.InvariantCulture)); break;
                     case "--claim-first": o.ClaimFirst = true; break;
                     case "--report-interval": o.ReportIntervalSeconds = double.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--abandon-after": o.AbandonAfterSeconds = double.Parse(Next(), CultureInfo.InvariantCulture); break;
@@ -176,6 +178,8 @@ Usage: LocoMP.Bot [options]
                          paste the host log's 'bot livery hint' so the consist spawns
                          as REAL cars in the game instead of ghost boxes
   --cargo <id[:amt]>     load this cargo onto the consist's wagons (amt default: full)
+  --derail-car <n>       stream consist car n (1-based) as DERAILED at the --at point —
+                         a joining client then exercises the null-track spawn path
   --claim-first          claim the first available board job (the remote-claim rig)
   --report-interval <s>  retry 'Report delivery' on the held claim every N seconds —
                          refusals log until the host world says the cars are delivered

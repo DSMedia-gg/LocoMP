@@ -45,6 +45,8 @@ public sealed class SessionController
     private double _timeAccum;
     private string _lastError = "";
     private bool _worldUnloaded;
+    private double _lostCountdown; // > 0: the server link dropped; grace before declaring it dead
+    private bool _sessionLost;     // declared dead — panel shows the leave-to-restore prompt
 
     // M3 career state
     private string? _playerKey;
@@ -124,6 +126,25 @@ public sealed class SessionController
             Leave();
             return;
         }
+        if (_lostCountdown > 0 && _mode == Mode.Joined)
+        {
+            // A dropped link can self-heal (the transport re-handshakes after a load freeze —
+            // observed as id 2 → id 3), so give it a moment before declaring the session dead.
+            // Deliberately NO auto-Leave: Leave() re-enables native saving, and doing that
+            // unattended in a session-mangled world is the exact leak SaveSuppressor blocks.
+            if (_client is { Joined: true })
+            {
+                _lostCountdown = 0;
+                _log("[session] connection recovered — session continues");
+            }
+            else if ((_lostCountdown -= dt) <= 0)
+            {
+                _sessionLost = true;
+                _lastError = "session lost — the host is gone. Leave, then reload your save.";
+                _log("[session] connection to the host lost — the session is over. Press Leave to " +
+                     "restore your world, then reload your save (native saving stays blocked until you leave).");
+            }
+        }
         _avatars.Tick((float)dt);
     }
 
@@ -164,8 +185,11 @@ public sealed class SessionController
             case Mode.Hosting:
             case Mode.Joined:
                 string role = _mode == Mode.Hosting ? $"Hosting on UDP {_portText}" : $"Joined {_address}:{_portText}";
-                GUILayout.Label($"{role} — {(_client is { Joined: true } ? "connected" : "connecting…")}" +
-                                (_mode == Mode.Hosting && _server != null ? $" — {_server.PlayerCount} player(s)" : ""));
+                if (_sessionLost)
+                    GUILayout.Label("⚠ SESSION LOST — the host is gone. Leave to restore your world, then reload your save.");
+                else
+                    GUILayout.Label($"{role} — {(_client is { Joined: true } ? "connected" : "connecting…")}" +
+                                    (_mode == Mode.Hosting && _server != null ? $" — {_server.PlayerCount} player(s)" : ""));
 
                 if (_client != null)
                 {
@@ -435,6 +459,9 @@ public sealed class SessionController
             _password.Length > 0 ? _password : null, _playerKey);
         client.Accepted += id => _log($"[session] joined as id {id} (server offset {client.ServerTimeOffsetMs} ms)");
         client.Rejected += reason => { _lastError = reason; _log($"[session] REJECTED: {reason}"); };
+        // Only meaningful for JOINED sessions: the host's own loopback link can't drop. The
+        // countdown (not an immediate declare) lets a transport re-handshake absorb load freezes.
+        client.Disconnected += () => { if (_mode == Mode.Joined && _lostCountdown <= 0 && !_sessionLost) _lostCountdown = 3.0; };
         client.PlayerJoined += p => { _avatars.AddOrUpdate(p.Id, p.Name, p.Pose); _log($"[session] player joined: {p.Name} (id {p.Id})"); };
         client.PlayerLeft += id => { _avatars.Remove(id); _log($"[session] player left: id {id}"); };
         client.PlayerMoved += (id, pose) => _avatars.Move(id, pose);
@@ -500,6 +527,8 @@ public sealed class SessionController
         _serverTransport = null;
         _hub = null;
         _avatars.Clear();
+        _sessionLost = false;
+        _lostCountdown = 0;
         _mode = Mode.Idle;
     }
 

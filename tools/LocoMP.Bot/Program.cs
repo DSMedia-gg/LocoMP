@@ -72,8 +72,12 @@ for (int i = 0; i < opts.Count; i++)
     {
         // Multiple ghosts share a start hint; stagger them a seed apart so they diverge at junctions.
         uint? startEdge = opts.StartEdge >= 0 ? (uint)opts.StartEdge : (uint?)null;
+        // The derailed car poses a few metres from the --at anchor: visible, near the player
+        // (so the set materializes), and never inside them.
+        var derailPose = new Pose(opts.Center.Px + 6, opts.Center.Py, opts.Center.Pz + 6, 0f, 0f, 0f, 1f);
         driver = new ConsistDriver(world, opts.ConsistCars, opts.ConsistSpeed, opts.Seed + i, name, Console.WriteLine,
-            startEdge, opts.Liveries, opts.CargoId, opts.CargoAmount);
+            startEdge, opts.Liveries, opts.CargoId, opts.CargoAmount,
+            derailCarIndex: opts.DerailCar - 1, derailPose: derailPose);
     }
     RemoteActor? actor = opts.ClaimFirst || opts.Drive || opts.AbandonAfterSeconds > 0
         ? new RemoteActor(opts, name, Console.WriteLine)
