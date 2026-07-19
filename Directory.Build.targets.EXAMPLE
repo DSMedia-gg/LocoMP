@@ -72,7 +72,11 @@
       <HintPath>$(DvManaged)\net.smkd.vector3d.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="DV.ThingTypes">
+    <!-- D14 wallet mirror: Inventory.PlayerMoney is the native money the LocoMP wallet projects onto. -->
+    <Reference Include="DV.Inventory">
+      <HintPath>$(DvManaged)\DV.Inventory.dll</HintPath>
+      <Private>false</Private>
+    </Reference>    <Reference Include="DV.ThingTypes">
       <HintPath>$(DvManaged)\DV.ThingTypes.dll</HintPath>
       <Private>false</Private>
     </Reference>
