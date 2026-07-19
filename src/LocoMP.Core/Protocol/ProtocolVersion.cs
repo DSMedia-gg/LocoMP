@@ -13,6 +13,9 @@ public static class ProtocolVersion
     /// is a deliberate incompatible bump (hard rule 6).
     /// v3 (M3): career — JoinRequest gains the stable player key (profiles/reconnect need identity
     /// that outlives peer ids), career messages (MessageType 29–38). The JoinRequest format change
-    /// makes this incompatible by construction.</remarks>
-    public const int Current = 3;
+    /// makes this incompatible by construction.
+    /// v4 (M3.5b): real-car replication — CarDef carries world identity (game car id/guid) and
+    /// registration cargo, so remote clients spawn REAL cars instead of ghosts. Every def-bearing
+    /// message changes shape, so this is incompatible by construction.</remarks>
+    public const int Current = 4;
 }

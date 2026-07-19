@@ -13,9 +13,9 @@ public class TrainCodecTests
     {
         var def = new TrainsetDef(7, epoch: 42, ownerId: 3, new[]
         {
-            new CarDef(10, "LocoDE6"),
+            new CarDef(10, "LocoDE6", gameId: "L-001", gameGuid: "guid-loco"),
             new CarDef(11, "FlatbedEmpty", derailed: true),
-            new CarDef(12, "Boxcar"),
+            new CarDef(12, "Boxcar", gameId: "G-123", gameGuid: "guid-box", cargoId: "Coal", cargoAmount: 4.5f),
         });
 
         var w = new PacketWriter();
@@ -31,7 +31,28 @@ public class TrainCodecTests
             Assert.Equal(def.Cars[i].Id, read.Cars[i].Id);
             Assert.Equal(def.Cars[i].Kind, read.Cars[i].Kind);
             Assert.Equal(def.Cars[i].Derailed, read.Cars[i].Derailed);
+            Assert.Equal(def.Cars[i].GameId, read.Cars[i].GameId);
+            Assert.Equal(def.Cars[i].GameGuid, read.Cars[i].GameGuid);
+            Assert.Equal(def.Cars[i].CargoId, read.Cars[i].CargoId);
+            Assert.Equal(def.Cars[i].CargoAmount, read.Cars[i].CargoAmount);
         }
+    }
+
+    [Fact]
+    public void Derail_flag_copy_preserves_world_identity_and_cargo()
+    {
+        // Derail/rerail commits copy defs via WithDerailed — the identity a booklet names the car
+        // by (and its cargo) must survive the copy or a derail would orphan the car from its job.
+        var car = new CarDef(5, "Boxcar", derailed: false,
+            gameId: "G-777", gameGuid: "guid-7", cargoId: "IronOre", cargoAmount: 12f);
+
+        CarDef derailed = car.WithDerailed(true);
+
+        Assert.True(derailed.Derailed);
+        Assert.Equal(car.GameId, derailed.GameId);
+        Assert.Equal(car.GameGuid, derailed.GameGuid);
+        Assert.Equal(car.CargoId, derailed.CargoId);
+        Assert.Equal(car.CargoAmount, derailed.CargoAmount);
     }
 
     [Fact]
