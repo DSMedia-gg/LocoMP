@@ -5,6 +5,42 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-19 — Debt/polish pass: the ledger gets swept 🧹
+
+Cody's pick for the burst (over starting M4 or M3.2): stop and pay down the banked debts while
+they're cheap. Every "banked/watch/unaudited" line across STATE, SESSION, and 08-RISKS went into
+one ledger; everything solo-closable got closed the same day. 125 → 129 tests ×3, full sln 0
+warnings, uncommitted.
+
+**The audit that closed with zero code**: does native `AbandonJob` fine the host? Decompiled
+B99.7 (ilspycmd, `scratch/decomp/`) says **DV has no flat abandonment fine at all** —
+`JobDebtController` stages only the job cars' ACCRUED service costs (damage/fuel deltas, only if
+> 0), identically for complete/abandon/expire. So the optimistic rollback seconds after a take
+stages nothing, and a released remote claim stages the haul's real wear onto the host's career
+manager — whose payment already rides the D14 `Buy` hook into the ledger as an external fee.
+The scary-sounding debt was already fully plumbed; it just needed proving.
+
+**The kindness fix**: a dead session now SAYS SO. `NetClient.Disconnected` (post-admission drops
+only) → after a 3 s recovery window the panel flips to "SESSION LOST — Leave to restore your
+world, then reload your save". No auto-Leave, deliberately: leaving re-enables native saving,
+and doing that unattended in a session-mangled world is the exact leak SaveSuppressor exists to
+block. The mid-load eviction from the M3.5b runs also got its root cause fixed — LiteNetLib's
+5 s default disconnect timeout vs DV's load freezes; now 15 s both roles.
+
+**The rig upgrades**: the listen-mode bot now EXECUTES remote couple/uncouple requests on its
+consists (propose → server transaction → everyone converges) and adopts split/merge products by
+lead-car id instead of re-registering a duplicate train — so the owner-side half of chain
+interception, previously "friend session only", live-fires on one PC. And `--derail-car <n>`
+streams a consist car off-rail at the `--at` anchor, making the never-fired null-track
+SpawnLoadedCar leg testable on demand (RealCarSync announces it loudly; the ghost fallback is
+its net). One debt re-audited and RETIRED rather than fixed: CabControlSync's "assumes controls
+exist" was already null-safe end to end — the real gap was silent input drops, now logged once.
+
+Docs: 08-RISKS gains **R16** (host-presence scoping — remote claims/consists follow the host's
+world lifecycle; dedicated server is the real fix), R8/R10 refreshed; 00 gains **O11** (guest
+progression on mature hosts) and **O12** (ratify the LMPS hand-rolled-codec deviation) — both
+Cody decisions. Smoke checklist for the next game session is banked in STATE.
+
 ## 2026-07-19 — M3.5c runs day: eight findings, three passes — a friend can now WORK in your world 💰
 
 The heaviest run cadence yet — one evening, eight live findings, every one root-caused and fixed

@@ -1,13 +1,59 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-19 (M3.5c VERIFIED IN-GAME — runs A/B/C ALL PASSED after 8 live findings
-fixed same-day; 125/125 ×3, full sln 0 warnings; uncommitted, commit+push on Cody's go) · This
+**Updated:** 2026-07-19 (debt/polish pass BUILT — session-lost UX, 15 s disconnect timeout,
+AbandonJob audit CLOSED, bot honors chain requests, `--derail-car` rig; 129/129 ×3, full sln
+0 warnings; uncommitted — everything through M3.5c is PUSHED, HEAD `852e121`) · This
 is the **implementation** memory (burst cadence, D8).
 The **planning corpus** lives one level up at `../` (00–09, INDEX, research/) — strategic, kept private.
 Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current milestone in `../07-ROADMAP.md`.
 
 ## Where things stand
 
+- **DEBT/POLISH PASS 2026-07-19 (Cody's pick over M4/M3.2 for this burst): BUILT, uncommitted.**
+  129/129 ×3, full sln 0 warnings. What closed:
+  - **Session-lost UX (the M3.5b known debt)**: `NetClient.Disconnected` (Core — fires only after
+    admission; failed joins stay Rejected-territory) → SessionController shows "SESSION LOST —
+    Leave to restore your world, then reload your save" after a 3 s recovery window (a link that
+    re-handshakes, e.g. the save-load-freeze eviction, continues silently with a log line).
+    Deliberately NO auto-Leave: Leave() re-enables native saving, and doing that unattended in a
+    session-mangled world is the exact leak SaveSuppressor blocks. Loopback server-endpoint
+    Dispose now drops all clients (matches LiteNetLib's disconnect-on-Stop) so the seam is
+    deterministically tested.
+  - **Disconnect timeout 5 s → 15 s** (LiteNetLibTransport, both roles): the mid-load eviction's
+    root cause was LiteNetLib's 5 s default vs DV's load freezes. A genuinely dead peer lingers
+    10 s longer — park-on-disconnect + career grace absorb that by design.
+  - **AbandonJob debt audit CLOSED — documentation only, no code change needed.** Decompiled
+    B99.7 (`scratch/decomp/`, ilspycmd): **DV has NO flat abandonment fine.**
+    `JobDebtController.OnJobCompletedAbandonedExpired` stages only ACCRUED car service costs
+    (damage/fuel deltas, and only if > 0) — identically for complete/abandon/expire. So the
+    optimistic rollback (abandon seconds after a take) stages nothing, and an external release
+    stages the haul's real wear onto the host's career manager, whose payment already rides the
+    WalletMirror `Buy` hook as `FeeExternal` (D14) — conservation holds, semantics match SP.
+    Bonus: `JobsManager.AbandonJob` THROWS on a job not in `currentJobs`; all three call sites
+    are state-guarded and RunNative-caught.
+  - **Bot honors remote couple/uncouple requests** (the "owner-side execution not one-PC-testable"
+    debt): the listen-mode bot now EXECUTES chain acts on its consists — request → ProposeUncouple/
+    ProposeCouple → server transaction → everyone converges — and **adopts split/merge products by
+    lead car id** instead of re-registering (which would have duplicated the train). The friend
+    session demotes from "only way to fire this" to "confirmation".
+  - **`--derail-car <n>`**: streams consist car n as OffRail at the `--at` anchor — the
+    derailed-at-registration (null-track SpawnLoadedCar) path is now firable solo. RealCarSync
+    logs loudly when that leg runs; the existing catch → ghost fallback is its safety net.
+  - **CabControlSync "controls exist" debt RE-AUDITED as already fixed**: FindControl was
+    null-safe and both apply paths caught; the real gap was a holder's input dropping SILENTLY —
+    now logged once per (car, control). VR verification itself stays R2.
+  - **Docs**: 08-RISKS — R8/R10 refreshed, **R16 added** (host-presence scoping in host-native
+    mode, from run-A finding №6); 00 — **O11** (guest progression on mature hosts) + **O12**
+    (ratify the LMPS deviation) recorded, both awaiting Cody.
+  - Tests 125 → **129** (session-loss ×2; chain-request round trip incl. product adoption +
+    re-merge with 0 stale discards; derail-car stream).
+  - **Smoke run (next game session, listen rig)**: (1) join the bot host, Ctrl+C the bot →
+    within ~15–20 s the panel flips to SESSION LOST, saving still blocked, Leave → reload →
+    SP save intact; (2) unhook a chain between two bot cars → the split now actually HAPPENS
+    (host-side log `remote uncouple request honored`), re-hook → merge; (3) re-run with
+    `--derail-car 2` → `spawning with DERAILED car(s)` log, car off-rail near you (ghost-box
+    fallback with a log line is also a pass — the path is guarded either way); (4) normal host
+    rig regression rides along.
 - **Milestone: M3 — Career: IN PROGRESS. M3.1 (game-free career core) BUILT + COMMITTED 2026-07-18,
   100/100 tests, full sln 0 warnings.** What exists now, all game-free (03 §11 posture — the whole
   economy fuzzes headless):
@@ -576,11 +622,27 @@ career" toggle or delete the .lmps to re-mint).
 - Staged payload in the game's `Mods/LocoMP/` = **2026-07-19 13:22 build** = the verified commit.
 
 ## Blockers
-- None. M3.5c verified in-game; awaiting Cody's go to commit + push. Then M3.2 (join phases —
-  deferrable) or onward to M4 proper (items/inventory — booklet materialization for remotes and
-  real warehouse ops for remote players land there).
+- None. The 2026-07-19 debt/polish pass is built, tested, and **STAGED 22:38** (game was not
+  running; stale UMM .cache files cleared). **Push authorized same evening (Cody) without
+  waiting on the smoke run** — the smoke checklist (Where things stand, top bullet) rides the
+  next game session alongside whatever burst comes next: M3.2 (join phases — deferrable) or M4
+  proper (items/inventory — booklet materialization for remotes and real warehouse ops land
+  there). O11/O12 in 00 await Cody's decisions (guest progression; LMPS ratification).
 
 ## Session log
+- **2026-07-19** — **DEBT/POLISH PASS built (Cody's pick for the burst; M4/M3.2 deferred).**
+  Swept every banked debt across STATE/SESSION/08-RISKS into a ledger, then closed the
+  solo-closable ones: session-lost prompt (NetClient.Disconnected + 3 s recovery window, no
+  auto-Leave — fail-safe preserved), disconnect timeout 15 s (root cause of the mid-load
+  eviction), AbandonJob audit (decompiled B99.7: NO flat abandon fine — only accrued car service
+  costs stage, identically for complete/abandon/expire; rollback-after-take stages zero; career-
+  manager debt payments already ride the D14 Buy hook), bot executes remote chain requests +
+  adopts transaction products by lead car (one-PC rig now fires the owner-side path),
+  `--derail-car` fires the null-track spawn leg on demand, input-drop once-logging in
+  CabControlSync (the "controls exist" debt was already guarded — re-audited, retired), Loopback
+  server-dispose now notifies clients (UDP parity). Docs: R16 host-presence scoping, R8/R10
+  refresh, O11 guest progression + O12 LMPS ratification for Cody. 125 → 129 tests ×3, full sln
+  0 warnings. Uncommitted; smoke checklist banked in Where-things-stand.
 - **2026-07-19** — **RUN C PASSED — M3.5c RUNS CLOSED.** Evidence, all with log lines and zero
   LocoMP exceptions: world handover (9 cars cleared, no post-clear spawn fights), real cars at
   60 m, cab entry → grant → `cab controls live … (13 controls)` → Cody DROVE the bot's train
