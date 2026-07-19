@@ -34,6 +34,10 @@ public sealed class BotOptions
     public double ConsistSpeed = 8;     // m/s ≈ 29 km/h, a sedate freight roll
     public string? WorldFile;           // extracted .lmpw; null = probe the usual spots
     public long StartEdge = -1;         // ghost start edge (host logs the nearest one); -1 = walker's pick
+    public bool Listen;                 // M3.5b: HOST the session (bot = server + world source)
+    public string[] Liveries = Array.Empty<string>(); // real livery ids for the consist (host logs a hint)
+    public string CargoId = "";         // cargo id loaded onto the consist's wagons
+    public float CargoAmount = 0f;      // 0 = the car's capacity
 
     public HandshakeRequest ToIdentity() => new(ProtocolVersion.Current, GameBuild, ModVersion, ModListHash);
 
@@ -79,6 +83,15 @@ public sealed class BotOptions
                     case "--consist-speed": o.ConsistSpeed = double.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--world": o.WorldFile = Next(); break;
                     case "--start-edge": o.StartEdge = long.Parse(Next(), CultureInfo.InvariantCulture); break;
+                    case "--listen": o.Listen = true; break;
+                    case "--livery": o.Liveries = Next().Split(',', StringSplitOptions.RemoveEmptyEntries); break;
+                    case "--cargo":
+                    {
+                        string[] parts = Next().Split(':');
+                        o.CargoId = parts[0];
+                        if (parts.Length > 1) o.CargoAmount = float.Parse(parts[1], CultureInfo.InvariantCulture);
+                        break;
+                    }
                     case "--help" or "-h" or "/?": PrintUsage(); return null;
                     default:
                         Console.Error.WriteLine($"Unknown option: {args[i]} (try --help)");
@@ -141,11 +154,19 @@ Usage: LocoMP.Bot [options]
                          'ghost-train hint' so it spawns near the player
   --world <path>         extracted .lmpw topology (default: LOCOMP_WORLD_FILE env,
                          then tests/data/world-*.lmpw upward from the working dir)
+  --listen               HOST the session instead of joining one (bot = server; join
+                         it from the game to test the CLIENT side on one PC)
+  --livery <a,b,c>       real livery ids for the consist (first = car 1, rest cycle) —
+                         paste the host log's 'bot livery hint' so the consist spawns
+                         as REAL cars in the game instead of ghost boxes
+  --cargo <id[:amt]>     load this cargo onto the consist's wagons (amt default: full)
 
 Examples:
   LocoMP.Bot --at 671,132,591                        one bot orbiting those coords
   LocoMP.Bot --count 8 --behavior wander --radius 30 eight wanderers (join/leave storm: add --churn 15)
   LocoMP.Bot --build WRONG                           verify the host's mismatch screen
-  LocoMP.Bot --consist 3 --at 671,132,591            a 3-car ghost train + an orbiting avatar");
+  LocoMP.Bot --consist 3 --at 671,132,591            a 3-car ghost train + an orbiting avatar
+  LocoMP.Bot --consist 3 --livery LocoDE2,Boxcar     the same train as REAL spawned cars
+  LocoMP.Bot --listen --consist 3 --livery ...       host a session; join from the game");
     }
 }

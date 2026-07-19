@@ -343,6 +343,9 @@ public sealed class SessionController
             _trains.WorldUnloaded += () => _worldUnloaded = true;
             JobGenSuppressor.Active = true;            // clients never generate either (02 §4)
             JobGenSuppressor.StopAll(_log);
+            // M3.5b: the joined world is session-modified (own cars cleared, host's spawned in) —
+            // native saves are blocked until Leave so it can't leak into the player's SP save.
+            SaveSuppressor.Active = true;
             _mode = Mode.Joined;
             _log($"[session] joining {_address}:{_portText}…");
         }
@@ -409,6 +412,7 @@ public sealed class SessionController
         _licenseSync?.Dispose();
         _licenseSync = null;
         JobGenSuppressor.Active = false;               // DV's own generation resumes outside sessions
+        SaveSuppressor.Active = false;                 // native saving resumes outside sessions
         _careerToast = "";
 
         if (_client is { Joined: true }) { _client.Leave(); _client.Poll(); }
