@@ -67,6 +67,10 @@ public sealed class ClientCareer
     /// The job id lets an optimistic native claim roll itself back (D13).</summary>
     public event Action<string, int>? RequestRejected;
 
+    /// <summary>World source only (M3.5c): the server asks whether a remotely claimed captured job
+    /// is actually complete in the native world — answer with <see cref="SendCompleteReply"/>.</summary>
+    public event Action<int>? CompleteQueryReceived; // (jobId)
+
     // ── send side (all silently no-op until joined, matching the other subsystems) ──
 
     public void ClaimJob(int jobId) => SendIdOnly(MessageType.JobClaimRequest, jobId);
@@ -109,14 +113,32 @@ public sealed class ClientCareer
         _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
     }
 
-    /// <summary>World source only (D14): the game granted a license natively — mirror it into the
-    /// policy scope, charge-free (the register payment reports separately as an external fee).</summary>
-    public void GrantExternalLicense(string licenseId)
+    /// <summary>World source only (D14/M3.5c): grant a license charge-free into a policy scope.
+    /// <paramref name="targetPeerId"/> 0 = own scope (the native-purchase mirror); a connected
+    /// peer id = the host-admin grant (fresh guests on a mature world can't afford the board's
+    /// license gates — the host hands them what they need, transparently and logged).</summary>
+    public void GrantExternalLicense(string licenseId, int targetPeerId = 0)
     {
         if (!_joined()) return;
-        byte[] payload = new PacketWriter(16)
+        byte[] payload = new PacketWriter(24)
             .WriteByte((byte)MessageType.LicenseGrantExternal)
             .WriteString(licenseId)
+            .WriteVarUInt((uint)targetPeerId)
+            .ToArray();
+        _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>World source only (M3.5c): the native verdict on a CompleteQuery — did the game's
+    /// own task tree accept this job as finished? On ok the server commits the deferred report and
+    /// mints the claimant's payout; the reason is the claimant's toast on a refusal.</summary>
+    public void SendCompleteReply(int jobId, bool ok, string reason)
+    {
+        if (!_joined()) return;
+        byte[] payload = new PacketWriter(32)
+            .WriteByte((byte)MessageType.JobCompleteReply)
+            .WriteVarUInt((uint)jobId)
+            .WriteByte(ok ? (byte)1 : (byte)0)
+            .WriteString(reason)
             .ToArray();
         _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
     }
@@ -210,6 +232,12 @@ public sealed class ClientCareer
                 string reason = r.ReadString();
                 int jobId = (int)r.ReadVarUInt();
                 RequestRejected?.Invoke(reason, jobId);
+                return true;
+            }
+            case MessageType.JobCompleteRequest:
+            {
+                int jobId = (int)r.ReadVarUInt();
+                CompleteQueryReceived?.Invoke(jobId);
                 return true;
             }
             default:

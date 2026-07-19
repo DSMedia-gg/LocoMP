@@ -149,12 +149,45 @@ public enum MessageType : byte
     // wallet and the game's own career manager is the shop: native license grants and finalized
     // register purchases are mirrored into the policy layer instead of running beside it. ──
 
-    /// <summary>world source → server: the game granted a license natively (career manager);
-    /// mirror it into the policy scope. No ledger charge rides with the grant — the money side
-    /// arrives separately as <see cref="FeeExternal"/> from the register that took the payment.</summary>
+    /// <summary>world source → server: grant a license into a policy scope, charge-free. Two uses:
+    /// mirroring a NATIVE grant on the host (career manager purchase — the money side arrives
+    /// separately as <see cref="FeeExternal"/>), and the HOST-ADMIN grant to a connected player
+    /// (M3.5c: the interim answer for fresh guests on a mature world). Carries a target peer id;
+    /// 0 = the sender's own scope.</summary>
     LicenseGrantExternal = 42,
 
     /// <summary>world source → server: a native register finalized a purchase against the mirrored
     /// wallet (license, fee, shop); burn the amount from the sender's policy wallet.</summary>
     FeeExternal = 43,
+
+    // ── M3.5c: remote claim parity + multi-crew input. Controls and cargo are OWNER-authoritative
+    // (the sim owner's world is where they physically live); couple/uncouple requests route remote
+    // player intent TO the owner, whose native events then drive the normal proposal path — one
+    // authority chain, no second commit path (03 §3). ──
+
+    /// <summary>sim owner → server → others: a cab control's committed value (controlId, value).
+    /// The server keeps the latest per (car, control) and replays them in the join burst, so a
+    /// newcomer's replica levers match reality before anyone touches them.</summary>
+    ControlState = 44,
+
+    /// <summary>sim owner → server → others: a car's cargo changed (cargoId, amount; empty id =
+    /// unloaded). The server folds it into the stored CarDef so late joiners and saves carry the
+    /// current load — cargo is not membership, so the epoch does not move.</summary>
+    CargoState = 45,
+
+    /// <summary>server → world source: a remote claimant reported an externally captured job done —
+    /// validate it against the game's own task tree and answer with JobCompleteReply.</summary>
+    JobCompleteRequest = 46,
+
+    /// <summary>world source → server: the native verdict on a JobCompleteRequest (ok + reason).
+    /// On ok the server commits the deferred task report and mints the claimant's payout.</summary>
+    JobCompleteReply = 47,
+
+    /// <summary>any client → server → sim owner: a player physically chained two cars together —
+    /// the owner performs the real couple and its native event proposes the merge.</summary>
+    CoupleRequest = 48,
+
+    /// <summary>any client → server → sim owner: a player physically uncoupled a car's coupler —
+    /// the owner performs the real uncouple and its native event proposes the split.</summary>
+    UncoupleRequest = 49,
 }

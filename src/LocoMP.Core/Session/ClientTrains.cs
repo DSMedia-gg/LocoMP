@@ -45,10 +45,27 @@ public sealed class ClientTrains
     /// <summary>We simulate this car's consist and a grant holder moved a control (03 §3).</summary>
     public event Action<int, byte, float>? ControlInputReceived; // (carId, controlId, value)
 
+    /// <summary>A sim owner's cab control committed to a value — mirror it onto the replica so
+    /// remote levers read true (M3.5c). Also replayed from the join burst.</summary>
+    public event Action<int, byte, float>? ControlStateReceived; // (carId, controlId, value)
+
+    /// <summary>A car's load changed (empty cargoId = unloaded). Owner-authoritative (M3.5c).</summary>
+    public event Action<int, string, float>? CargoChanged; // (carId, cargoId, amount)
+
+    /// <summary>We simulate carA's consist and a remote player physically chained it to carB —
+    /// perform the real couple; the native event then proposes the merge (M3.5c).</summary>
+    public event Action<int, CoupleEnd, int, CoupleEnd>? CoupleRequested; // (carA, endA, carB, endB)
+
+    /// <summary>We simulate this car's consist and a remote player physically uncoupled the named
+    /// coupler — perform the real uncouple; the native event then proposes the split (M3.5c).</summary>
+    public event Action<int, CoupleEnd>? UncoupleRequested; // (carId, end — the car's own coupler)
+
     // ── send side (all silently no-op until joined, matching NetClient.SendPose) ──
 
     /// <summary>Offer an existing consist to the server (world source). The token correlates the
-    /// eventual <see cref="TrainsetRegistered"/> commit; specs carry kind + derailed only.</summary>
+    /// eventual <see cref="TrainsetRegistered"/> commit. Specs ride the full CarDef codec — v5
+    /// fixed the v4 bug where registration stripped identity/cargo (ids are still server-assigned;
+    /// whatever ids the specs carry are ignored).</summary>
     public void RegisterTrainset(uint token, IReadOnlyList<CarDef> carSpecs)
     {
         if (!_joined()) return;
@@ -56,11 +73,7 @@ public sealed class ClientTrains
             .WriteByte((byte)MessageType.TrainsetRegister)
             .WriteVarUInt(token)
             .WriteVarUInt((uint)carSpecs.Count);
-        foreach (CarDef car in carSpecs)
-        {
-            w.WriteString(car.Kind);
-            w.WriteByte(car.Derailed ? (byte)1 : (byte)0);
-        }
+        foreach (CarDef car in carSpecs) TrainCodec.WriteCarDef(w, car);
         _transport.Send(NetProtocol.ServerPeer, w.ToArray(), DeliveryMethod.ReliableOrdered);
     }
 
@@ -164,6 +177,60 @@ public sealed class ClientTrains
         _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
     }
 
+    /// <summary>Owner only: announce a cab control's committed value so replicas mirror it.</summary>
+    public void SendControlState(int carId, byte controlId, float value)
+    {
+        if (!_joined()) return;
+        byte[] payload = new PacketWriter(16)
+            .WriteByte((byte)MessageType.ControlState)
+            .WriteVarUInt((uint)carId)
+            .WriteByte(controlId)
+            .WriteSingle(value)
+            .ToArray();
+        _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>Owner only: announce a car's load change (empty cargoId = unloaded).</summary>
+    public void SendCargoState(int carId, string cargoId, float amount)
+    {
+        if (!_joined()) return;
+        byte[] payload = new PacketWriter(24)
+            .WriteByte((byte)MessageType.CargoState)
+            .WriteVarUInt((uint)carId)
+            .WriteString(cargoId)
+            .WriteSingle(amount)
+            .ToArray();
+        _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>Ask the sim owner to couple two cars a player physically chained (M3.5c). Ends are
+    /// CAR-relative couplers here (Front = the car's front coupler), not trainset ends — the owner
+    /// resolves the physical couplers; Core stays orientation-blind (M2.1 boundary rule).</summary>
+    public void RequestCouple(int carA, CoupleEnd endA, int carB, CoupleEnd endB)
+    {
+        if (!_joined()) return;
+        byte[] payload = new PacketWriter(16)
+            .WriteByte((byte)MessageType.CoupleRequest)
+            .WriteVarUInt((uint)carA)
+            .WriteByte((byte)endA)
+            .WriteVarUInt((uint)carB)
+            .WriteByte((byte)endB)
+            .ToArray();
+        _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>Ask the sim owner to uncouple a car's coupler a player physically unhooked.</summary>
+    public void RequestUncouple(int carId, CoupleEnd end)
+    {
+        if (!_joined()) return;
+        byte[] payload = new PacketWriter(8)
+            .WriteByte((byte)MessageType.UncoupleRequest)
+            .WriteVarUInt((uint)carId)
+            .WriteByte((byte)end)
+            .ToArray();
+        _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
+    }
+
     // ── receive side ──
 
     internal bool TryHandle(MessageType type, PacketReader r)
@@ -221,6 +288,38 @@ public sealed class ClientTrains
                 byte controlId = r.ReadByte();
                 float value = r.ReadSingle();
                 ControlInputReceived?.Invoke(carId, controlId, value);
+                return true;
+            }
+            case MessageType.ControlState:
+            {
+                int carId = (int)r.ReadVarUInt();
+                byte controlId = r.ReadByte();
+                float value = r.ReadSingle();
+                ControlStateReceived?.Invoke(carId, controlId, value);
+                return true;
+            }
+            case MessageType.CargoState:
+            {
+                int carId = (int)r.ReadVarUInt();
+                string cargoId = r.ReadString();
+                float amount = r.ReadSingle();
+                CargoChanged?.Invoke(carId, cargoId, amount);
+                return true;
+            }
+            case MessageType.CoupleRequest:
+            {
+                int carA = (int)r.ReadVarUInt();
+                var endA = (CoupleEnd)r.ReadByte();
+                int carB = (int)r.ReadVarUInt();
+                var endB = (CoupleEnd)r.ReadByte();
+                CoupleRequested?.Invoke(carA, endA, carB, endB);
+                return true;
+            }
+            case MessageType.UncoupleRequest:
+            {
+                int carId = (int)r.ReadVarUInt();
+                var end = (CoupleEnd)r.ReadByte();
+                UncoupleRequested?.Invoke(carId, end);
                 return true;
             }
             default:

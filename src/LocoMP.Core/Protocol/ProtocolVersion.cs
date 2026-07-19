@@ -16,6 +16,12 @@ public static class ProtocolVersion
     /// makes this incompatible by construction.
     /// v4 (M3.5b): real-car replication — CarDef carries world identity (game car id/guid) and
     /// registration cargo, so remote clients spawn REAL cars instead of ghosts. Every def-bearing
-    /// message changes shape, so this is incompatible by construction.</remarks>
-    public const int Current = 4;
+    /// message changes shape, so this is incompatible by construction.
+    /// v5 (M3.5c): remote claim parity + multi-crew — TrainsetRegister now carries the FULL car
+    /// spec (v4 added identity/cargo to defs but the registration message still stripped them — a
+    /// real bug: every remote spawn fell back to synthetic identity), plus messages 44–49
+    /// (control/cargo state, native job-completion verification, couple/uncouple requests) and a
+    /// target peer id on LicenseGrantExternal (host-admin grants). The registration format change
+    /// makes this incompatible by construction.</remarks>
+    public const int Current = 5;
 }
