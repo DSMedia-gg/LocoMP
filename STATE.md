@@ -1,6 +1,6 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-19 (M3.5a + D14 VERIFIED IN-GAME — run №2 passed, zero bugs/regressions; committed, push pending Cody's go) · This is the **implementation** memory (burst cadence, D8).
+**Updated:** 2026-07-19 (M3.5a + D14 VERIFIED IN-GAME — run №2 passed, zero bugs/regressions; PUSHED `48e72a1`/`ae97710`/`94d1957`) · This is the **implementation** memory (burst cadence, D8).
 The **planning corpus** lives one level up at `../` (00–09, INDEX, research/) — strategic, kept private.
 Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current milestone in `../07-ROADMAP.md`.
 
@@ -348,11 +348,12 @@ career" toggle or delete the .lmps to re-mint).
 
 ## Push state
 - **Everything through M3.1 is PUSHED** (M2 arc `ce41556..8594e4f`; M3.1 `53d642b`, Cody's go 2026-07-18). Post-push CI as always: `build.yml` red at the Steam step (accepted until contributors).
-- **COMMITTED 2026-07-19 (run №2 passed): three dependency-ordered commits** — Core career sync
-  (M3.3/M3.5a/M3.5a-D14 Core halves + tests), then Shim/mod in-game integration, then docs/CI.
-  Ordered so every commit builds (the planned per-feature split wasn't honest: M3.3, D13, and D14
-  edits interleave within the same files, and file-level surgery would have produced non-building
-  intermediates). **Push pending Cody's explicit go (hard rule 7).**
+- **PUSHED 2026-07-19 (Cody's go): three dependency-ordered commits** `48e72a1` (Core career
+  sync + tests) → `ae97710` (Shim/mod in-game integration) → `94d1957` (docs/CI), rebased over
+  the canary bot's `55f2bb1` (`ci: record initial DV buildid 20251481` — the nightly watcher
+  doing its designed job; first foreign commit on main). Ordered so every commit builds (the
+  planned per-feature split wasn't honest: M3.3, D13, and D14 edits interleave within the same
+  files, and file-level surgery would have produced non-building intermediates).
 - Staged payload in the game's `Mods/LocoMP/` = **2026-07-19 13:22 build** = the verified commit.
 
 ## Blockers
@@ -378,7 +379,8 @@ career" toggle or delete the .lmps to re-mint).
   under D14 the wallet IS the license budget and $500 can't buy a license (value hardcoded in
   CareerConfigBuilder; not exposed via GameParams, re-check on B100; grant mints on FIRST sight
   only, so run №2 needs "Fresh career"). Restaged 13:22. **Run №2 PASSED same day — zero bugs,
-  zero regressions; M3.5a CLOSED; committed (core → shim/mod → docs); push on Cody's go.**
+  zero regressions; M3.5a CLOSED; PUSHED `48e72a1..94d1957` (Cody's go), rebased over the canary
+  bot's first buildid commit `55f2bb1`.**
 - **2026-07-18** — **M3.1 PUSHED (`53d642b`, Cody's go) + M3.3 built (Shim career integration),
   uncommitted.** Recon by reflection (scratch/dv-reflect.ps1 outside the repo): 02 item 4 = CLEAN —
   `StationProceduralJobsController.TryToGenerateJobs` is the single generation choke point.
