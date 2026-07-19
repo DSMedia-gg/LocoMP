@@ -1,14 +1,51 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-19 (debt/polish pass PUSHED `bc3b62c..c80df71` — session-lost UX, 15 s
-disconnect timeout, AbandonJob audit CLOSED, bot honors chain requests, `--derail-car` rig;
-129/129 ×3, full sln 0 warnings; smoke checklist rides the next game session) · This
+**Updated:** 2026-07-19 late (O11+O12 RESOLVED by Cody → **D15 BUILT**: host grants gated to
+held licenses + auto-grant toggle, 134/134 ×3, full sln 0 warnings, payload staged, UNCOMMITTED ·
+**M4 OPENED**: item-system recon complete — 02 verification item 5 answered) · This
 is the **implementation** memory (burst cadence, D8).
 The **planning corpus** lives one level up at `../` (00–09, INDEX, research/) — strategic, kept private.
 Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current milestone in `../07-ROADMAP.md`.
 
 ## Where things stand
 
+- **D15 BURST 2026-07-19 (late): O11 + O12 RESOLVED (Cody) → D15 built + M4 opened. UNCOMMITTED
+  (134/134 ×3, full sln 0 warnings, payload staged to the game's Mods/ + dist/).**
+  - **O12 accepted**: LMPS is the ratified career-save format (03 §7 amended; MessagePack stays
+    reserved for bulk join snapshots). Standing flag closed, no code change.
+  - **O11 → D15** (Cody's own design: "keep host grants, gate to what the host holds, plus an
+    auto-grant checkbox"). Core: `HandleLicenseGrantExternal` now refuses a grant to ANOTHER
+    player of a license the world source's own scope lacks ("grants share progression, they
+    never mint it") — self-mirror grants stay scope-agnostic (the game is the authority, D14).
+    `ServerCareer.AutoGrantHostLicenses` (host UI sets in-proc): join half copies the world
+    source's scope onto the newcomer BEFORE the career burst is built (licenses ride the burst);
+    live half propagates a license newly entering the world-source scope to every connected
+    player — triggered from BOTH the native-mirror self-grant and the panel-shop purchase
+    (the purchase path is separate because its native echo comes back idempotent); flipping the
+    toggle ON mid-session sweeps immediately. Panel: "Auto-grant my licenses to joining players"
+    checkbox (idle + live while hosting), and the host grant list now offers the host's HELD
+    licenses (`career.Licenses`) instead of the price catalog. One M3.5c test updated — the host
+    now self-grants before handing out, which IS the D15 behavior change. Tests 129 → **134**
+    (targeted-grant delivery, unheld-grant refusal, join-burst copy, live propagation ×2 paths,
+    toggle-on sweep).
+  - **M4 recon: 02 verification item 5 ANSWERED** (`../research/item-system-recon.md`; ~20 type
+    dumps in `../scratch/decomp/`). Headlines: `itemPrefabName` = the canonical TYPE id;
+    **no per-instance id exists** → LocoMP mints its own ItemNetId (the M3.5b car-id pattern);
+    capture hooks are ALL public events (`StorageBase.ItemAdded/ItemRemoved` on the five buckets,
+    `Inventory.InventoryStatusChanged`, `ItemBase.ItemInventoryStateChanged`, `Grabber.
+    GrabStarted/GrabStopped` for held-item display) — no Harmony needed; spawn = `Resources.Load
+    (prefabName)` + instantiate (both native spawners do exactly this); `ItemDisablerGrid` only
+    `SetActive(false)`s far items (NO car-style ECS destruction — remote item replication needs
+    an exemption/keep-alive, not the M3.5b materialization machinery); shop money legs already
+    ride D14's wallet mirror (`Wallet.TrySpend → Inventory.RemoveMoney` at deposit time); stock
+    is runtime-reconstructed (counting live `ShopRestocker` items), not saved.
+  - **Smoke additions (ride the next game session, with the debt-pass checklist)**: auto-grant
+    checkbox visible idle + hosting; host grant list shows only held licenses; with auto-grant ON
+    a joining client/bot receives the host's licenses in the join burst (client career log shows
+    the license set) and a native license buy mid-session propagates live.
+  - **Next: M4.1 — game-free Items core** (ItemRegistry + protocol v6 item messages + per-player
+    inventory through the policy layer, LMPS-persisted), then Shim ItemSync over the recon's
+    event seams. Commit+push of this burst awaits Cody's go, as usual.
 - **DEBT/POLISH PASS 2026-07-19 (Cody's pick over M4/M3.2 for this burst): BUILT, uncommitted.**
   129/129 ×3, full sln 0 warnings. What closed:
   - **Session-lost UX (the M3.5b known debt)**: `NetClient.Disconnected` (Core — fires only after
@@ -44,7 +81,7 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
     now logged once per (car, control). VR verification itself stays R2.
   - **Docs**: 08-RISKS — R8/R10 refreshed, **R16 added** (host-presence scoping in host-native
     mode, from run-A finding №6); 00 — **O11** (guest progression on mature hosts) + **O12**
-    (ratify the LMPS deviation) recorded, both awaiting Cody.
+    (ratify the LMPS deviation) recorded — both RESOLVED later the same day (the D15 burst above).
   - Tests 125 → **129** (session-loss ×2; chain-request round trip incl. product adoption +
     re-merge with 0 stale discards; derail-car stream).
   - **Smoke run (next game session, listen rig)**: (1) join the bot host, Ctrl+C the bot →

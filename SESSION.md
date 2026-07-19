@@ -5,6 +5,44 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-19 (late) — O11/O12 resolved → D15 built; M4 opens with the item recon 🎁
+
+**Goal:** Cody's direction for the burst: **M4 next**, **O12 accepted** (LMPS ratified), and an
+**O11 decision in his own words** — "keep the host grant system, but gate it to what licences the
+host already has. Also have a checkbox to automatically grant new licences to clients on
+join/licence acquisition on host." Recorded as **D15** in 00; O11/O12 struck; 03 §7 amended.
+
+**Done — D15 implementation (134/134 ×3, full sln 0 warnings, staged to Mods/ + dist/, uncommitted):**
+- Core gate: a world-source grant to ANOTHER player now requires the license in the world
+  source's own server-side scope — which the join-time native sweep already fills, so "licenses
+  the host holds" was a server-known fact with zero new Shim plumbing, and the gate is
+  cheat-proof by construction. Self-mirror grants stay scope-agnostic (D14: the game is the
+  authority on its own acquisitions).
+- `AutoGrantHostLicenses` on ServerCareer: admit-time copy runs BEFORE the career burst is built
+  (inherited licenses arrive inside CareerState, not as N trailing updates); live propagation
+  fires from both paths a license newly enters the host scope (native-mirror grant AND panel-shop
+  purchase — the latter's native echo returns idempotent, so it needs its own trigger); the
+  property setter sweeps connected players when flipped on mid-session.
+- Panel: auto-grant checkbox (idle + live in the host section); the grant list switched from the
+  price catalog to the host's HELD licenses — the UI can no longer even offer what the server
+  would refuse.
+- One M3.5c test reworked: `Host_grant_unlocks_a_license_gated_job_for_the_remote_claimant` now
+  has the host self-grant first — the intended D15 behavior change, not a regression.
+
+**Done — M4 opened (02 verification item 5 ANSWERED):** `../research/item-system-recon.md` + ~20
+ilspycmd dumps in `../scratch/decomp/` (delegated recon agent; ilspycmd needs
+`DOTNET_ROLL_FORWARD=Major` on this machine now). The item system is MUCH friendlier than trains:
+no per-instance id anywhere (LocoMP mints ItemNetIds — the car-id pattern), all capture surfaces
+are public C# events, spawn-by-prefab-name is the game's own pattern, and item distance streaming
+merely deactivates (the M2 destruction-storm mechanism has no item analog). Shop purchases'
+money legs already ride D14's wallet mirror. Full implications section in the report.
+
+**Next:** M4.1 game-free Items core (ItemRegistry, protocol v6, policy-routed inventory, LMPS
+persistence) → Shim ItemSync on the event seams. D15 smoke items ride the next game session
+beside the debt-pass checklist (see STATE). Commit+push on Cody's go.
+
+---
+
 ## 2026-07-19 — Debt/polish pass: the ledger gets swept 🧹
 
 Cody's pick for the burst (over starting M4 or M3.2): stop and pay down the banked debts while
