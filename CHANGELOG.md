@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Session-loss prompt: when the host disappears, a joined client's panel now says so plainly
+  ("SESSION LOST — Leave to restore your world, then reload your save") instead of sitting on
+  "connecting…" forever. Native saving stays blocked until you leave — a dead session still
+  fails safe, it just tells you now. A link drop that recovers within a few seconds (e.g. a
+  save-load freeze re-handshake) continues silently.
+- Bot: honors remote couple/uncouple requests on its consists (split/merge commits through the
+  normal transaction path, and the bot keeps driving the product containing its lead car), so the
+  one-PC rig live-fires the owner-side half of chain interception. `--derail-car <n>` streams a
+  consist car as derailed at the `--at` point — a joining client then exercises the off-rail
+  (null-track) spawn path.
+
 - Remote claim parity (M3.5c): players who JOIN a session can now claim the host world's real jobs
   from the board — the host takes the job natively on their behalf, "Report delivery" is verified
   by the host's own game (the native task tree is the validator, so nobody gets paid for an
@@ -111,6 +122,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ghost-train test rig: `LocoMP.Bot --consist <n>` drives a synthetic consist along the extracted
   topology (junction-aware, seeded, reconnect-safe) so train sync is testable end-to-end on one PC;
   the host logs paste-ready `--at` and `--start-edge` hints so the ghost spawns next to the player.
+
+### Changed
+- Transport disconnect timeout raised 5 s → 15 s: DV's save-load freezes could outlast LiteNetLib's
+  default and evict a healthy client mid-load. A genuinely dead peer lingers a few seconds longer,
+  which the existing park-on-disconnect + reconnect grace absorb.
+- A grant holder's control input that can't resolve to a live control on the owner's car (interior
+  unloaded, unverified VR rigs) is now logged once per control instead of dropped silently.
 
 ### Fixed
 - Consist registration was silently stripping car identity and cargo from the wire (a v4 gap):
