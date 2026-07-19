@@ -27,6 +27,10 @@ internal static class TrainCodec
         w.WriteVarUInt((uint)car.Id);
         w.WriteString(car.Kind);
         w.WriteByte(car.Derailed ? FlagDerailed : (byte)0);
+        w.WriteString(car.GameId);
+        w.WriteString(car.GameGuid);
+        w.WriteString(car.CargoId);
+        w.WriteSingle(car.CargoAmount);
     }
 
     public static CarDef ReadCarDef(PacketReader r)
@@ -34,7 +38,11 @@ internal static class TrainCodec
         int id = (int)r.ReadVarUInt();
         string kind = r.ReadString();
         byte flags = r.ReadByte();
-        return new CarDef(id, kind, (flags & FlagDerailed) != 0);
+        string gameId = r.ReadString();
+        string gameGuid = r.ReadString();
+        string cargoId = r.ReadString();
+        float cargoAmount = r.ReadSingle();
+        return new CarDef(id, kind, (flags & FlagDerailed) != 0, gameId, gameGuid, cargoId, cargoAmount);
     }
 
     public static void WriteDef(PacketWriter w, TrainsetDef def)
