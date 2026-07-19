@@ -31,6 +31,11 @@ public sealed class ServerCareer
     // jobs (D13). Dedicated-server mode never sets AcceptExternalJobs, so this never matters there.
     private int _worldSourcePeer;
 
+    /// <summary>The session's world source (first admitted peer — the host's loopback client). The
+    /// item subsystem shares this gate for host-captured world items (D13 posture). 0 before anyone
+    /// joins.</summary>
+    internal int WorldSourcePeer => _worldSourcePeer;
+
     // Deferred completion reports on captured jobs (M3.5c): a remote claimant's "done" is not
     // trusted — the world source's game validates its own task tree and answers. Keyed by job id;
     // claimants are held by KEY (they may disconnect while the query is in flight).
@@ -95,6 +100,31 @@ public sealed class ServerCareer
 
     /// <summary>The stable key behind a connected peer (null before admission/after removal).</summary>
     public string? KeyOf(int peerId) => _keyByPeer.TryGetValue(peerId, out string? key) ? key : null;
+
+    /// <summary>The connected peer behind a stable key, or 0 when the holder is offline (in their
+    /// grace window). The item subsystem uses this to resolve a possession's scope to a wire peer id
+    /// — keys never leave the server (07 §M3).</summary>
+    internal int PeerOf(string playerKey) => _peerByKey.TryGetValue(playerKey, out int peer) ? peer : 0;
+
+    /// <summary>The display name last seen for a key ("" if unknown) — the holder label items ride
+    /// on the wire with, beside <see cref="PeerOf"/>.</summary>
+    internal string NameOf(string playerKey) =>
+        Registry.Profiles.TryGetValue(playerKey, out PlayerProfile? p) ? p.Name : string.Empty;
+
+    /// <summary>Charge a shop purchase against a player's policy wallet (M4), broadcasting the new
+    /// balance + an economy event on success. Overdraft-refused (the ledger never goes negative), so
+    /// a client can't buy what it can't afford — the win-condition invariant: the cash leaves the
+    /// RIGHT wallet. The item mint is the caller's job, ordered AFTER this so money and item move
+    /// together.</summary>
+    internal bool TryChargeShopPurchase(int peerId, long amountCents, string label, out string? reason)
+    {
+        reason = null;
+        if (KeyOf(peerId) is not string key) { reason = "not in session"; return false; }
+        if (!Registry.TryChargeExternalFee(key, amountCents, out reason)) return false;
+        SendWalletUpdate(key);
+        SendEconomyEvent(key, EconomyEventKind.ShopPurchase, amountCents, label);
+        return true;
+    }
 
     /// <summary>Career burst for a newly admitted player: their career state, then the whole board.
     /// Runs after the trains burst, all reliable-ordered (03 §10). Reconnect within grace lands

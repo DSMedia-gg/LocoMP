@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using LocoMP.Core.Career;
+using LocoMP.Core.Items;
+using LocoMP.Core.Presence;
 using LocoMP.Core.Protocol;
 using LocoMP.Core.Trains;
 
@@ -22,8 +24,11 @@ public static class SaveCodec
     /// <remarks>v2: JobDef gained GameId (D13 host-capture). Pre-release, so no v1 migration —
     /// a v1 file is refused cleanly and the host starts fresh (backups keep the old bytes).
     /// v3: CarDef gained world identity + cargo (M3.5b real-car replication); the trains half
-    /// stores defs via the wire codec, so the layout follows it. Same no-migration policy.</remarks>
-    public const uint SchemaVersion = 3;
+    /// stores defs via the wire codec, so the layout follows it. Same no-migration policy.
+    /// v4: the items half (M4) is appended — world-dropped items + per-player inventory + the id
+    /// counter, so a cold restart resumes both. Same no-migration policy (a v3 file is refused
+    /// cleanly and the host starts fresh; backups keep the old bytes).</remarks>
+    public const uint SchemaVersion = 4;
 
     private const int MaxCollection = 100_000; // hygiene cap for any one saved collection
 
@@ -37,6 +42,7 @@ public static class SaveCodec
         w.WriteVarUInt(SchemaVersion);
         WriteCareer(w, save.Career);
         WriteTrains(w, save.Trains);
+        WriteItems(w, save.Items);
         return w.ToArray();
     }
 
@@ -53,7 +59,8 @@ public static class SaveCodec
             throw new InvalidDataException($"save schema v{schema} not supported (this build reads v{SchemaVersion})");
         CareerSaveData career = ReadCareer(r);
         TrainsSaveData trains = ReadTrains(r);
-        return new ServerSaveData(career, trains);
+        ItemsSaveData items = ReadItems(r);
+        return new ServerSaveData(career, trains, items);
     }
 
     // ── career half ──
@@ -209,6 +216,39 @@ public static class SaveCodec
         t.NextTrainsetId = (int)r.ReadVarUInt();
         t.NextCarId = (int)r.ReadVarUInt();
         return t;
+    }
+
+    // ── items half (M4) ──
+
+    private static void WriteItems(PacketWriter w, ItemsSaveData items)
+    {
+        w.WriteVarUInt((uint)items.Items.Count);
+        foreach (ItemSave s in items.Items)
+        {
+            ItemCodec.WriteItemDef(w, s.Def);
+            w.WriteByte((byte)s.Location);
+            // Both legs are written unconditionally so the layout is fixed-shape per item: a world
+            // item's OwnerScope is "" and a possessed item's pose is Identity, each harmless to load.
+            PresenceCodec.WritePose(w, s.WorldPose);
+            w.WriteString(s.OwnerScope);
+        }
+        w.WriteVarUInt((uint)items.NextItemId);
+    }
+
+    private static ItemsSaveData ReadItems(PacketReader r)
+    {
+        var items = new ItemsSaveData();
+        int count = ReadCount(r, "items");
+        for (int i = 0; i < count; i++)
+        {
+            ItemDef def = ItemCodec.ReadItemDef(r);
+            var location = (ItemLocationKind)r.ReadByte();
+            Pose pose = PresenceCodec.ReadPose(r);
+            string ownerScope = r.ReadString();
+            items.Items.Add(new ItemSave(def, location, pose, ownerScope));
+        }
+        items.NextItemId = (int)r.ReadVarUInt();
+        return items;
     }
 
     private static int ReadCount(PacketReader r, string what)

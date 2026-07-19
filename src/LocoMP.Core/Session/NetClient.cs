@@ -33,6 +33,7 @@ public sealed class NetClient : IDisposable
 
         Trains = new ClientTrains(_transport, () => Joined);
         Career = new ClientCareer(_transport, () => Joined);
+        Items = new ClientItems(_transport, () => Joined);
 
         _transport.Received += OnReceived;
         _transport.PeerConnected += OnConnected;
@@ -44,6 +45,9 @@ public sealed class NetClient : IDisposable
 
     /// <summary>The career subsystem (M3): the mirrored board/wallet/licenses + propose calls.</summary>
     public ClientCareer Career { get; }
+
+    /// <summary>The item subsystem (M4): the mirrored item set + pickup/drop/purchase propose calls.</summary>
+    public ClientItems Items { get; }
 
     /// <summary>
     /// This player's stable identity (M3): the server keys their profile, wallet, and reconnect
@@ -124,6 +128,7 @@ public sealed class NetClient : IDisposable
         _players.Clear();
         Trains.Reset();
         Career.Reset();
+        Items.Reset();
         if (wasJoined) Disconnected?.Invoke();
     }
 
@@ -145,7 +150,7 @@ public sealed class NetClient : IDisposable
                 case MessageType.PlayerPose: HandlePlayerPose(r); break;
                 case MessageType.TimeSync: HandleTimeSync(r); break;
                 default:
-                    if (!Trains.TryHandle(type, r)) Career.TryHandle(type, r);
+                    if (!Trains.TryHandle(type, r) && !Career.TryHandle(type, r)) Items.TryHandle(type, r);
                     break;
             }
         }

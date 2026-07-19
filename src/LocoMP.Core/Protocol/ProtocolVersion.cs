@@ -22,6 +22,8 @@ public static class ProtocolVersion
     /// real bug: every remote spawn fell back to synthetic identity), plus messages 44–49
     /// (control/cargo state, native job-completion verification, couple/uncouple requests) and a
     /// target peer id on LicenseGrantExternal (host-admin grants). The registration format change
-    /// makes this incompatible by construction.</remarks>
-    public const int Current = 5;
+    /// makes this incompatible by construction.
+    /// v6 (M4): items — server-authoritative inventory/world items/shops (MessageType 50–58). A v5
+    /// peer cannot interpret item state, so the new message family is a deliberate incompatible bump.</remarks>
+    public const int Current = 6;
 }
