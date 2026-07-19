@@ -408,6 +408,17 @@ public sealed class RealCarSync
             }
         }
 
+        // The derailed leg passes null tracks to SpawnLoadedCar (savegame-restore semantics for an
+        // off-rail car). It had never fired in a live run as of 2026-07-19 — announce it loudly so
+        // the run that finally exercises it is attributable; the catch below is its safety net.
+        foreach (var p in positions)
+        {
+            if (!p.derailed) continue;
+            _log($"[trains] remote consist {set.Def.Id}: spawning with DERAILED car(s) — " +
+                 "the null-track spawn path (ghost fallback catches a failure)");
+            break;
+        }
+
         try
         {
             SpawningRemote = true;

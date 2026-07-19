@@ -1,3 +1,4 @@
+using LocoMP.Core.Presence;
 using LocoMP.Core.Session;
 using LocoMP.Core.Trains;
 using LocoMP.Core.World;
@@ -31,14 +32,18 @@ public sealed class ConsistDriver
     private readonly string[] _liveries;
     private readonly string _cargoId;
     private readonly float _cargoAmount;
+    private readonly int _derailCarIndex; // 0-based; -1 = none. Streams that car OffRail (spawn-path rig).
+    private readonly Pose _derailPose;
 
     private NetClient? _bound;
     private int _trainsetId = -1;
+    private int _leadCarId = -1; // server id of our registered car 1 — the adoption anchor
     private bool _registerSent;
     private bool _streaming;
 
     public ConsistDriver(WorldTopology topology, int carCount, double speed, int seed, string name, Action<string> log,
-                         uint? startEdgeId = null, string[]? liveries = null, string cargoId = "", float cargoAmount = 0f)
+                         uint? startEdgeId = null, string[]? liveries = null, string cargoId = "", float cargoAmount = 0f,
+                         int derailCarIndex = -1, Pose derailPose = default)
     {
         _walker = new TopologyWalker(topology, seed, tailCapacityM: carCount * CarLength + 100, startEdgeId);
         _carCount = Math.Max(1, carCount);
@@ -49,6 +54,8 @@ public sealed class ConsistDriver
         _liveries = liveries ?? Array.Empty<string>();
         _cargoId = cargoId;
         _cargoAmount = cargoAmount;
+        _derailCarIndex = derailCarIndex;
+        _derailPose = derailPose;
         _token = (uint)Interlocked.Increment(ref _nextToken);
         _walker.JunctionCrossed += (id, branch) => _pendingThrows.Enqueue((id, branch));
     }
@@ -86,8 +93,11 @@ public sealed class ConsistDriver
 
         if (!client.Trains.View.Sets.TryGetValue(_trainsetId, out TrainsetDef? def))
         {
-            // Our set vanished (retired by a transaction we're not party to, or a fresh session
-            // after churn) — register a new one next tick.
+            // Our set vanished. A membership transaction retires the parent id but the CARS live
+            // on in product sets — adopt the product holding our lead car instead of registering
+            // a duplicate consist (an honored uncouple request would otherwise double the train).
+            if (TryAdoptProduct(client)) return;
+            // Genuinely gone (fresh session after churn) — register a new one next tick.
             _log($"[{_name}] consist: trainset {_trainsetId} is gone — re-registering");
             _trainsetId = -1;
             _registerSent = false;
@@ -105,6 +115,13 @@ public sealed class ConsistDriver
         var cars = new CarSnapshot[def.Cars.Count];
         for (int i = 0; i < cars.Length; i++)
         {
+            if (i == _derailCarIndex)
+            {
+                // Spawn-path rig: this car streams as a 6-DOF off-rail pose at the --at anchor,
+                // so a joining client exercises the derailed (null-track) SpawnLoadedCar leg.
+                cars[i] = CarSnapshot.OffRail(_derailPose);
+                continue;
+            }
             double offset = i * CarLength;
             BogieState? front = _walker.Behind(offset + BogieInset, (float)_speed);
             BogieState? rear = _walker.Behind(offset + CarLength - BogieInset, (float)_speed);
@@ -140,8 +157,16 @@ public sealed class ConsistDriver
         {
             if (token != _token) return;
             _trainsetId = def.Id;
+            _leadCarId = def.Cars.Count > 0 ? def.Cars[0].Id : -1;
             _log($"[{_name}] consist: registered as trainset {def.Id} (epoch {def.Epoch})");
         };
+        // M3.5c debt closed: the bot EXECUTES remote chain acts on its consists instead of
+        // ignoring them, so the one-PC rig live-fires the full request → owner → transaction →
+        // client-mirror round trip. The bot has no native world — honoring a request IS proposing
+        // the membership change; the server's commit then applies for everyone, exactly like a
+        // Shim owner's native coupler event would.
+        client.Trains.UncoupleRequested += (carId, end) => OnUncoupleRequested(client, carId, end);
+        client.Trains.CoupleRequested += (carA, endA, carB, endB) => OnCoupleRequested(client, carA, endA, carB, endB);
         // M3.5c: a grant holder's throttle drives OUR speed — in --listen mode a player can sit
         // in the bot-hosted train's cab and actually drive it (throttle id 1 mirrors the Shim's
         // ControlType mapping; full speed at ~2.5× the configured cruise).
@@ -156,5 +181,99 @@ public sealed class ConsistDriver
             _speed = value * _baseSpeed * 2.5;
             _log($"[{_name}] consist: throttle input {value:F2} → {_speed:F1} m/s");
         };
+    }
+
+    /// <summary>After a transaction retired our set id, find the product that inherited our lead
+    /// car and keep driving THAT. The walker's geometry stays valid because products preserve car
+    /// order and the lead car defines offset 0.</summary>
+    private bool TryAdoptProduct(NetClient client)
+    {
+        if (_leadCarId <= 0) return false;
+        foreach (TrainsetDef candidate in client.Trains.View.Sets.Values)
+        {
+            foreach (CarDef car in candidate.Cars)
+            {
+                if (car.Id != _leadCarId) continue;
+                _log($"[{_name}] consist: trainset {_trainsetId} retired by a transaction — " +
+                     $"adopting product {candidate.Id} ({candidate.Cars.Count} car(s))");
+                _trainsetId = candidate.Id;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void OnUncoupleRequested(NetClient client, int carId, CoupleEnd end)
+    {
+        foreach (TrainsetDef def in client.Trains.View.Sets.Values)
+        {
+            int index = IndexOf(def, carId);
+            if (index < 0) continue;
+            // The request's end is CAR-relative (the physical coupler the player unhooked). Bot
+            // cars face travel, so Front looks toward index 0 — but orientation is a spawn-side
+            // detail we can't observe; if the primary side has no gap, the other side is the one.
+            int gap = end == CoupleEnd.Front ? index - 1 : index;
+            if (gap < 0 || gap >= def.Cars.Count - 1) gap = end == CoupleEnd.Front ? index : index - 1;
+            if (gap < 0 || gap >= def.Cars.Count - 1)
+            {
+                _log($"[{_name}] consist: remote uncouple request on car {carId} ({end}) has no gap to split — ignored");
+                return;
+            }
+            _log($"[{_name}] consist: remote uncouple request honored — splitting set {def.Id} at gap {gap}");
+            client.Trains.ProposeUncouple(def.Id, gap);
+            return;
+        }
+        _log($"[{_name}] consist: remote uncouple request for unknown car {carId} — ignored");
+    }
+
+    private void OnCoupleRequested(NetClient client, int carA, CoupleEnd endA, int carB, CoupleEnd endB)
+    {
+        TrainsetDef? setA = FindSetOf(client, carA);
+        TrainsetDef? setB = FindSetOf(client, carB);
+        if (setA is null || setB is null || setA.Id == setB.Id)
+        {
+            _log($"[{_name}] consist: remote couple request ({carA}+{carB}) — not two distinct known sets; ignored");
+            return;
+        }
+        if (!TryTrainsetEnd(setA, carA, endA, out CoupleEnd setEndA) ||
+            !TryTrainsetEnd(setB, carB, endB, out CoupleEnd setEndB))
+        {
+            _log($"[{_name}] consist: remote couple request ({carA}+{carB}) — a mid-train car can't take a chain; ignored");
+            return;
+        }
+        _log($"[{_name}] consist: remote couple request honored — proposing merge {setA.Id}/{setEndA} + {setB.Id}/{setEndB}");
+        client.Trains.ProposeCouple(carA, setEndA, carB, setEndB, relV: 0f);
+    }
+
+    /// <summary>Car-relative end → TRAINSET end (the proposal's dialect, M2.1 boundary rule). An
+    /// end car's only free chain is its outward coupler, so position decides; single cars keep the
+    /// car end as given.</summary>
+    private static bool TryTrainsetEnd(TrainsetDef def, int carId, CoupleEnd carEnd, out CoupleEnd setEnd)
+    {
+        int index = IndexOf(def, carId);
+        setEnd = carEnd;
+        if (index < 0) return false;
+        if (def.Cars.Count == 1) return true;
+        if (index == 0) { setEnd = CoupleEnd.Front; return true; }
+        if (index == def.Cars.Count - 1) { setEnd = CoupleEnd.Rear; return true; }
+        return false;
+    }
+
+    private static int IndexOf(TrainsetDef def, int carId)
+    {
+        for (int i = 0; i < def.Cars.Count; i++)
+        {
+            if (def.Cars[i].Id == carId) return i;
+        }
+        return -1;
+    }
+
+    private static TrainsetDef? FindSetOf(NetClient client, int carId)
+    {
+        foreach (TrainsetDef def in client.Trains.View.Sets.Values)
+        {
+            if (IndexOf(def, carId) >= 0) return def;
+        }
+        return null;
     }
 }

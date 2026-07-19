@@ -57,6 +57,7 @@ public sealed class CabControlSync : IDisposable
     private readonly Dictionary<int, Watched> _watched = new();          // serverCarId → hooks
     private readonly Dictionary<(int carId, byte control), Outgoing> _outbox = new();
     private readonly Dictionary<(int carId, byte control), Role> _sendRole = new();
+    private readonly HashSet<(int carId, byte control)> _inputDropWarned = new();
     private bool _applyingRemote;
     private float _resyncAccum;
 
@@ -208,7 +209,15 @@ public sealed class CabControlSync : IDisposable
     {
         if (!_trains.TryGetLiveCar(carId, out TrainCar car) || _trains.Remote.IsRemoteCar(car)) return;
         OverridableBaseControl? control = FindControl(car, controlId);
-        if (control == null) return;
+        if (control == null)
+        {
+            // A holder's input landed on a car whose control isn't resolvable right now (interior
+            // unloaded, or a rig this webview of the sim doesn't expose — VR is unverified, R2).
+            // Dropping is correct; dropping SILENTLY made it undiagnosable.
+            if (_inputDropWarned.Add((carId, controlId)))
+                _log($"[trains] control input for car {carId} control {controlId} has no live control here — dropped (logged once)");
+            return;
+        }
         try { control.Set(Mathf.Clamp01(value)); }
         catch (Exception e) { _log($"[trains] control input apply failed (car {carId}): {e.Message}"); }
     }
