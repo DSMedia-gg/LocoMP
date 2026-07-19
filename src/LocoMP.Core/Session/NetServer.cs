@@ -27,9 +27,10 @@ public sealed class NetServer : IDisposable
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
 
+        Func<int, Pose?> poseOf = id => _players.TryGetValue(id, out PlayerState? p) ? p.Pose : (Pose?)null;
         Trains = new ServerTrains(_transport, _clock, () => _players.Keys);
-        Career = new ServerCareer(_transport, _clock, _config.Career, () => _players.Keys, restore?.Career,
-            id => _players.TryGetValue(id, out PlayerState? p) ? p.Pose : (Pose?)null);
+        Career = new ServerCareer(_transport, _clock, _config.Career, () => _players.Keys, restore?.Career, poseOf);
+        Items = new ServerItems(_transport, () => _players.Keys, _config.Items, poseOf, Career, restore?.Items);
         if (restore != null) Trains.Restore(restore.Trains);
 
         _transport.Received += OnReceived;
@@ -44,6 +45,9 @@ public sealed class NetServer : IDisposable
 
     /// <summary>The career subsystem (M3): jobs, wallets, licenses, reconnect grace.</summary>
     public ServerCareer Career { get; }
+
+    /// <summary>The item subsystem (M4): world items, per-player inventory, shop purchases.</summary>
+    public ServerItems Items { get; }
 
     public int PlayerCount => _players.Count;
 
@@ -63,7 +67,7 @@ public sealed class NetServer : IDisposable
 
     /// <summary>Snapshot everything persistence v1 stores (03 §7): career + world. Serialize with
     /// SaveCodec; restore by passing the result to the constructor of the next server.</summary>
-    public ServerSaveData CaptureSave() => new(Career.Registry.Capture(), Trains.Capture());
+    public ServerSaveData CaptureSave() => new(Career.Registry.Capture(), Trains.Capture(), Items.Capture());
 
     /// <summary>Push the authoritative clock to every admitted player (call on a slow cadence).</summary>
     public void BroadcastTime()
@@ -91,9 +95,12 @@ public sealed class NetServer : IDisposable
                 case MessageType.PlayerPose: HandlePose(peerId, r); break;
                 case MessageType.Leave: Remove(peerId); break;
                 default:
-                    // Subsystem traffic is only heard from ADMITTED peers — everything else is ignored.
-                    if (_players.ContainsKey(peerId) && !Trains.TryHandle(peerId, type, r, payload))
-                        Career.TryHandle(peerId, type, r);
+                    // Subsystem traffic is only heard from ADMITTED peers — everything else is
+                    // ignored. Try each subsystem in turn; the first to claim the type wins.
+                    if (_players.ContainsKey(peerId) &&
+                        !Trains.TryHandle(peerId, type, r, payload) &&
+                        !Career.TryHandle(peerId, type, r))
+                        Items.TryHandle(peerId, type, r);
                     break;
             }
         }
@@ -148,6 +155,7 @@ public sealed class NetServer : IDisposable
         BroadcastPlayerJoined(state, exceptPeer: peerId);  // everyone else learns the newcomer
         Trains.OnPlayerAdmitted(peerId);                   // world burst: trainsets/junctions/grants
         Career.OnPlayerAdmitted(peerId, playerKey, name);  // career burst: your career + the board
+        Items.OnPlayerAdmitted(peerId);                    // item burst: AFTER career maps peer↔key
         PlayerAdmitted?.Invoke(state);
     }
 
@@ -218,7 +226,8 @@ public sealed class NetServer : IDisposable
             _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);
 
         Trains.OnPlayerRemoved(peerId);                    // park their consists, free their grants
-        Career.OnPlayerRemoved(peerId);                    // start their reconnect-grace hold
+        Items.OnPlayerRemoved(peerId);                     // mark their held items offline — BEFORE
+        Career.OnPlayerRemoved(peerId);                    // career drops the peer↔key map it reads
         PlayerRemoved?.Invoke(peerId);
     }
 

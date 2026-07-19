@@ -24,6 +24,9 @@ public enum EconomyEventKind : byte
 
     /// <summary>D14: a native register purchase burned from the mirrored wallet.</summary>
     ExternalFee = 4,
+
+    /// <summary>M4: a shop item purchase burned from the policy wallet.</summary>
+    ShopPurchase = 5,
 }
 
 /// <summary>

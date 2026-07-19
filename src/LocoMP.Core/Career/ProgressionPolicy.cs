@@ -34,4 +34,10 @@ public sealed class ProgressionPolicy
 
     /// <summary>Whether licenses live in the one shared set instead of per-player profiles.</summary>
     public bool LicensesShared => Preset == ProgressionPreset.SharedCareer;
+
+    /// <summary>Which scope owns an item this player picks up or buys (M4). Per-player mode keeps
+    /// each player's inventory to themselves; shared career pools items in the one shared scope so
+    /// they are "freely shared" (02 §6 inventory row) — the same one-switch routing as the wallet.</summary>
+    public string InventoryScopeFor(string playerKey) =>
+        Preset == ProgressionPreset.SharedCareer ? SharedAccount : playerKey;
 }

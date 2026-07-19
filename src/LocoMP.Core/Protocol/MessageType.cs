@@ -190,4 +190,40 @@ public enum MessageType : byte
     /// <summary>any client → server → sim owner: a player physically uncoupled a car's coupler —
     /// the owner performs the real uncouple and its native event proposes the split.</summary>
     UncoupleRequest = 49,
+
+    // ── items (M4, protocol v6) ──
+
+    /// <summary>world source → server: register a WORLD item the host owns (host capture / content
+    /// spawning). The server mints the id and echoes a correlation token so the Shim maps its local
+    /// GameObject; gated behind <see cref="Items.ItemConfig.AcceptExternalItems"/>.</summary>
+    ItemRegister = 50,
+
+    /// <summary>client → server: pick up a world item into my possession (proximity-gated, exclusive).</summary>
+    ItemPickupRequest = 51,
+
+    /// <summary>client → server: drop an item I hold into the world at a pose.</summary>
+    ItemDropRequest = 52,
+
+    /// <summary>client → server: buy a prefab from a shop — money burns from the policy wallet and
+    /// the item mints into my possession (02 §4 win condition: a CLIENT purchase lands in the right
+    /// wallet).</summary>
+    ItemPurchaseRequest = 53,
+
+    /// <summary>world source → server: a world item is gone in the native world (consumed) — despawn it.</summary>
+    ItemDespawnRequest = 54,
+
+    /// <summary>server → clients: an item exists — full identity/state + location. Sent on create and
+    /// in the join burst. Leads with a correlation token (0 except the echo to a registrant/buyer).</summary>
+    ItemSpawned = 55,
+
+    /// <summary>server → clients: a known item changed location (picked up, dropped, or its holder
+    /// went offline/rejoined). Lightweight — the def is already mirrored.</summary>
+    ItemMoved = 56,
+
+    /// <summary>server → clients: an item was removed from the world.</summary>
+    ItemDespawned = 57,
+
+    /// <summary>server → requester: an item proposal failed — carries the reason and the item id
+    /// (0 for a purchase, which has no id yet), the mirror of CareerRejected.</summary>
+    ItemRejected = 58,
 }

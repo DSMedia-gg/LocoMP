@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 using LocoMP.Core.Career;
+using LocoMP.Core.Items;
+using LocoMP.Core.Presence;
 using LocoMP.Core.Trains;
 
 namespace LocoMP.Core.Persistence;
@@ -74,16 +76,48 @@ public sealed class TrainsSaveData
     public int NextCarId { get; set; } = 1;
 }
 
+/// <summary>One saved item: identity + state (the <see cref="ItemDef"/>) plus its location. Unlike
+/// the wire — which hides the holder behind a session peer id — the SAVE keeps the possession scope
+/// key, because that key is exactly what re-binds a player's inventory across a restart (03 §7 /
+/// 02 §5). World items store their pose; possessed items store the owning scope.</summary>
+public sealed class ItemSave
+{
+    public ItemSave(ItemDef def, ItemLocationKind location, Pose worldPose, string ownerScope)
+    {
+        Def = def;
+        Location = location;
+        WorldPose = worldPose;
+        OwnerScope = ownerScope;
+    }
+
+    public ItemDef Def { get; }
+    public ItemLocationKind Location { get; }
+    public Pose WorldPose { get; }
+
+    /// <summary>Empty string in the world; the policy scope (player key or shared account) when held.</summary>
+    public string OwnerScope { get; }
+}
+
+/// <summary>The items half of a server save (M4): world-dropped items + per-player inventory + the
+/// id counter, so a cold restart resumes both exactly (the 02 §5 win-condition tail).</summary>
+public sealed class ItemsSaveData
+{
+    public List<ItemSave> Items { get; } = new();
+    public int NextItemId { get; set; } = 1;
+}
+
 /// <summary>Everything a cold restart needs to resume the world (07 §M3 exit). Produced by
 /// NetServer.CaptureSave, serialized by SaveCodec, restored via the NetServer constructor.</summary>
 public sealed class ServerSaveData
 {
-    public ServerSaveData(CareerSaveData career, TrainsSaveData trains)
+    public ServerSaveData(CareerSaveData career, TrainsSaveData trains, ItemsSaveData? items = null)
     {
         Career = career;
         Trains = trains;
+        Items = items ?? new ItemsSaveData();
     }
 
     public CareerSaveData Career { get; }
     public TrainsSaveData Trains { get; }
+    public ItemsSaveData Items { get; }
 }
