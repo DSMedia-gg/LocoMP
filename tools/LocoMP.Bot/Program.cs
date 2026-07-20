@@ -16,14 +16,15 @@ Console.WriteLine($"LocoMP.Bot → {opts.Host}:{opts.Port} — {opts.Count} × {
                   $"build {opts.GameBuild}, mod {opts.ModVersion}, {opts.Hz:F0} Hz" +
                   (opts.ChurnSeconds > 0 ? $", churn {opts.ChurnSeconds}s" : ""));
 
-// The ghost train (M2) needs the extracted world topology to drive on.
+// The ghost train (M2) and the claim-drive rig (M6-B.3) both need the extracted world topology to drive on.
 WorldTopology? world = null;
-if (opts.ConsistCars > 0)
+if (opts.ConsistCars > 0 || opts.ClaimServerTrain)
 {
+    string flag = opts.ConsistCars > 0 ? "--consist" : "--claim-server-train";
     string? worldPath = opts.WorldFile ?? FindWorldFile();
     if (worldPath is null || !File.Exists(worldPath))
     {
-        Console.Error.WriteLine("--consist needs an extracted topology (.lmpw). Pass --world <path>, " +
+        Console.Error.WriteLine($"{flag} needs an extracted topology (.lmpw). Pass --world <path>, " +
                                 "set LOCOMP_WORLD_FILE, or extract one in-game first (mod panel).");
         return 1;
     }
@@ -67,11 +68,11 @@ for (int i = 0; i < opts.Count; i++)
     var bot = new BotClient(name, connect,
         opts.ToIdentity(), behavior, clock, Console.WriteLine,
         opts.Password, opts.ChurnSeconds);
+    // Multiple ghosts/claimers share a start hint; stagger them a seed apart so they diverge at junctions.
+    uint? startEdge = opts.StartEdge >= 0 ? (uint)opts.StartEdge : (uint?)null;
     ConsistDriver? driver = null;
-    if (world != null)
+    if (world != null && opts.ConsistCars > 0)
     {
-        // Multiple ghosts share a start hint; stagger them a seed apart so they diverge at junctions.
-        uint? startEdge = opts.StartEdge >= 0 ? (uint)opts.StartEdge : (uint?)null;
         // The derailed car poses a few metres from the --at anchor: visible, near the player
         // (so the set materializes), and never inside them.
         var derailPose = new Pose(opts.Center.Px + 6, opts.Center.Py, opts.Center.Pz + 6, 0f, 0f, 0f, 1f);
@@ -79,16 +80,20 @@ for (int i = 0; i < opts.Count; i++)
             startEdge, opts.Liveries, opts.CargoId, opts.CargoAmount,
             derailCarIndex: opts.DerailCar - 1, derailPose: derailPose);
     }
+    ClaimDriver? claimDriver = (opts.ClaimServerTrain && world != null)
+        ? new ClaimDriver(world, opts.ConsistSpeed, opts.DriveSeconds, opts.Seed + i, name, Console.WriteLine, startEdge)
+        : null;
     RemoteActor? actor = opts.ClaimFirst || opts.Drive || opts.AbandonAfterSeconds > 0
             || opts.GrabItems || opts.BuyPrefab.Length > 0
             || opts.RerailCar.Length > 0 || opts.ClearCar.Length > 0
         ? new RemoteActor(opts, name, Console.WriteLine)
         : null;
-    if (driver != null || actor != null)
+    if (driver != null || claimDriver != null || actor != null)
     {
         bot.SessionTick = (client, dt) =>
         {
             driver?.Tick(client, dt);
+            claimDriver?.Tick(client, dt);
             actor?.Tick(client, dt);
         };
     }

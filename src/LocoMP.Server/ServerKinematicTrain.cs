@@ -43,9 +43,13 @@ public sealed class ServerKinematicTrain
     public int TrainsetId => _def.Id;
     public long SnapshotsSent { get; private set; }
 
-    /// <summary>Advance the consist by one tick and publish its new position to every client.</summary>
+    /// <summary>Advance the consist by one tick and publish its new position to every client. While a
+    /// player has claimed the train (M6-B.3), the server is no longer its owner — freeze: don't advance
+    /// the walker or publish (the snapshot would be a no-op anyway), so on hand-back the train resumes
+    /// from where it was borrowed rather than snapping to a schedule position that ran on in parallel.</summary>
     public void Tick(double dt)
     {
+        if (!_trains.IsServerDriven(_def.Id)) return; // on loan to a player — the server isn't driving it
         _walker.Advance(_speed * dt);
 
         var cars = new CarSnapshot[_def.Cars.Count];
