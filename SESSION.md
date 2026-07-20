@@ -60,8 +60,10 @@ a **MEASURED** `BudgetBench` proof: two clusters ~2 km apart, filtering ON → t
 the pose bytes (exactly its near cluster). Suite **177 → 191 ×3**, full sln **0 warnings** (Shim vs
 B99.7). Staged to Mods/ + dist/ (SHA-identical). Docs: CHANGELOG, `PERF-BASELINE.md` §3b + verdict.
 
-**Next:** Burst 2 — the railed-train 96% (edge geometry + TopologyCodec v2 + gate the snapshot streams);
-the one in-game step is re-extracting a geometry-carrying `.lmpw`. Push of this burst awaits Cody's go.
+**Pushed** (Cody's go, away-from-home close-out): 3 dependency-ordered commits `30a4d45` (core+tests) →
+`d2989ca` (shim) → `d314546` (docs), `ef5a36f..d314546`. **Next:** Burst 2 — the railed-train 96% (edge
+geometry + TopologyCodec v2 + gate the snapshot streams); the one in-game step is re-extracting a
+geometry-carrying `.lmpw`.
 
 ---
 

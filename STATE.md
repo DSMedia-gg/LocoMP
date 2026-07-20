@@ -1,7 +1,7 @@
 # STATE — LocoMP (implementation)
 
 **Updated:** 2026-07-20 — **Interest management Burst 1 (D10 mechanism, players only) BUILT + verified
-headless + STAGED (uncommitted).** The server now keeps a per-client spatial relevance set and can gate
+headless + PUSHED** (`30a4d45` core+tests / `d2989ca` shim / `d314546` docs, `ef5a36f..d314546`, Cody's go). The server now keeps a per-client spatial relevance set and can gate
 **player pose relays** by it: a player who walks out of range stops streaming to you and their avatar is
 hidden (re-shown on approach), instead of broadcasting everyone's position to everyone. New
 `InterestManager` (the enter/stay/leave state machine with hysteresis + fail-open, game-free/headless-
@@ -12,8 +12,7 @@ raises `PlayerHidden`; the Shim's `AvatarManager`/`RemoteAvatar` hide-not-destro
 pose bytes with filtering on (`docs/PERF-BASELINE.md` §3b). Suite **177 → 191 ×3** (+14: 10
 InterestManager unit + 3 Loopback session + 1 bench), full sln **0 warnings** (Shim vs B99.7). Staged to
 Mods/ + dist/ (SHA-identical). **This is the MECHANISM only — players are ~4% of the bandwidth; the ~96%
-(railed-train snapshots) is Burst 2, which needs coarse edge geometry in the topology.** Push awaits
-Cody's go.
+(railed-train snapshots) is Burst 2, which needs coarse edge geometry in the topology.**
 
 **Scope note (a refinement of the approved plan, FLAG FOR CODY):** the approved Burst 1 plan gated
 *poses + world items*. Tracing the code, items carry a possessed/world duality and are discrete (they
