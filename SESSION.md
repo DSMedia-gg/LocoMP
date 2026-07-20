@@ -59,9 +59,9 @@ M4 smoke pass.
 **Snag:** `Object.FindObjectOfType` was ambiguous (UnityEngine.Object vs object) — added the
 `using Object = UnityEngine.Object;` alias ItemSync already uses.
 
-**Next:** commit + push on Cody's go (3 dependency-ordered commits: Core → Shim/bot → docs; `git
-commit -F <file>`). Then **manual service** is the last M4 scope item; remote summon + held-item
-display are banked follow-ons.
+**Pushed** (Cody's go): 3 dependency-ordered commits `5f073f4` (core) → `887cd03` (comms feat) →
+`f9981f7` (docs), `b83414a..f9981f7`. **Next: manual service** is the last M4 scope item; remote
+summon + held-item display are banked follow-ons.
 
 ---
 

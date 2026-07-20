@@ -1,7 +1,8 @@
 # STATE — LocoMP (implementation)
 
 **Updated:** 2026-07-20 — **M4.4 (Comms-radio actions for all players — rerail/delete/summon + fees)
-BUILT, uncommitted.** Cody picked "go for all three sub-slices" after the recon flagged the size +
+BUILT + PUSHED** (`5f073f4`/`887cd03`/`f9981f7`, Cody's go). Cody picked "go for all three sub-slices"
+after the recon flagged the size +
 one-PC-testability split. Recon-first (decompiled `RerailController`/`CommsRadioCarDeleter`/
 `CommsRadioCrewVehicle`/`CommsRadioController` → `research/comms-radio-recon.md`): all three fire a
 public `Action<TrainCar>` success event and charge a DIRECT `Inventory.RemoveMoney` (not a register),
@@ -66,8 +67,8 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
 
 ## Where things stand
 
-- **M4.4 — Comms-radio actions (rerail/delete/summon + fees, for all players): BUILT 2026-07-20,
-  uncommitted. 161/161 ×3, full sln 0 warnings, STAGED to Mods/ + dist/.** All three sub-slices Cody
+- **M4.4 — Comms-radio actions (rerail/delete/summon + fees, for all players): BUILT + PUSHED
+  2026-07-20 (Cody's go). 161/161 ×3, full sln 0 warnings, STAGED to Mods/ + dist/.** All three sub-slices Cody
   asked for. See the header above for the full breakdown. Net: comms-radio actions cost money through
   the wallet (were free), deletes clear replicas everywhere (were ghosts), and joined players can
   rerail/delete host cars (fee to the initiator). Protocol v8. Recon at
@@ -826,13 +827,13 @@ career" toggle or delete the .lmps to re-mint).
 6. **Repo residuals, whenever** (05 §7): branch protection, DCO app (optional), repo topics.
 
 ## Push state
-- **UNCOMMITTED (awaiting Cody's go): M4.4 (Comms radio).** Suggested split = three dependency-ordered
-  commits: (1) Core — protocol v8, `CommsActionRequest/Command` + `CarDeleteNotice` + `CommsActionKind`,
-  `TrainsetRegistry.TryDeleteCar`, `FeeExternal` target peer, ServerTrains/ClientTrains/ClientCareer
-  senders+handlers, +5 tests; (2) Shim/mod/bot — `CommsRadioHook` + `CommsRadioSync`, WalletMirror
-  `isHost` + client mirror, SessionController + Main wiring, bot `--rerail`/`--clear` + CHANGELOG;
-  (3) docs (STATE + SESSION + recon). Each builds independently (Core has no Shim dep). Remote
-  unchanged since the M4.3 push. Use `git commit -F <file>` (PS 5.1 quote-mangling).
+- **PUSHED 2026-07-20 (Cody's go): M4.4 (Comms radio) as three dependency-ordered commits** `5f073f4`
+  (feat(core): protocol v8 + CommsActionRequest/Command + CarDeleteNotice + CommsActionKind +
+  TryDeleteCar + FeeExternal target peer + 5 tests) → `887cd03` (feat(comms): CommsRadioHook +
+  CommsRadioSync, WalletMirror isHost + client mirror, SessionController/Main wiring, bot
+  `--rerail`/`--clear` + CHANGELOG) → `f9981f7` (docs). `b83414a..f9981f7`, in sync with origin/main.
+  Each commit builds independently (Core has no Shim dep). Remote was unchanged since the M4.3 push.
+  The recon doc (`research/comms-radio-recon.md`) lives in the private parent corpus, not the repo.
 - **PUSHED 2026-07-20 (Cody's go): M4.3 (Shops) as three dependency-ordered commits** `8fd47af`
   (feat(core): protocol v7 + `ItemShopCatalog` 59 + ClientItems.ShopCatalog + catalog-on-join test) →
   `8870cd3` (feat(shops): `ShopCatalogBuilder`, `DrawShop()` + item toast, bot `--buy` + CHANGELOG) →
@@ -873,8 +874,8 @@ career" toggle or delete the .lmps to re-mint).
 - Staged payload in the game's `Mods/LocoMP/` = **2026-07-19 13:22 build** = the verified commit.
 
 ## Blockers
-- None. **M4.4 (Comms radio) BUILT 2026-07-20, uncommitted — awaiting Cody's go to push**; 161/161
-  ×3, 0 warnings, staged to Mods/ + dist/. M4.1–M4.3 pushed. In-game verification joins the **batched
+- None. **M4.4 (Comms radio) BUILT + PUSHED 2026-07-20 (Cody's go)** (`5f073f4`/`887cd03`/`f9981f7`);
+  161/161 ×3, 0 warnings, staged to Mods/ + dist/. M4.1–M4.4 all pushed. In-game verification joins the **batched
   M4 smoke pass** (comms Runs A/B/C banked below). **M4 exit progress:** ✅ a client completes a job →
   right wallet (M3.5a–c); ✅ a client buys a lantern → right wallet (M4.3); ✅ drop → another player
   picks it up (M4.2); ✅ server restart persists items/inventory (M4.1); ✅ comms-radio actions for
@@ -1000,7 +1001,7 @@ search vs the game's full valid-point solve); the affordability edge above (a re
 the wallet mirror, but a bot/mismatch could act then have the fee refused).
 
 ## Session log
-- **2026-07-20** — **M4.4 (Comms-radio actions for all players) BUILT, uncommitted.** Cody chose "go
+- **2026-07-20** — **M4.4 (Comms-radio actions for all players) BUILT + PUSHED (`5f073f4`/`887cd03`/`f9981f7`, Cody's go).** Cody chose "go
   for all three sub-slices" after the recon flagged the size + one-PC-testability split. Recon
   decompiled the three comms-radio modes → `research/comms-radio-recon.md`; the load-bearing find:
   each charges a DIRECT `Inventory.RemoveMoney`, which D14's WalletMirror reconcile REVERTS → host
