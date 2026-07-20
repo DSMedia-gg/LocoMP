@@ -254,4 +254,14 @@ public enum MessageType : byte
     /// the registry and broadcast the removal so every client despawns its replica (a deleted car
     /// otherwise lingers as a ghost, since the destroy hook can't tell delete from distance-streaming).</summary>
     CarDeleteNotice = 62,
+
+    // ── M6-B.3: drivable server trains. A player may CLAIM an ambient server-owned train (the
+    // sentinel-owner check in TryClaim now admits it, never another player's) and drive it via the
+    // ordinary owner-snapshot path; releasing it — or disconnecting — hands it back to the server,
+    // which resumes its kinematic drive. ──
+
+    /// <summary>client → server: hand back a trainset I currently simulate. A borrowed server train
+    /// returns to the server (it resumes driving); a self-registered consist parks (owner 0). The
+    /// counterpart to <see cref="OwnershipRequest"/>; only the current owner may release.</summary>
+    OwnershipRelease = 63,
 }

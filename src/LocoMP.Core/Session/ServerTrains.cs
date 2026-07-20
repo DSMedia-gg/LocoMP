@@ -34,6 +34,10 @@ public sealed class ServerTrains
     // the epoch and every transaction prunes). Feeds the join-burst baseline and the world save.
     private readonly Dictionary<int, TrainsetSnapshot> _latest = new();
 
+    // Trainsets the SERVER spawned as its own (M6-B.2/B.3). Stays a member even while a player has it
+    // on loan, so a release or a disconnect hands it back to the server rather than parking it dead.
+    private readonly HashSet<int> _serverOwnedSets = new();
+
     internal ServerTrains(ITransport transport, IClock clock, Func<IEnumerable<int>> connectedIds)
     {
         _transport = transport;
@@ -79,6 +83,7 @@ public sealed class ServerTrains
             case MessageType.RerailRequest: HandleRerail(peerId, r); return true;
             case MessageType.ResyncRequest: HandleResync(peerId, r); return true;
             case MessageType.OwnershipRequest: HandleOwnership(peerId, r); return true;
+            case MessageType.OwnershipRelease: HandleOwnershipRelease(peerId, r); return true;
             case MessageType.JunctionThrow: HandleJunctionThrow(peerId, r); return true;
             case MessageType.TurntableRotate: HandleTurntableRotate(peerId, r); return true;
             case MessageType.ControlGrantRequest: HandleGrantRequest(peerId, r); return true;
@@ -120,7 +125,19 @@ public sealed class ServerTrains
     internal void OnPlayerRemoved(int peerId)
     {
         foreach (int trainsetId in Registry.Park(peerId))
-            Broadcast(BuildOwner(trainsetId, 0), DeliveryMethod.ReliableOrdered);
+        {
+            // A borrowed server train returns to the server (it resumes its ambient drive) rather than
+            // parking dead at owner 0 (M6-B.3); a player's own consist parks as before.
+            if (_serverOwnedSets.Contains(trainsetId))
+            {
+                Registry.SetOwner(trainsetId, ServerOwnerId);
+                Broadcast(BuildOwner(trainsetId, ServerOwnerId), DeliveryMethod.ReliableOrdered);
+            }
+            else
+            {
+                Broadcast(BuildOwner(trainsetId, 0), DeliveryMethod.ReliableOrdered);
+            }
+        }
 
         var released = new List<int>();
         foreach (KeyValuePair<int, int> g in _grants)
@@ -145,9 +162,18 @@ public sealed class ServerTrains
             throw new ArgumentOutOfRangeException(nameof(carSpecs), $"car count {carSpecs.Count} out of range");
 
         TrainsetDef def = Registry.Register(ServerOwnerId, carSpecs);
+        _serverOwnedSets.Add(def.Id);
         Broadcast(BuildCreate(0, def), DeliveryMethod.ReliableOrdered); // live clients; newcomers get it on join
         return def;
     }
+
+    /// <summary>True while the server is the current sim owner of one of its own trains — i.e. nobody
+    /// has it on loan. The kinematic driver checks this to FREEZE (stop advancing/publishing) the
+    /// instant a player claims the train, and to resume when it is handed back (M6-B.3).</summary>
+    public bool IsServerDriven(int trainsetId) =>
+        _serverOwnedSets.Contains(trainsetId)
+        && Registry.Sets.TryGetValue(trainsetId, out TrainsetDef? def)
+        && def.OwnerId == ServerOwnerId;
 
     /// <summary>Publish a position for a server-owned consist: stored as the join-burst baseline and
     /// relayed to everyone (sequenced-unreliable, like an owner's stream). The server is the authority,
@@ -271,6 +297,19 @@ public sealed class ServerTrains
             Broadcast(BuildOwner(trainsetId, peerId), DeliveryMethod.ReliableOrdered);
         else
             ProposalRejected?.Invoke(peerId, $"claim: {reason}");
+    }
+
+    /// <summary>A player hands back a set they simulate (M6-B.3). Only the current owner may release;
+    /// a borrowed server train returns to the server (owner → <see cref="ServerOwnerId"/>, its
+    /// kinematic driver resumes), and a self-registered consist parks (owner → 0).</summary>
+    private void HandleOwnershipRelease(int peerId, PacketReader r)
+    {
+        int trainsetId = (int)r.ReadVarUInt();
+        if (!Registry.Sets.TryGetValue(trainsetId, out TrainsetDef? set) || set.OwnerId != peerId)
+            return; // not the owner (or unknown) — nothing to hand back; a stale release is a no-op
+        int newOwner = _serverOwnedSets.Contains(trainsetId) ? ServerOwnerId : 0;
+        Registry.SetOwner(trainsetId, newOwner);
+        Broadcast(BuildOwner(trainsetId, newOwner), DeliveryMethod.ReliableOrdered);
     }
 
     private void HandleJunctionThrow(int peerId, PacketReader r)

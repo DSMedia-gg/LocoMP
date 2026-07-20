@@ -37,5 +37,8 @@ public static class ProtocolVersion
     /// <remarks>v9: a WORLD item's location gains a "locked" byte and the item-register request carries
     /// one, so a personal essential (map/radio/wallet) set down syncs as look-but-don't-touch — visible
     /// to all, pickup refused for everyone but its owner.</remarks>
-    public const int Current = 9;
+    /// <remarks>v10 (M6-B.3): drivable server trains — a player may claim an ambient server-owned
+    /// consist and drive it, then hand it back via the new OwnershipRelease message (MessageType 63);
+    /// a v9 peer wouldn't know the new message, so this is a deliberate incompatible bump.</remarks>
+    public const int Current = 10;
 }

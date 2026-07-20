@@ -256,12 +256,16 @@ public sealed class TrainsetRegistry
         return affected;
     }
 
-    /// <summary>Grant simulation ownership of an unowned (parked) trainset to a player.</summary>
+    /// <summary>Grant simulation ownership of a claimable trainset to a player. Claimable = parked
+    /// (owner 0), already the claimant's, or driven by the server (<see cref="ServerTrains.ServerOwnerId"/>
+    /// — an ambient server train a player may take over and drive, M6-B.3). A set a DIFFERENT real
+    /// player owns is refused. Ownership is not a membership change, so the epoch is untouched — the
+    /// claimant's snapshots are admissible the instant the flip lands.</summary>
     public bool TryClaim(int playerId, int trainsetId, out TrainsetDef? claimed, out string? reason)
     {
         claimed = null;
         if (!_sets.TryGetValue(trainsetId, out TrainsetDef? set)) { reason = $"unknown trainset {trainsetId}"; return false; }
-        if (set.OwnerId != 0 && set.OwnerId != playerId)
+        if (set.OwnerId != 0 && set.OwnerId != playerId && set.OwnerId != ServerTrains.ServerOwnerId)
         {
             reason = $"trainset {trainsetId} is owned by player {set.OwnerId}";
             return false;
@@ -270,6 +274,17 @@ public sealed class TrainsetRegistry
         claimed = set.WithOwner(playerId);
         _sets[trainsetId] = claimed;
         reason = null;
+        return true;
+    }
+
+    /// <summary>Directly set a trainset's simulation owner (0 = parked, a peer id = that player,
+    /// <see cref="ServerTrains.ServerOwnerId"/> = server-driven). The ownership-release/reclaim path
+    /// (M6-B.3) uses this to hand a set back — <see cref="TryClaim"/> can't express a park (owner 0 is
+    /// not a claimant). Not a membership change, so the epoch is untouched.</summary>
+    public bool SetOwner(int trainsetId, int ownerId)
+    {
+        if (!_sets.TryGetValue(trainsetId, out TrainsetDef? set)) return false;
+        _sets[trainsetId] = set.WithOwner(ownerId);
         return true;
     }
 
