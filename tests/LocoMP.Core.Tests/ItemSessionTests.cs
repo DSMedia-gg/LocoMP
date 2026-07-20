@@ -84,6 +84,19 @@ public class ItemSessionTests
     }
 
     [Fact]
+    public void Join_burst_delivers_the_shop_catalog_to_every_client()
+    {
+        var (_, _, _, a, b) = Session(); // Items() sells lantern @ 50.00 and crate @ 200.00
+
+        foreach (NetClient c in new[] { a, b })
+        {
+            Assert.Equal(2, c.Items.ShopCatalog.Count);
+            Assert.Equal(50_00, c.Items.ShopCatalog["lantern"]);
+            Assert.Equal(200_00, c.Items.ShopCatalog["crate"]);
+        }
+    }
+
+    [Fact]
     public void Purchase_is_refused_on_insufficient_funds_and_mints_nothing()
     {
         var (_, _, server, a, b) = Session(start: 10_00);

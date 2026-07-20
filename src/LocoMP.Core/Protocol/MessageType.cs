@@ -226,4 +226,12 @@ public enum MessageType : byte
     /// <summary>server → requester: an item proposal failed — carries the reason and the item id
     /// (0 for a purchase, which has no id yet), the mirror of CareerRejected.</summary>
     ItemRejected = 58,
+
+    // ── M4 shops (protocol v7) ──
+
+    /// <summary>server → client: the shop catalog (itemPrefabName → price in cents) so the client can
+    /// render its Buy UI. Sent once in the join burst, mirroring how <see cref="CareerState"/> carries
+    /// the license price catalog. The purchase transaction itself is the v6 <see cref="ItemPurchaseRequest"/>;
+    /// this only feeds the front-end what is for sale.</summary>
+    ItemShopCatalog = 59,
 }
