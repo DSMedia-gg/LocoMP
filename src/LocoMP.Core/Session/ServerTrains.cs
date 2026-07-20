@@ -50,6 +50,13 @@ public sealed class ServerTrains
     /// <summary>Current control-grant holders, carId → playerId.</summary>
     public IReadOnlyDictionary<int, int> Grants => _grants;
 
+    /// <summary>Owner id for consists the SERVER itself drives (the dedicated server's kinematic
+    /// coaster, M6-B.2) — never a real peer (peer ids start at 1) and never 0 (parked), so
+    /// <see cref="TrainsetRegistry.TryClaim"/> refuses to hand one to a player and the server stays
+    /// their sole authority. A player interacting with one (couple/comms) routes to this dead id and is
+    /// a harmless no-op — server trains are ambient; full player-takeover is a later refinement.</summary>
+    public const int ServerOwnerId = int.MaxValue;
+
     /// <summary>Owner snapshots refused by the 03 §4 admission check (stale epoch, retired id, or
     /// non-owner sender) and dropped before relay. The server-side half of the fuzz oracle.</summary>
     public long StaleSnapshotsDropped { get; private set; }
@@ -123,6 +130,37 @@ public sealed class ServerTrains
             _grants.Remove(carId);
             Broadcast(BuildGrantState(carId, 0), DeliveryMethod.ReliableOrdered);
         }
+    }
+
+    // ── server-owned trains (M6-B.2): the dedicated server as a sim owner ──
+
+    /// <summary>Spawn a consist the SERVER owns and drives (no client needed). Registered under
+    /// <see cref="ServerOwnerId"/> so it can't be claimed; delivered to every already-connected client
+    /// immediately and to newcomers via the join burst (<see cref="OnPlayerAdmitted"/> sends all sets).
+    /// Advance it by feeding positions to <see cref="PushServerSnapshot"/>.</summary>
+    public TrainsetDef SpawnServerOwned(IReadOnlyList<CarDef> carSpecs)
+    {
+        if (carSpecs == null) throw new ArgumentNullException(nameof(carSpecs));
+        if (carSpecs.Count < 1 || carSpecs.Count > TrainCodec.MaxCarsPerTrainset)
+            throw new ArgumentOutOfRangeException(nameof(carSpecs), $"car count {carSpecs.Count} out of range");
+
+        TrainsetDef def = Registry.Register(ServerOwnerId, carSpecs);
+        Broadcast(BuildCreate(0, def), DeliveryMethod.ReliableOrdered); // live clients; newcomers get it on join
+        return def;
+    }
+
+    /// <summary>Publish a position for a server-owned consist: stored as the join-burst baseline and
+    /// relayed to everyone (sequenced-unreliable, like an owner's stream). The server is the authority,
+    /// so no admission check — but stale/foreign snapshots are ignored defensively (a server train never
+    /// changes membership, so its epoch is constant).</summary>
+    public void PushServerSnapshot(TrainsetSnapshot snap)
+    {
+        if (!Registry.Sets.TryGetValue(snap.TrainsetId, out TrainsetDef? def)) return;
+        if (def.OwnerId != ServerOwnerId || def.Epoch != snap.Epoch) return;
+        _latest[snap.TrainsetId] = snap;
+        byte[] payload = BuildSnapshot(snap);
+        foreach (int id in _connectedIds())
+            _transport.Send(id, payload, DeliveryMethod.SequencedUnreliable);
     }
 
     // ── handlers ──

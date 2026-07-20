@@ -10,14 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Dedicated server (alpha, M6-B.1 pulled forward): `LocoMP.Server` is now a real, standalone headless
+- Dedicated server (alpha, M6-B pulled forward): `LocoMP.Server` is now a real, standalone headless
   server you can host and join from the game — no second player needed to test. It runs the full session
   (presence, the job board, persistence) over UDP with no game install, generates a starter career board
   out-of-the-box, saves the world to disk (autosave + on exit), and reloads it on restart. Console
-  commands `status` / `save` / `stop`. To populate it with a train while testing solo, run a bot that
-  joins first (`LocoMP.Bot --host 127.0.0.1 --consist 3 --livery ...`). See `src/LocoMP.Server/README.md`.
-  (This slice: the server doesn't yet spawn its own trains, and the career board is a synthetic
-  placeholder — a real Derail Valley career exported from the game, and server-owned trains, come next.)
+  commands `status` / `save` / `stop`. With `--spawn-trains N` it **drives its own trains** along the
+  extracted world topology, so you can watch trains roll through the valley solo — no bot needed
+  (`LocoMP.Server --port 8877 --spawn-trains 3`). See `src/LocoMP.Server/README.md`. (Alpha limits: the
+  server's trains are ambient — you can't claim/couple to one yet — and the career board is a synthetic
+  placeholder; a real Derail Valley career exported from the game comes next.)
 - Personal items stay yours (M4.6): a personal essential you set down in the world — your map, comms
   radio, wallet, compass or the DV guide — is now "look, but don't touch". Everyone in the session can
   SEE it lying where you left it, but only you can pick it back up; another player's attempt is refused

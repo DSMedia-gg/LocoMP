@@ -29,6 +29,13 @@ public sealed class ServerOptions
     public ProgressionPreset Preset = ProgressionPreset.PerPlayer;
     public double Hz = 30;                  // server tick rate (03 §5)
 
+    // Server-owned kinematic trains (M6-B.2) — the server drives its own consists so a fresh server has
+    // moving trains with no bot. Needs an extracted topology (.lmpw) to walk.
+    public int SpawnTrains = 0;             // 0 = none
+    public int TrainCars = 3;
+    public double TrainSpeed = 10;          // m/s ≈ 36 km/h
+    public string[] TrainLiveries = System.Array.Empty<string>(); // real livery ids (else generic kinds)
+
     public HandshakeRequest ToIdentity() => new(ProtocolVersion.Current, GameBuild, ModVersion, ModListHash);
 
     /// <summary>The server ships in the same tree as the mod, so the single version source
@@ -66,6 +73,10 @@ public sealed class ServerOptions
                     case "--name": o.Name = Next(); break;
                     case "--autosave-seconds": o.AutosaveSeconds = Math.Max(1, long.Parse(Next(), CultureInfo.InvariantCulture)); break;
                     case "--tick-hz": o.Hz = Math.Clamp(double.Parse(Next(), CultureInfo.InvariantCulture), 1, 60); break;
+                    case "--spawn-trains": o.SpawnTrains = Math.Max(0, int.Parse(Next(), CultureInfo.InvariantCulture)); break;
+                    case "--train-cars": o.TrainCars = Math.Max(1, int.Parse(Next(), CultureInfo.InvariantCulture)); break;
+                    case "--train-speed": o.TrainSpeed = double.Parse(Next(), CultureInfo.InvariantCulture); break;
+                    case "--train-livery": o.TrainLiveries = Next().Split(',', StringSplitOptions.RemoveEmptyEntries); break;
                     case "--preset":
                     {
                         string p = Next().ToLowerInvariant();
@@ -92,6 +103,26 @@ public sealed class ServerOptions
         return o;
     }
 
+    /// <summary>Resolve the topology file for --spawn-trains: explicit --world, then the
+    /// LOCOMP_WORLD_FILE env var, then tests/data/world-*.lmpw walking up from the exe (repo runs). Null
+    /// if none found. Same probe order as the bot, so `--spawn-trains` works out-of-the-box from the repo.</summary>
+    public string? ResolveWorldFile()
+    {
+        if (!string.IsNullOrEmpty(WorldFile)) return File.Exists(WorldFile) ? WorldFile : null;
+
+        string? env = Environment.GetEnvironmentVariable("LOCOMP_WORLD_FILE");
+        if (!string.IsNullOrEmpty(env) && File.Exists(env)) return env;
+
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir != null; dir = dir.Parent)
+        {
+            string dataDir = Path.Combine(dir.FullName, "tests", "data");
+            if (!Directory.Exists(dataDir)) continue;
+            string? found = Directory.EnumerateFiles(dataDir, "world-*.lmpw").OrderBy(f => f).FirstOrDefault();
+            if (found != null) return found;
+        }
+        return null;
+    }
+
     public static void PrintUsage()
     {
         // Verbatim (not raw) string: the repo pins C# 10 for the net48/Unity ceiling; raw literals are C# 11.
@@ -112,15 +143,21 @@ Usage: LocoMP.Server [options]
   --autosave-seconds <n> autosave interval           (default 60)
   --preset <p>           perplayer | shared          (default perplayer)
   --tick-hz <n>          server tick rate            (default 30)
+  --spawn-trains <n>     server drives n kinematic trains itself (needs a topology; no bot needed)
+  --train-cars <n>       cars per server train       (default 3)
+  --train-speed <m/s>    server train speed          (default 10)
+  --train-livery <a,b,c> real livery ids for server trains (else generic kinds)
   --help                 this text
 
 Console commands (type at the prompt while running): status | save | stop | help
 
 Solo-test recipe (no second player needed):
-  1) LocoMP.Server --port {NetDefaults.Port}
-  2) LocoMP.Bot --host 127.0.0.1 --consist 3 --livery LocoDiesel,BoxcarBrown,BoxcarBrown
-     (the bot joins first, becomes the world source, and registers a real consist)
-  3) Join from Derail Valley (Direct connect 127.0.0.1) as a second client — you see the bot's train,
-     the job board, and presence. Restart the game or the server and rejoin: the world persists.");
+  1) LocoMP.Server --port {NetDefaults.Port} --spawn-trains 3
+     (the server drives its own trains along the extracted topology — no bot required)
+  2) Join from Derail Valley (Direct connect 127.0.0.1) — you see the server's trains rolling, the
+     job board, and presence. Restart the game or the server and rejoin: the world persists.
+
+--spawn-trains needs an extracted topology (.lmpw): pass --world <path>, set LOCOMP_WORLD_FILE, or run
+from the repo (it finds tests/data/world-*.lmpw). Extract one in-game via the mod panel for the real map.");
     }
 }
