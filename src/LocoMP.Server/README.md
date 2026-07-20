@@ -28,7 +28,25 @@ dotnet run --project src/LocoMP.Server -- --port 8877
 ### Options
 `--port` (8877) · `--key` · `--save <path>` · `--password` · `--max-players` (32) · `--build`
 (99-build2702) · `--mod-version` · `--modlist-hash` · `--name` · `--autosave-seconds` (60) · `--preset`
-(perplayer|shared) · `--tick-hz` (30) · `--world`/`--config` (reserved — see below). `--help` for details.
+(perplayer|shared) · `--tick-hz` (30) · `--world` (reserved — see below) · `--config <file.lmpc>` /
+`--dump-config <file.lmpc>` (real career — see below). `--help` for details.
+
+### Career config (`--config`)
+
+By default the server runs a small synthetic board (Alpha/Bravo/Charlie/Delta, license-free jobs).
+`--config <file.lmpc>` loads a REAL career instead — actual yards, cargo economy, license gates, route
+distances, station world-locations for the task-proximity gate. The `.lmpc` is the config file's
+authoritative source (including the progression preset). A missing, corrupt, or foreign file logs a
+notice and falls back to the built-in default, so the server always starts.
+
+To produce one before the in-game exporter exists, `--dump-config <file.lmpc>` writes the built-in default
+to a file and exits — a seed + a way to exercise `--config` end-to-end:
+```
+LocoMP.Server --dump-config career.lmpc      # write the default career, then exit
+LocoMP.Server --config career.lmpc           # load it
+```
+(A tool that EXPORTS a real career straight from a running game — like the topology `.lmpw` — is a later
+Shim/extractor slice; the file format + loader are done.)
 
 ## Solo-test recipe (no friend, no bot needed)
 
@@ -64,10 +82,11 @@ it back (reclaim-on-disconnect). A structured in-game smoke checklist is in `../
   physically drive a claimed server train from within Derail Valley (a Shim slice). Physical coupling to
   a server train, and junction-throwing as it crosses switches (movement is snapshot-correct regardless),
   remain later refinements.
-- **The career board is a synthetic placeholder** (stations Alpha/Bravo/Charlie/Delta; jobs need no
-  license). A real Derail Valley career — actual yards, cargo economy, license gates, route distances — is
-  *exported from the game* (a Shim/extractor slice, like the topology `.lmpw`); `--config` is the reserved
-  hook and currently falls back to the built-in default with a notice.
+- **The default career board is a synthetic placeholder** (stations Alpha/Bravo/Charlie/Delta; jobs need
+  no license). `--config <file.lmpc>` now loads a real career (see above), but the tool that *exports* a
+  `.lmpc` straight from a running game — actual yards, cargo economy, license gates, route distances, like
+  the topology `.lmpw` — is still a later Shim/extractor slice. Until then, `--dump-config` gives you a
+  default seed.
 - **Trains need a topology to walk.** Without `--spawn-trains` (or a `.lmpw`), the server runs bare
   (presence + jobs + persistence); trains can still come from a registering client (bot or game).
 - **Joining from the real game** requires the client's handshake to match exactly: protocol version, game
