@@ -1,7 +1,30 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-20 — **M6-B.1: dedicated server PULLED FORWARD + BUILT + smoke-verified headless.
-Committed locally, push awaits Cody's go.** Cody has no test partner until ~next weekend, so we pulled
+**Updated:** 2026-07-20 — **M6-B.2: server-owned kinematic trains BUILT + verified headless (clean,
+server-authoritative). Committed locally, push awaits Cody's go.** Cody picked the clean build over the
+quick internal-client hack. Now a fresh `LocoMP.Server --spawn-trains N` **drives its own trains** along
+the extracted topology — **no bot needed** — retiring M6-B.1's "a fresh server has no trains" limitation.
+- **Core (small, clean):** `ServerTrains.ServerOwnerId` (=`int.MaxValue`, never a peer, never 0) +
+  `SpawnServerOwned(cars)` + `PushServerSnapshot(snap)`. Server-authoritative: the consist is registered
+  under that sentinel owner, so `TrainsetRegistry.TryClaim` (owner≠0 → refuse) **can't be hijacked** by a
+  player; snapshots bypass the owner admission check (the server IS the authority). **NO new message
+  types** (reuses TrainsetCreate/TrainsetSnapshot; the join burst already sends all sets), NO handler
+  changes. A player couple/comms on a server train routes to the dead sentinel = harmless no-op (both
+  transports ignore unknown peers) → server trains are ambient (player-takeover is a later refinement).
+- **Server:** `ServerKinematicTrain` (walks the topology via `TopologyWalker`, publishes snapshots through
+  `PushServerSnapshot` — geometry mirrors the bot's ConsistDriver but server-shaped, no NetClient) +
+  `Program` wiring (`--spawn-trains N`/`--train-cars`/`--train-speed`/`--train-livery`; `--world` or a
+  tests/data probe supplies the `.lmpw`; ticked each loop with real dt).
+- **Verified (game-free):** `ServerOwnedTrainTests` (spawn reaches a client + snapshots move it; rides the
+  join burst; unclaimable) + a real-UDP integration test (a client sees a server train **visibly move**).
+  Suite **167→171 ×3** (UDP test stable ×3), full sln **0 warnings**. **Real-exe smoke:** `--spawn-trains 2`
+  logs `driving 2 server-owned train(s) … along world-99-build2702.lmpw (2073 edges)`; a real bot joined
+  clean. Docs: README recipe is now bot-free; CHANGELOG updated.
+- **Deferred:** player claim/couple of a server train; junction-throwing as the train crosses switches
+  (movement is correct via snapshots regardless); real DV career export (`--config`); deploy.
+
+**Prior (2026-07-20): M6-B.1: dedicated server PULLED FORWARD + BUILT + smoke-verified headless.
+PUSHED** (`8409bac` feat / `b38b7df` docs, `3c8a634..b38b7df`, Cody's go). Cody has no test partner until ~next weekend, so we pulled
 the M6 Track B dedicated server ahead of M5 to make multiplayer **solo-testable**: a standalone game-free
 process he joins from his own game as a client, against a world that persists across game/server restarts.
 Feasible now because the hard parts already existed and are tested (NetServer + persistence run headless;

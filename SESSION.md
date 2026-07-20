@@ -5,6 +5,48 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-20 — Server-owned kinematic trains (M6-B.2): a fresh server drives its own trains 🚂
+
+**Goal:** Cody: "keep working." After M6-B.1's dedicated server (trains came from a bot client), the
+next step was to give the server its OWN trains so solo testing needs no bot. Offered three options;
+Cody picked the **clean, server-authoritative** build (trains owned by the server's registry — no ghost
+"player" artifact) over the quick internal-loopback-client reuse.
+
+**Design (validated by reading ServerTrains/TrainsetRegistry):** the server registers a consist under a
+sentinel owner `ServerTrains.ServerOwnerId` (`int.MaxValue` — never a real peer, never 0/parked). That
+one choice does the heavy lifting: `TrainsetRegistry.TryClaim` refuses any set whose owner is non-zero
+and not the claimer, so **no player can hijack a server train**; the join burst already sends every
+registered set, so it reaches clients for free. Snapshots go through a new `PushServerSnapshot` that
+bypasses the owner admission check (the server is the authority). A stray player couple/comms on a server
+train routes to the dead sentinel peer — a harmless no-op (both transports ignore unknown peers).
+
+**Built:**
+- **Core (small):** `ServerOwnerId` + `SpawnServerOwned(cars)` + `PushServerSnapshot(snap)` on
+  `ServerTrains`. NO new message types (reuses TrainsetCreate/TrainsetSnapshot), NO handler changes.
+- **Server:** `ServerKinematicTrain` — walks the extracted topology with `TopologyWalker` and publishes
+  spline-space snapshots via `PushServerSnapshot` (geometry mirrors the bot's ConsistDriver but
+  server-shaped, driving `ServerTrains` directly, not a NetClient). `Program` gains `--spawn-trains N`
+  (+ `--train-cars`/`--train-speed`/`--train-livery`); `--world` or a tests/data probe supplies the
+  `.lmpw`; each train ticks with real dt in the loop.
+
+**Verified (game-free — the point):**
+- `ServerOwnedTrainTests` (loopback): a server train reaches a client and its pushed snapshots move the
+  replica; it rides the join burst for a newcomer; a player's claim is refused (owner stays the server).
+- Real-UDP integration test: a client joins and sees a server-owned train **visibly move** (front bogie
+  changes edge / advances >1 m). Stable ×3.
+- Suite **167→171**, full sln **0 warnings**. **Real-exe smoke:** `LocoMP.Server --spawn-trains 2` logs
+  `driving 2 server-owned train(s) of 3 car(s) at 10 m/s along world-99-build2702.lmpw (2073 edges)`; a
+  real bot client joined clean.
+
+**Solo recipe is now bot-free:** `LocoMP.Server --port 8877 --spawn-trains 3`, then Direct-connect from
+DV — trains roll through the valley, no bot. (README/CHANGELOG updated.)
+
+**Deferred (documented):** player claim/couple of a server train (ambient for now); junction-throwing as
+a server train crosses switches (movement is snapshot-driven, so it's cosmetic); real DV career export
+(`--config`); container deploy. **Committed locally; push awaits Cody's go.**
+
+---
+
 ## 2026-07-20 — Dedicated server pulled forward (M6-B.1): multiplayer becomes solo-testable 🖥️
 
 **Goal:** Cody — "can we pull forward the dedicated server work? That would make testing 1 million times
