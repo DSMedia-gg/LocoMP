@@ -5,6 +5,50 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-20 — Perf baseline: measuring the §9 budgets (and re-pointing the roadmap) 📊
+
+**Goal:** Cody: "do the next item." M4 scope is code-complete; its only remaining work is the in-game
+smoke pass (needs the PC). M5 is fundamentally in-game UX. The genuinely-next thing I could *do and
+verify game-free while Cody's away* was the audit's standing §6 recommendation: the §9 performance
+budgets had "no measurement harness or recorded numbers." Building the harness also produces the data
+that decides whether the audit's flagged M3-scope gap (M3.2 late-join snapshot) is actually pressing —
+so it's the disciplined "measure before build" move, not a detour.
+
+**Built (game-free, no production change):**
+- **`CountingTransport`** — an `ITransport` decorator over the Loopback hub's server side that tallies
+  every byte the server sends, bucketed by recipient peer + delivery method. Pass-through, so a real
+  session runs over it unmodified; wire sizes come out deterministic and assertable.
+- **`BudgetBench`** — seeds a mature world the real way (world-source host registers N consists with
+  snapshots + M world items; the career board auto-generates jobs), then measures: late-join snapshot
+  bytes across three world scales, per-message pose/snapshot relay sizes, a derived steady-state
+  bandwidth model, and host `Poll()` µs. Records everything via `ITestOutputHelper`; **hard-asserts the
+  deterministic size budgets, loose on machine timing.** Results transcribed to `docs/PERF-BASELINE.md`.
+
+**Measured (protocol v9, dev workstation, Release):**
+- **Late-join snapshot — 37 KB worst case** (60 trains / 360 cars / 100 jobs / 400 items / 16 players),
+  **~270× under the 10 MB budget.** Scales ~linearly; you'd need ~16,000 consists to approach the cap.
+- **Steady-state bandwidth — 6–42× OVER the 128 kbps budget** at scale (820 kbps @ 8p → 5,359 kbps @
+  32p/200 trains) under the current broadcast-everything model (no interest management yet).
+- **Host tick — ~25 µs/tick, ~80× under the 2 ms budget.**
+- Per-message: pose relay 30 B, 5-car snapshot 107 B.
+
+**The finding — measuring reversed the intuitive priority:**
+- The audit named **M3.2 (join snapshot)** as the M3-scope gap → measured as a **non-issue** (270× under).
+  Keep it deferred; only its *phasing* (not compression) is worth doing later, as an M5.1 loading-screen
+  hook. A join queue has minor independent value; friend-scale-irrelevant.
+- The **real** pressing gap is **interest management (D10)** — bandwidth blows the budget at scale,
+  exactly as audit §6 warned. Already scoped as **M6 Track B**; this data says it should LEAD the scaling
+  work and precede any 16+ tester session. Friend scale (≤8p ≈ 0.8 Mbps) is tolerable → **M5 alpha not
+  blocked.**
+
+**Not done / for Cody:** the ≤1.5 ms/frame *client* cost is game-side (Unity Shim work) — unmeasurable
+headless; flagged in the doc for an in-game profiler pass before M5. Committed locally; **push awaits
+Cody's go** (hard rule 7). No decision changed unilaterally — this is data feeding the existing plan.
+
+**Verified:** full suite **165/165** (164 + the bench), game-free build **0 warnings**.
+
+---
+
 ## 2026-07-20 — M4.6: Locked personal essentials (v9) + hide-native fix + comms perf fix 🔒
 
 **Goal:** Cody: "let's keep working on LocoMP" (away 6 hrs — verify programmatically, collate testing

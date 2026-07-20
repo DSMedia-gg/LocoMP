@@ -1,8 +1,29 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-20 — **M4.6 (Locked personal essentials, v9) BUILT (prior burst) + VERIFIED +
-DOCUMENTED this session; uncommitted, push awaits Cody's go.** A `/clear`-interrupted burst was found
-complete in the working tree; this session verified it programmatically and wrote it up (no new code).
+**Updated:** 2026-07-20 — **Perf baseline harness BUILT + measured (the audit §6 "no numbers" gap);
+game-free, 165/165. Committed locally, push awaits Cody's go.** Closes the recurring "budgets have no
+measurement harness or recorded numbers" finding and — the point — produces the data that decides what
+to build next. `tests/…/BudgetBench.cs` + `CountingTransport.cs` (an ITransport decorator that weighs
+every byte the server sends; zero production change); results written to `docs/PERF-BASELINE.md`.
+Headline: measuring **reversed the intuitive priority**.
+- **Late-join snapshot: 37 KB worst case (60 trains/360 cars/100 jobs/400 items/16 players) — ~270×
+  under the 10 MB budget.** So **M3.2 (phased/compressed join) is correctly deferred** — compression is
+  a non-issue for any realistic world; only its *phasing* is worth doing later (as an M5.1 staged-loading
+  hook), not its compression. The would-be "M3 gap" is measured as a non-gap.
+- **Steady-state bandwidth: 6–42× OVER the 128 kbps budget at scale** under the current broadcast-all
+  model (0.8 Mbps @ 8p → 5.4 Mbps @ 32p/200 trains). **Interest management (D10) is the genuine next
+  architecture priority** (already M6 Track B; this says it should LEAD scaling). Friend-scale (≤8p) is
+  tolerable, so the M5 alpha is NOT blocked; the 32-player ceiling is unviable without relevance filtering.
+- **Host tick: ~25 µs/tick, ~80× under the 2 ms budget** — no concern.
+- **Not measured (needs the game):** the ≤1.5 ms/frame *client* cost (Unity-side Shim work) — flagged in
+  the doc for an in-game profiler pass before M5's alpha bar.
+- **Roadmap effect:** keep M3.2 deferred; when M5.1 wants a loading bar, do join *phasing* only. Prioritize
+  interest management (M6-B) ahead of any 16+ tester session. No decision changed unilaterally — this is
+  data feeding the existing plan; flagged for Cody.
+
+**Prior (2026-07-20): M4.6 (Locked personal essentials, v9) — BUILT (pre-`/clear` burst) + VERIFIED +
+DOCUMENTED + PUSHED** (`2ca3ff5` feat / `fecc886` docs, Cody's go; `bdc9f24..fecc886`). A `/clear`-
+interrupted burst was found complete in the working tree; verified programmatically and written up.
 Three threads, protocol **v8→v9**, save schema **v4→v5**:
 - **The feature — look-but-don't-touch essentials.** A DV personal essential (Map/CommsRadio/wallet/
   Compass/DVGuide) set down in the world syncs LOCKED: visible to all, pickup refused for everyone but
