@@ -8,10 +8,12 @@ namespace LocoMP.Server;
 /// and at least one job type to fill the board on every tick — with zero players connected — so a solo
 /// joiner arrives to a populated board (D13 reserved this generator for exactly this).
 ///
-/// These stations/cargo are SYNTHETIC placeholders, not the real Derail Valley map: a genuine career
+/// These stations/cargo are SYNTHETIC placeholders, not the real Derail Valley map. A genuine career
 /// (real yards, cargo economy, license gates, route distances, station world-locations for the task
-/// proximity gate) is exported FROM the game — a Shim/extractor slice, like the topology .lmpw — and
-/// is deliberately deferred. Jobs here require no license so any solo tester can claim and run them.
+/// proximity gate) can be LOADED from a .lmpc file via --config (CareerConfigCodec); the tool that
+/// EXPORTS that file straight from a running game — a Shim/extractor slice, like the topology .lmpw — is
+/// still deferred. This default runs the server out-of-the-box and seeds --dump-config; its jobs require
+/// no license so any solo tester can claim and run them.
 /// </summary>
 public static class DefaultCareer
 {
