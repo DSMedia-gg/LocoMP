@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Drivable server trains (M6-B.3): the dedicated server's own trains are no longer just scenery — a
+  player can now **claim one and drive it**, then hand it back (or just disconnect) and the server picks
+  its route back up. Taking over a server train can't be blocked by, and can't steal, another player's
+  train — only the server's ambient ones are up for grabs. The bot gains `--claim-server-train` to run
+  the whole borrow → drive → release loop against a dedicated server on the one-PC rig, so you can watch
+  an ambient train get taken over and driven from your own game. Network protocol is now v10 (a new
+  "hand it back" message). (In-game, a real player claiming/driving a server train from within the game
+  needs the mod-side UX, which comes with the Shim work; the wire path and the bot rig are here now.)
 - Dedicated server (alpha, M6-B pulled forward): `LocoMP.Server` is now a real, standalone headless
   server you can host and join from the game — no second player needed to test. It runs the full session
   (presence, the job board, persistence) over UDP with no game install, generates a starter career board
@@ -17,8 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commands `status` / `save` / `stop`. With `--spawn-trains N` it **drives its own trains** along the
   extracted world topology, so you can watch trains roll through the valley solo — no bot needed
   (`LocoMP.Server --port 8877 --spawn-trains 3`). See `src/LocoMP.Server/README.md`. (Alpha limits: the
-  server's trains are ambient — you can't claim/couple to one yet — and the career board is a synthetic
-  placeholder; a real Derail Valley career exported from the game comes next.)
+  career board is a synthetic placeholder; a real Derail Valley career exported from the game comes next.)
 - Personal items stay yours (M4.6): a personal essential you set down in the world — your map, comms
   radio, wallet, compass or the DV guide — is now "look, but don't touch". Everyone in the session can
   SEE it lying where you left it, but only you can pick it back up; another player's attempt is refused

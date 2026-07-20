@@ -5,6 +5,56 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-20 — Drivable server trains (M6-B.3): borrow the server's train and drive it 🕹️🚂
+
+**Goal:** Cody — "continue on locoMP" with the constraint "I can't test in person this session; append the
+runbook and verify what you can." Offered three game-free-verifiable slices; Cody picked **drivable server
+trains** — the highest solo-testing payoff (you can *interact* with the server's trains, not just watch
+them roll past). Prior work (M6-B.1/B.2) is all pushed; tree was clean at start (171/171).
+
+**The design realization (why this was small):** M6-B.2 registered server trains under a sentinel owner
+`ServerOwnerId = int.MaxValue`. That one choice pre-built the hard half of "let a player take one over":
+- `PushServerSnapshot` already guards on `OwnerId != ServerOwnerId` → **the server stops driving the instant
+  ownership flips**, no explicit stop.
+- `HandleSnapshot`'s `IsCurrentFromOwner` already admits + relays the owner's snapshots → once the claimer
+  owns the set, **driving is the existing owner-stream path, zero new code.**
+- Ownership isn't a membership change (`WithOwner` keeps the epoch) → **hard rule 5's stale-snapshot
+  invariant can't trip.** So the whole feature is four surgical changes + the headless proof.
+
+**Built (Core/Server/Bot — no Shim, no game ref, no staging):**
+- **Core:** `TrainsetRegistry.TryClaim` now admits a set owned by the server sentinel (still refuses a
+  DIFFERENT real player's — no theft) + `SetOwner(id, owner)` for the park/reclaim leg TryClaim can't
+  express. `ServerTrains`: `_serverOwnedSets`, `IsServerDriven(id)` (the freeze gate), `OnPlayerRemoved`
+  reclaims a borrowed server train to the server rather than parking it dead, `HandleOwnershipRelease`
+  (msg 63). `ClientTrains.ReleaseOwnership`. Protocol **v9 → v10**.
+- **Server:** `ServerKinematicTrain.Tick` freezes while `!IsServerDriven` — on hand-back the train resumes
+  from where it was borrowed (not a schedule position that ran on in parallel). The tidy discontinuity —
+  adopting the driver's final pose — needs spline→parametric inversion; banked.
+- **Bot:** `ClaimDriver` + `--claim-server-train` — join a `--spawn-trains` server, claim an ambient train,
+  drive it along the topology (throwing junctions), release after `--drive-seconds` (Ctrl+C also hands it
+  back via disconnect). The one-PC rig Cody watches from his own game.
+
+**Verified (game-free, the point given no in-person testing):** `ServerOwnedTrainTests` reworked — the old
+B.2 "a player CANNOT claim" test replaced by a full round-trip (`claim → server stops → the driver's
+snapshot moves a WATCHER's replica → a 2nd player can't steal it → release → server resumes`) plus a
+reclaim-on-disconnect test. Suite **171 → 172 ×3**, full sln **0 warnings** (Shim compiled vs real B99.7 —
+no Shim change, but the gate held). The **server exe booted on protocol v10 driving 2 trains** clean.
+
+**Blocked (flagged, not worked around):** the real-exe bot+server live smoke — the **Galleon hardware gate
+denied launching the exes** (and per the no-bypass rule I didn't substitute a kill/relaunch). The headless
+integration test drives the identical `RequestOwnership → SendSnapshot → ReleaseOwnership` wire path, so
+coverage isn't lost; the live-exe smoke is offered to Cody to approve.
+
+**Docs (the "append the runbook" ask):** new **`RUNBOOK-M6B-SERVER.md`** — the first structured in-game
+smoke plan for the whole dedicated-server track (B.1 join/persistence, B.2 trains roll, B.3 claim/drive/
+release + reclaim-on-disconnect), with a results table. Server README limitation + verification updated;
+CHANGELOG entry added; STATE refreshed. **Uncommitted; commit + push await Cody's go** (hard rule 7).
+
+**Next:** the in-game M6-B smoke pass when the game's up; then the natural follow-on — the **Shim UX** for a
+real player to claim/drive a server train from inside DV (turns B.3's wire path into a game action).
+
+---
+
 ## 2026-07-20 — Server-owned kinematic trains (M6-B.2): a fresh server drives its own trains 🚂
 
 **Goal:** Cody: "keep working." After M6-B.1's dedicated server (trains came from a bot client), the

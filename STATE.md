@@ -1,20 +1,58 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-20 — **M6-B.2: server-owned kinematic trains BUILT + verified headless + PUSHED**
-(`d0e4b93` feat / `d67fbba` docs, `b38b7df..d67fbba`, Cody's go). Clean server-authoritative build (Cody
-picked it over the quick internal-client hack). A fresh `LocoMP.Server --spawn-trains N` **drives its own
-trains** along the extracted topology — **no bot needed** — retiring M6-B.1's "a fresh server has no
-trains" limitation.
+**Updated:** 2026-07-20 — **M6-B.3: DRIVABLE server trains BUILT + verified headless (UNCOMMITTED — awaiting
+Cody's go).** A player can now CLAIM one of the dedicated server's ambient trains, drive it (the server
+stops driving it), and hand it back — release OR disconnect returns it to the server, which resumes. Only
+the server's own trains are takeable (never another player's — no theft). Bot `--claim-server-train` runs
+the whole borrow → drive → release loop against a real server so it's watchable in-game. Protocol **v9 →
+v10** (new OwnershipRelease, msg 63). Suite **171 → 172 ×3, full sln 0 warnings** (Shim vs B99.7).
 
-> **Next session — cold start here.** M6-B.1 + B.2 shipped: a joinable, persistent, self-populating
-> dedicated server (`src/LocoMP.Server/`, all pushed, `origin/main` @ `d67fbba`, tree clean). Suite
-> **171/171 ×3, 0 warnings**; the SDK is `C:\Users\User\.dotnet\dotnet.exe` (bash needs `DOTNET_ROOT`).
-> **Still needs Cody's PC/game:** the batched **M4 in-game smoke pass** (`repo/RUNBOOK-M4-SMOKE.md`) and a
-> first in-game join of the dedicated server. **Candidate next slices (Cody to pick):** (1) real DV career
-> export from the game → the server's `--config` hook (real yards/jobs/licenses vs the Alpha/Bravo
-> placeholder); (2) player claim/couple of an ambient server train (drive it); (3) deploy the server to
-> SVHost (container). Perf baseline (`docs/PERF-BASELINE.md`) says interest management (D10/M6-B) is the
-> real scaling gap, not M3.2 join cost — relevant once sessions get big.
+> **Next session — cold start here.** M6-B.1 + B.2 PUSHED (`origin/main` @ `5e57156`); **B.3 is uncommitted
+> in the tree, awaiting Cody's go to push.** The dedicated server is joinable, persistent, self-populating,
+> drives its own trains, and now lets a player borrow + drive one. Suite **172/172 ×3, 0 warnings**; SDK is
+> `C:\Users\User\.dotnet\dotnet.exe` (bash needs `DOTNET_ROOT` + `DOTNET_ROLL_FORWARD=Major`). **Still needs
+> Cody's PC/game:** the batched **M4 in-game smoke pass** (`repo/RUNBOOK-M4-SMOKE.md`) AND the new **M6-B
+> in-game smoke pass** (`repo/RUNBOOK-M6B-SERVER.md`) — the first real join of the dedicated server (B.1
+> join/persistence, B.2 trains roll, B.3 claim/drive/release). **Blocked this session:** the real-exe
+> bot+server live smoke — the Galleon hardware gate denied launching the exes; the headless integration
+> test covers the same wire path, and the server exe DID boot on protocol v10 driving 2 trains. **Candidate
+> next slices (Cody to pick):** (1) in-game Shim UX for a real player to claim/drive a server train (turns
+> B.3's wire path into a game action); (2) real DV career export → the server's `--config` hook; (3) deploy
+> the server to SVHost (container). Perf baseline (`docs/PERF-BASELINE.md`) says interest management
+> (D10/M6-B) is the real scaling gap once sessions get big.
+
+**M6-B.3 detail (this burst):**
+- **The realization — the sentinel-owner design pre-built the hard half.** B.2 registered server trains
+  under `ServerOwnerId = int.MaxValue`. Once `TryClaim` admits a server-owned set, three things fall out for
+  free: `PushServerSnapshot`'s `OwnerId != ServerOwnerId` guard makes the server STOP driving the instant
+  ownership flips; `HandleSnapshot`'s `IsCurrentFromOwner` admits + relays the claimer's snapshots (driving
+  = the existing owner-stream path, zero new code); and ownership is NOT a membership change, so the epoch
+  is constant → no stale-snapshot invariant (hard rule 5) is tripped.
+- **Core:** `TrainsetRegistry.TryClaim` now admits a set owned by `ServerOwnerId` (still refuses a DIFFERENT
+  real player's — no theft) + new `SetOwner(id, owner)` for release/reclaim (park = owner 0, which TryClaim
+  can't express). `ServerTrains`: `_serverOwnedSets` tracking, `IsServerDriven(id)` (the driver's freeze
+  gate), `OnPlayerRemoved` reclaims a borrowed server train to the server instead of parking it dead,
+  `HandleOwnershipRelease` (msg 63) hands a set back (server train → server, own consist → parked).
+  `ClientTrains.ReleaseOwnership`. `MessageType.OwnershipRelease = 63`, protocol **v10**.
+- **Server:** `ServerKinematicTrain.Tick` freezes (no advance/publish) while `!IsServerDriven` — so on
+  hand-back the train resumes from where it was borrowed, not a schedule position that ran on in parallel.
+  (Documented discontinuity: adopting the driver's final pose needs spline→parametric inversion — banked.)
+- **Bot:** `ClaimDriver` + `--claim-server-train` — finds a server-owned set, claims it, drives it with a
+  TopologyWalker (throwing junctions it crosses), releases after `--drive-seconds` (Ctrl+C also hands it
+  back via the disconnect path). The one-PC in-game rig for B.3 (`RUNBOOK-M6B-SERVER.md` §B.3).
+- **Verified (game-free):** `ServerOwnedTrainTests` reworked — the old B.2 "a player CANNOT claim" test is
+  replaced by `A_player_can_claim_and_drive_a_server_owned_train_then_release_it` (claim → server stops →
+  driver's snapshot moves a WATCHER's replica → 2nd player can't steal → release → server resumes) +
+  `A_disconnecting_borrower_hands_a_server_train_back_to_the_server`. Suite **172/172 ×3**, full sln **0
+  warnings**. NOT staged to Mods/ (no Shim change — pure Core/Server/Bot). Docs: CHANGELOG, Server README,
+  new `RUNBOOK-M6B-SERVER.md`.
+- **Deferred/banked:** in-game player-claim UX (Shim); physical coupling to a server train; junction-
+  throwing by the server's OWN driver (cosmetic — snapshots are correct); reclaim-adopts-driver-pose.
+
+**Prior (2026-07-20): M6-B.2: server-owned kinematic trains BUILT + verified headless + PUSHED**
+(`d0e4b93` feat / `d67fbba` docs, `b38b7df..d67fbba`, Cody's go). A fresh `LocoMP.Server --spawn-trains N`
+**drives its own trains** along the extracted topology — **no bot needed** — retiring M6-B.1's "a fresh
+server has no trains" limitation.
 - **Core (small, clean):** `ServerTrains.ServerOwnerId` (=`int.MaxValue`, never a peer, never 0) +
   `SpawnServerOwned(cars)` + `PushServerSnapshot(snap)`. Server-authoritative: the consist is registered
   under that sentinel owner, so `TrainsetRegistry.TryClaim` (owner≠0 → refuse) **can't be hijacked** by a
