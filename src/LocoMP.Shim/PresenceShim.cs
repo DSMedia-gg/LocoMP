@@ -69,6 +69,18 @@ public static class PresenceShim
     public static Vector3 ToLocalPosition(Pose pose) =>
         new Vector3(pose.Px, pose.Py, pose.Pz) + OriginShift.currentMove;
 
+    /// <summary>A synced pose's rotation as a Quaternion (position via <see cref="ToLocalPosition"/>).</summary>
+    public static Quaternion ToRotation(Pose pose) => new(pose.Rx, pose.Ry, pose.Rz, pose.Rw);
+
+    /// <summary>A live transform's full pose in absolute coordinates — for capturing a world item's
+    /// resting place so it re-materializes in the same physical spot on every instance.</summary>
+    public static Pose ToAbsolutePose(Transform t)
+    {
+        Vector3 abs = t.position - OriginShift.currentMove;
+        Quaternion rot = t.rotation;
+        return new Pose(abs.x, abs.y, abs.z, rot.x, rot.y, rot.z, rot.w);
+    }
+
     /// <summary>The camera remote name tags should face; null on loading screens.</summary>
     public static Camera? ActiveCamera => PlayerManager.ActiveCamera;
 }

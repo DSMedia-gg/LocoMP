@@ -1,4 +1,6 @@
 using LocoMP.Core.Career;
+using LocoMP.Core.Items;
+using LocoMP.Core.Presence;
 using LocoMP.Core.Session;
 using LocoMP.Core.Trains;
 
@@ -34,6 +36,11 @@ public sealed class RemoteActor
     private bool _driveTargetLogged;
     private double _driveElapsed;
     private readonly Dictionary<(int car, byte control), float> _loggedControls = new();
+    private int _heldItemId = -1;       // the world item we currently hold (-1 = none)
+    private int _pendingPickupId = -1;  // a pickup request is in flight
+    private double _holdElapsed;
+    private double _grabScanAccum;
+    private readonly HashSet<int> _refusedItems = new();
 
     public RemoteActor(BotOptions opts, string name, Action<string> log)
     {
@@ -48,6 +55,7 @@ public sealed class RemoteActor
         if (!ReferenceEquals(_bound, client)) Bind(client);
         TickCareer(client, dt);
         TickDrive(client, dt);
+        TickItems(client, dt);
     }
 
     private void Bind(NetClient client)
@@ -63,6 +71,11 @@ public sealed class RemoteActor
         _driveDone = false;
         _driveTargetLogged = false;
         _loggedControls.Clear();
+        _heldItemId = -1;
+        _pendingPickupId = -1;
+        _holdElapsed = 0;
+        _grabScanAccum = 0;
+        _refusedItems.Clear();
 
         client.Career.CareerStateReceived += () =>
             _log($"[{_name}] career: ${client.Career.BalanceCents / 100.0:F2}, licenses: {LicenseList(client)}");
@@ -100,6 +113,29 @@ public sealed class RemoteActor
                 _pendingClaimJobId = -1;
             }
         };
+
+        if (_opts.GrabItems)
+        {
+            client.Items.ItemMoved += item =>
+            {
+                // Our pickup committed server-side: the item is now in our possession.
+                if (item.OwnerPeerId == client.LocalId && item.Location == ItemLocationKind.Possessed &&
+                    _heldItemId != item.Def.Id)
+                {
+                    _pendingPickupId = -1;
+                    _heldItemId = item.Def.Id;
+                    _holdElapsed = 0;
+                    _log($"[{_name}] picked up item {item.Def.Id} ({item.Def.PrefabName}) — " +
+                         $"it should vanish from the host's world; dropping in {_opts.DropAfterSeconds:F0}s");
+                }
+            };
+            client.Items.ItemRemoved += id => { if (id == _heldItemId) _heldItemId = -1; };
+            client.Items.RequestRejected += (reason, itemId) =>
+            {
+                _log($"[{_name}] item refused{(itemId != 0 ? $" (item {itemId})" : "")}: {reason}");
+                if (itemId != 0 && itemId == _pendingPickupId) { _refusedItems.Add(itemId); _pendingPickupId = -1; }
+            };
+        }
 
         if (_opts.Drive)
         {
@@ -231,6 +267,43 @@ public sealed class RemoteActor
             _log($"[{_name}] drive test done: throttle → 0, releasing the grant");
             client.Trains.SendControlInput(_driveCarId, ThrottleId, 0f);
             client.Trains.ReleaseControlGrant(_driveCarId);
+        }
+    }
+
+    /// <summary>M4.2 item rig: pick up world items as they appear (proposing a pickup the server
+    /// validates), hold each for a beat, then drop it at the drop point — on the host you watch the
+    /// item leave your world on pickup and re-materialize on drop. Exercises the full v6 pickup/drop
+    /// loop the way a joined friend would, headless.</summary>
+    private void TickItems(NetClient client, double dt)
+    {
+        if (!_opts.GrabItems) return;
+
+        if (_heldItemId >= 0)
+        {
+            _holdElapsed += dt;
+            if (_holdElapsed >= _opts.DropAfterSeconds)
+            {
+                // A couple of metres off the --at anchor so a re-spawn near the host is visible.
+                var pose = new Pose(_opts.Center.Px + 2, _opts.Center.Py, _opts.Center.Pz + 2, 0f, 0f, 0f, 1f);
+                _log($"[{_name}] dropping item {_heldItemId} at the drop point — watch it reappear in the host's world");
+                client.Items.RequestDrop(_heldItemId, pose);
+                _heldItemId = -1;
+            }
+            return;
+        }
+
+        if (_pendingPickupId >= 0) return; // a pickup is in flight
+        _grabScanAccum += dt;
+        if (_grabScanAccum < 2.0) return;  // scan at most every 2 s — no request spam
+        _grabScanAccum = 0;
+
+        foreach (ClientItem item in client.Items.Items.Values.OrderBy(i => i.Def.Id))
+        {
+            if (item.Location != ItemLocationKind.World || _refusedItems.Contains(item.Def.Id)) continue;
+            _pendingPickupId = item.Def.Id;
+            _log($"[{_name}] picking up world item {item.Def.Id} ({item.Def.PrefabName})…");
+            client.Items.RequestPickup(item.Def.Id);
+            return;
         }
     }
 

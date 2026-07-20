@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using LocoMP.Core.Career;
+using LocoMP.Core.Items;
 using LocoMP.Core.Net;
 using LocoMP.Core.Persistence;
 using LocoMP.Core.Protocol;
@@ -54,6 +55,7 @@ public sealed class SessionController
     private JobCapture? _jobCapture;
     private LicenseSync? _licenseSync;
     private WalletMirror? _walletMirror;
+    private ItemSync? _itemSync;
     private string _careerToast = "";
 
     // IMGUI field state
@@ -117,6 +119,7 @@ public sealed class SessionController
         _trains?.Tick(dt);
         _cabControls?.Tick((float)dt);
         _walletMirror?.Tick(dt);
+        _itemSync?.Tick(dt);
         _autosaver?.Tick();
         if (_worldUnloaded)
         {
@@ -197,6 +200,10 @@ public sealed class SessionController
                 {
                     foreach (var p in _client.Players.Values)
                         GUILayout.Label($"  • {p.Name} (id {p.Id}) @ {p.Pose}");
+                    int worldItems = _client.Items.Items.Values.Count(i => i.Location == LocoMP.Core.Items.ItemLocationKind.World);
+                    int heldItems = _client.Items.Items.Count - worldItems;
+                    if (_client.Items.Items.Count > 0)
+                        GUILayout.Label($"  Items — {worldItems} in the world, {heldItems} carried");
                 }
                 DrawCareer();
                 if (GUILayout.Button("Leave", GUILayout.Width(100))) Leave();
@@ -399,8 +406,12 @@ public sealed class SessionController
             _hub = new LoopbackNetwork();
             var udp = LiteNetLibTransport.StartServer(port, NetDefaults.ConnectKey);
             _serverTransport = new CompositeTransport(_hub.Server, udp);
+            // Host-native items (D13 posture): the host's real world items ARE the world source, so
+            // the server must accept its registrations. No proximity gate for now (0 = off) and no
+            // shop catalog yet (M4.2 is the world-drop loop; shops are a later slice).
+            var itemConfig = new ItemConfig { AcceptExternalItems = true };
             _server = new NetServer(_serverTransport,
-                new ServerConfig(Identity(), _password.Length > 0 ? _password : null, career: careerConfig),
+                new ServerConfig(Identity(), _password.Length > 0 ? _password : null, career: careerConfig, items: itemConfig),
                 _clock, restore);
             _server.PlayerAdmitted += p => _log($"[session] admitted {p.Name} (id {p.Id}) — {_server!.PlayerCount} player(s)");
             _server.PlayerRemoved += id => _log($"[session] removed id {id} — {_server!.PlayerCount} player(s)");
@@ -426,6 +437,9 @@ public sealed class SessionController
             // licenses sync both ways, register purchases burn through the ledger.
             _licenseSync = new LicenseSync(_client, _log);
             _walletMirror = new WalletMirror(_client, _log);
+            // M4.2: mirror the host's real world items onto the session; materialize remote-dropped
+            // items back as real DV items. Host is the world source (registers native world items).
+            _itemSync = new ItemSync(_client, isHost: true, _log);
             _mode = Mode.Hosting;
 
             _log($"[session] hosting on UDP {port} (game reports version '{PresenceShim.ReportedGameVersion}', handshake build '{PresenceShim.GameBuild}')");
@@ -455,6 +469,9 @@ public sealed class SessionController
             // M3.5b: the joined world is session-modified (own cars cleared, host's spawned in) —
             // native saves are blocked until Leave so it can't leak into the player's SP save.
             SaveSuppressor.Active = true;
+            // M4.2: spawn replicas of the host's world items (a joined client is not the world
+            // source, so it only materializes — never registers).
+            _itemSync = new ItemSync(_client, isHost: false, _log);
             _mode = Mode.Joined;
             _log($"[session] joining {_address}:{_portText}…");
         }
@@ -523,6 +540,8 @@ public sealed class SessionController
         _walletMirror = null;
         _licenseSync?.Dispose();
         _licenseSync = null;
+        _itemSync?.Dispose();                          // removes replicas we spawned; leaves host natives
+        _itemSync = null;
         JobGenSuppressor.Active = false;               // DV's own generation resumes outside sessions
         SaveSuppressor.Active = false;                 // native saving resumes outside sessions
         _careerToast = "";

@@ -49,6 +49,10 @@ public sealed class BotOptions
     public float DriveValue = 0.35f;    // throttle to send while driving
     public double DriveSeconds = 15;    // how long before throttle-to-zero + grant release
 
+    // M4.2 item rig: pick up world items the host drops, then re-drop them elsewhere.
+    public bool GrabItems;              // pick up world items as they appear, then drop them again
+    public double DropAfterSeconds = 20; // hold a picked-up item this long before dropping it
+
     public HandshakeRequest ToIdentity() => new(ProtocolVersion.Current, GameBuild, ModVersion, ModListHash);
 
     /// <summary>The bot ships in the same tree as the mod, so the single version source
@@ -110,6 +114,8 @@ public sealed class BotOptions
                     case "--drive-car": o.DriveCarId = Next(); o.Drive = true; break;
                     case "--drive-value": o.DriveValue = float.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--drive-seconds": o.DriveSeconds = double.Parse(Next(), CultureInfo.InvariantCulture); break;
+                    case "--grab-items": o.GrabItems = true; break;
+                    case "--drop-after": o.DropAfterSeconds = double.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--help" or "-h" or "/?": PrintUsage(); return null;
                     default:
                         Console.Error.WriteLine($"Unknown option: {args[i]} (try --help)");
@@ -190,6 +196,9 @@ Usage: LocoMP.Bot [options]
                          not be the one you're standing next to
   --drive-value <v>      throttle value to send   (default 0.35)
   --drive-seconds <s>    driving time before throttle 0 + release (default 15)
+  --grab-items           pick up world items as the host drops them, then re-drop them —
+                         watch the item vanish from the host's world and reappear
+  --drop-after <s>       hold a grabbed item this long before dropping it (default 20)
 
 Examples:
   LocoMP.Bot --at 671,132,591                        one bot orbiting those coords
@@ -199,6 +208,7 @@ Examples:
   LocoMP.Bot --consist 3 --livery LocoDE2,Boxcar     the same train as REAL spawned cars
   LocoMP.Bot --listen --consist 3 --livery ...       host a session; join from the game
   LocoMP.Bot --claim-first --report-interval 30      claim a captured job; report until paid
-  LocoMP.Bot --drive --drive-seconds 20              drive the host's loco from outside");
+  LocoMP.Bot --drive --drive-seconds 20              drive the host's loco from outside
+  LocoMP.Bot --grab-items --at 671,132,591           pick up items you drop, re-drop them near you");
     }
 }
