@@ -41,6 +41,7 @@ public sealed class RemoteActor
     private double _holdElapsed;
     private double _grabScanAccum;
     private readonly HashSet<int> _refusedItems = new();
+    private bool _buyRequested;         // --buy: the purchase has been sent
 
     public RemoteActor(BotOptions opts, string name, Action<string> log)
     {
@@ -76,6 +77,7 @@ public sealed class RemoteActor
         _holdElapsed = 0;
         _grabScanAccum = 0;
         _refusedItems.Clear();
+        _buyRequested = false;
 
         client.Career.CareerStateReceived += () =>
             _log($"[{_name}] career: ${client.Career.BalanceCents / 100.0:F2}, licenses: {LicenseList(client)}");
@@ -113,6 +115,25 @@ public sealed class RemoteActor
                 _pendingClaimJobId = -1;
             }
         };
+
+        if (_opts.BuyPrefab.Length > 0)
+        {
+            client.Items.ItemAdded += item =>
+            {
+                // Our purchase committed server-side: the freshly minted item lands in OUR possession
+                // (ItemSpawned, not the pickup's ItemMoved). The WalletState debit is sent first, so
+                // the balance we log here is already the post-purchase one — and it's OUR wallet.
+                if (_buyRequested && _heldItemId < 0 &&
+                    item.OwnerPeerId == client.LocalId && item.Location == ItemLocationKind.Possessed)
+                {
+                    _heldItemId = item.Def.Id;
+                    _holdElapsed = 0;
+                    _log($"[{_name}] bought item {item.Def.Id} ({item.Def.PrefabName}) — wallet now " +
+                         $"${client.Career.BalanceCents / 100.0:F2} (the host's wallet is untouched); " +
+                         $"dropping in {_opts.DropAfterSeconds:F0}s");
+                }
+            };
+        }
 
         if (_opts.GrabItems)
         {
@@ -276,7 +297,16 @@ public sealed class RemoteActor
     /// loop the way a joined friend would, headless.</summary>
     private void TickItems(NetClient client, double dt)
     {
-        if (!_opts.GrabItems) return;
+        if (!_opts.GrabItems && _opts.BuyPrefab.Length == 0) return;
+
+        // --buy: the client-side win condition — buy the prefab once we're joined. The mint lands in
+        // OUR possession (charged to OUR wallet); the ItemAdded handler above picks it up from there.
+        if (_opts.BuyPrefab.Length > 0 && !_buyRequested && client.Joined)
+        {
+            _buyRequested = true;
+            _log($"[{_name}] buying {_opts.BuyPrefab} from the shop…");
+            client.Items.Purchase(_opts.BuyPrefab);
+        }
 
         if (_heldItemId >= 0)
         {
@@ -292,6 +322,7 @@ public sealed class RemoteActor
             return;
         }
 
+        if (!_opts.GrabItems) return;      // a buy-only bot doesn't scan the world for items to grab
         if (_pendingPickupId >= 0) return; // a pickup is in flight
         _grabScanAccum += dt;
         if (_grabScanAccum < 2.0) return;  // scan at most every 2 s — no request spam
