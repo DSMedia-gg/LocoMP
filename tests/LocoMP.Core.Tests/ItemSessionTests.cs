@@ -172,6 +172,28 @@ public class ItemSessionTests
     }
 
     [Fact]
+    public void A_locked_essential_is_visible_to_all_but_pickup_is_refused()
+    {
+        var (_, _, server, a, b) = Session();
+        a.Items.RegisterWorldItem("Map", At(5, 5), "", token: 3, locked: true); // a's personal essential, set down
+        Pump(server, new[] { a, b });
+        int id = a.Items.Items.Values.Single().Def.Id;
+
+        // Everyone sees it, flagged locked (the Shim renders the replica non-grabbable off this).
+        Assert.True(a.Items.Items[id].WorldLocked);
+        Assert.True(b.Items.Items[id].WorldLocked);
+
+        // Look, but don't touch: a remote's pickup is refused and the item never moves.
+        string? refusal = null;
+        b.Items.RequestRejected += (reason, _) => refusal = reason;
+        b.Items.RequestPickup(id);
+        Pump(server, new[] { a, b });
+        Assert.Contains("personal item", refusal);
+        Assert.Equal(ItemLocationKind.World, a.Items.Items[id].Location);
+        Assert.Equal(0, a.Items.Items[id].OwnerPeerId);
+    }
+
+    [Fact]
     public void Only_the_world_source_registers_world_items()
     {
         var (_, _, server, a, b) = Session();

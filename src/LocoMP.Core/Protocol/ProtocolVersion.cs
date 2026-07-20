@@ -34,5 +34,8 @@ public static class ProtocolVersion
     /// (62) removes a deleted car everywhere, and FeeExternal (43) gains a target peer so a comms fee
     /// can burn the INITIATOR's wallet. The FeeExternal format change makes this incompatible by
     /// construction.</remarks>
-    public const int Current = 8;
+    /// <remarks>v9: a WORLD item's location gains a "locked" byte and the item-register request carries
+    /// one, so a personal essential (map/radio/wallet) set down syncs as look-but-don't-touch — visible
+    /// to all, pickup refused for everyone but its owner.</remarks>
+    public const int Current = 9;
 }

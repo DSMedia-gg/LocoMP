@@ -104,12 +104,13 @@ public sealed class ServerItems
         uint token = r.ReadVarUInt();
         ItemDef proposal = ItemCodec.ReadItemDef(r); // id ignored — the registry assigns it
         Pose pose = PresenceCodec.ReadPose(r);
+        bool locked = r.ReadByte() != 0;             // a personal essential set down (look-but-don't-touch)
         if (!_config.AcceptExternalItems || peerId != _career.WorldSourcePeer)
         {
             Reject(peerId, "register: only the world source registers items");
             return;
         }
-        ItemRecord rec = Registry.SpawnInWorld(proposal.PrefabName, pose, proposal.State);
+        ItemRecord rec = Registry.SpawnInWorld(proposal.PrefabName, pose, proposal.State, locked);
         // Echo the token to the registrant (Shim maps its GameObject → server id); others get 0.
         _transport.Send(peerId, BuildSpawned(token, rec), DeliveryMethod.ReliableOrdered);
         byte[] plain = BuildSpawned(0, rec);
@@ -250,6 +251,7 @@ public sealed class ServerItems
         if (rec.Location == ItemLocationKind.World)
         {
             PresenceCodec.WritePose(w, rec.WorldPose);
+            w.WriteByte(rec.WorldLocked ? (byte)1 : (byte)0); // look-but-don't-touch essential (v9)
             return;
         }
         bool shared = rec.OwnerScope.Length > 0 && rec.OwnerScope[0] == '@';

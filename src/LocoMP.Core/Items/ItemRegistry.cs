@@ -47,9 +47,9 @@ public sealed class ItemRegistry
     /// <summary>Put a fresh item into the WORLD at a pose (a dropped purchase's alternative, a
     /// restored world item, or a host-captured real item in a later slice). Always succeeds — a mint
     /// is unconditional; only moves are validated.</summary>
-    public ItemRecord SpawnInWorld(string prefabName, Pose pose, string state)
+    public ItemRecord SpawnInWorld(string prefabName, Pose pose, string state, bool locked = false)
     {
-        var rec = new ItemRecord(new ItemDef(_nextItemId++, prefabName, state), ItemLocationKind.World, pose, string.Empty);
+        var rec = new ItemRecord(new ItemDef(_nextItemId++, prefabName, state), ItemLocationKind.World, pose, string.Empty, locked);
         _items[rec.Def.Id] = rec;
         TotalSpawned++;
         return rec;
@@ -82,6 +82,11 @@ public sealed class ItemRegistry
         if (item.Location != ItemLocationKind.World)
         {
             reason = $"item {itemId} is already held";
+            return false;
+        }
+        if (item.WorldLocked)
+        {
+            reason = $"item {itemId} is a personal item — only its owner can take it";
             return false;
         }
         item.Location = ItemLocationKind.Possessed;
@@ -158,7 +163,7 @@ public sealed class ItemRegistry
     {
         var save = new ItemsSaveData { NextItemId = _nextItemId };
         foreach (ItemRecord rec in _items.Values)
-            save.Items.Add(new ItemSave(rec.Def, rec.Location, rec.WorldPose, rec.OwnerScope));
+            save.Items.Add(new ItemSave(rec.Def, rec.Location, rec.WorldPose, rec.OwnerScope, rec.WorldLocked));
         return save;
     }
 
@@ -166,7 +171,7 @@ public sealed class ItemRegistry
     {
         _items.Clear();
         foreach (ItemSave s in save.Items)
-            _items[s.Def.Id] = new ItemRecord(s.Def, s.Location, s.WorldPose, s.OwnerScope);
+            _items[s.Def.Id] = new ItemRecord(s.Def, s.Location, s.WorldPose, s.OwnerScope, s.WorldLocked);
         _nextItemId = save.NextItemId;
         // The live set IS the saved world; the counters reset to it so ItemConservationHolds is true
         // from the first post-restore op (spawned/despawned are per-process, like the ledger totals).

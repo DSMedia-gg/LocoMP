@@ -54,6 +54,34 @@ public class ItemRegistryTests
     }
 
     [Fact]
+    public void A_locked_world_item_refuses_pickup_from_everyone()
+    {
+        ItemRegistry reg = Registry();
+        int id = reg.SpawnInWorld("Map", At(3, 4), "", locked: true).Def.Id; // a set-down personal essential
+
+        // Look, but don't touch: no scope may take it (the owner reclaims it natively, never a request).
+        Assert.False(reg.TryPickUp("key-alice", id, out _, out string? reason));
+        Assert.Contains("personal item", reason);
+        Assert.Equal(ItemLocationKind.World, reg.Items[id].Location); // stays put
+        Assert.True(reg.Items[id].WorldLocked);
+        Assert.True(reg.ItemConservationHolds);
+    }
+
+    [Fact]
+    public void Locked_flag_survives_capture_and_restore()
+    {
+        ItemRegistry reg = Registry();
+        int locked = reg.SpawnInWorld("wallet", At(1, 1), "", locked: true).Def.Id;
+        int free = reg.SpawnInWorld("lantern", At(2, 2), "").Def.Id;
+
+        ItemRegistry restored = new(new ProgressionPolicy(ProgressionPreset.PerPlayer), reg.Capture());
+        Assert.True(restored.Items[locked].WorldLocked);
+        Assert.False(restored.Items[free].WorldLocked);
+        Assert.False(restored.TryPickUp("key-alice", locked, out _, out _)); // still look-but-don't-touch
+        Assert.True(restored.TryPickUp("key-alice", free, out _, out _));     // the lantern is still free
+    }
+
+    [Fact]
     public void Drop_returns_possession_to_the_world_only_for_the_holder()
     {
         ItemRegistry reg = Registry();

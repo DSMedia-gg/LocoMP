@@ -47,9 +47,12 @@ public sealed class CommsRadioSync : IDisposable
     private int _pendingDeleteCarId; // captured before the destroy unbinds the car
 
     private bool _eventsHooked;
+    private double _discoverAccum; // throttles the radio discovery scan (never per-frame — see Tick)
     private RerailController? _rerail;
     private CommsRadioCarDeleter? _deleter;
     private CommsRadioCrewVehicle? _summoner;
+
+    private const double DiscoverIntervalSeconds = 1.0;
 
     public CommsRadioSync(NetClient client, TrainSync trains, bool isHost, Action<string> log)
     {
@@ -69,14 +72,29 @@ public sealed class CommsRadioSync : IDisposable
 
     /// <summary>Pump from the session loop: once the comms radio exists (world loaded), subscribe to
     /// the modes' success events on the HOST (a client's own actions are intercepted before they
-    /// fire, so it never needs them).</summary>
+    /// fire, so it never needs them).
+    ///
+    /// PERF: discovery is THROTTLED and anchors on the controller, never a per-frame scan. DV keeps
+    /// only the currently-selected comms-radio mode active, so a <c>FindObjectOfType&lt;RerailController&gt;</c>
+    /// misses the mode controllers whenever another mode is selected — run every frame (as this once
+    /// was) that's three full-scene scans per frame that crater the host frame rate. Instead we scan
+    /// at most once a second for the always-active <see cref="CommsRadioController"/> and read its
+    /// public mode fields (populated even while a mode's GameObject is inactive), hook once, and never
+    /// poll again — the event subscriptions survive the modes going inactive.</summary>
     public void Tick(double dt)
     {
         if (!_isHost || _eventsHooked || !_client.Joined) return;
-        _rerail = Object.FindObjectOfType<RerailController>();
-        _deleter = Object.FindObjectOfType<CommsRadioCarDeleter>();
-        _summoner = Object.FindObjectOfType<CommsRadioCrewVehicle>();
-        if (_rerail == null && _deleter == null && _summoner == null) return; // radio not up yet
+        _discoverAccum += dt;
+        if (_discoverAccum < DiscoverIntervalSeconds) return;
+        _discoverAccum = 0;
+
+        CommsRadioController? controller = Object.FindObjectOfType<CommsRadioController>();
+        if (controller == null) return; // radio not active yet — try again next interval (cheap)
+
+        _rerail = controller.rerailControl;
+        _deleter = controller.deleteControl;
+        _summoner = controller.crewVehicleControl;
+        if (_rerail == null && _deleter == null && _summoner == null) return;
 
         if (_rerail != null) _rerail.CarRerailed += OnHostRerailed;
         if (_deleter != null) _deleter.CarDeleted += OnHostDeleted;
