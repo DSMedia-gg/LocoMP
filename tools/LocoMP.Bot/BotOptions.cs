@@ -32,6 +32,7 @@ public sealed class BotOptions
     public int Seed = 12345;            // wander is seeded so soak failures can be replayed
     public int ConsistCars = 0;         // 0 = no ghost train
     public double ConsistSpeed = 8;     // m/s ≈ 29 km/h, a sedate freight roll
+    public bool ClaimServerTrain;       // M6-B.3: claim + drive a dedicated server's own train, then release
     public string? WorldFile;           // extracted .lmpw; null = probe the usual spots
     public long StartEdge = -1;         // ghost start edge (host logs the nearest one); -1 = walker's pick
     public bool Listen;                 // M3.5b: HOST the session (bot = server + world source)
@@ -102,6 +103,7 @@ public sealed class BotOptions
                     case "--seed": o.Seed = int.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--consist": o.ConsistCars = Math.Max(1, int.Parse(Next(), CultureInfo.InvariantCulture)); break;
                     case "--consist-speed": o.ConsistSpeed = double.Parse(Next(), CultureInfo.InvariantCulture); break;
+                    case "--claim-server-train": o.ClaimServerTrain = true; break;
                     case "--world": o.WorldFile = Next(); break;
                     case "--start-edge": o.StartEdge = long.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--listen": o.Listen = true; break;
@@ -183,7 +185,11 @@ Usage: LocoMP.Bot [options]
   --duration <s>         total run time           (default 0 = until Ctrl+C)
   --seed <n>             wander RNG seed          (default 12345)
   --consist <n>          drive an n-car ghost train along the extracted topology
-  --consist-speed <m/s>  ghost train speed        (default 8)
+  --consist-speed <m/s>  ghost train speed        (default 8; also the claim-drive speed)
+  --claim-server-train   join a dedicated server running its own trains (--spawn-trains N),
+                         CLAIM one and drive it along the topology, then release it after
+                         --drive-seconds (the server resumes). Needs --world; drives at
+                         --consist-speed. Ctrl+C also hands it back (reclaim-on-disconnect)
   --start-edge <id>      edge to start the ghost on — paste the host log's
                          'ghost-train hint' so it spawns near the player
   --world <path>         extracted .lmpw topology (default: LOCOMP_WORLD_FILE env,
@@ -224,6 +230,7 @@ Examples:
   LocoMP.Bot --consist 3 --at 671,132,591            a 3-car ghost train + an orbiting avatar
   LocoMP.Bot --consist 3 --livery LocoDE2,Boxcar     the same train as REAL spawned cars
   LocoMP.Bot --listen --consist 3 --livery ...       host a session; join from the game
+  LocoMP.Bot --claim-server-train --world w.lmpw      borrow + drive a dedicated server's train
   LocoMP.Bot --claim-first --report-interval 30      claim a captured job; report until paid
   LocoMP.Bot --drive --drive-seconds 20              drive the host's loco from outside
   LocoMP.Bot --grab-items --at 671,132,591           pick up items you drop, re-drop them near you
