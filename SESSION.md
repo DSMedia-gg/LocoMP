@@ -5,6 +5,66 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-20 — M4.4: Comms-radio actions for all players 📻
+
+**Goal:** the last big M4 feature — rerail / delete / summon "for all players (… + fees)" (07 §M4).
+
+**Recon (decompiled the three comms-radio modes + controller → `research/comms-radio-recon.md`):**
+`RerailController`, `CommsRadioCarDeleter`, `CommsRadioCrewVehicle` — all in Assembly-CSharp (no new
+ref). Two universal findings shaped everything: (1) each fires a public `Action<TrainCar>` success
+event (clean capture), and (2) — the load-bearing one — **each charges its fee via a DIRECT
+`Inventory.RemoveMoney`, not a cash register.** D14's WalletMirror only hooks register `Buy` and
+reconciles native money to the ledger, so it was silently REVERTING these fees: the host rerailed /
+deleted / summoned **for free** in a session. So "+ fees" wasn't polish, it was a correctness fix.
+
+**Scoping (asked Cody, M4.2-style):** the feature is really 3 sub-slices and only 1–2 are one-PC
+testable (remote initiation needs a real second comms radio). Cody picked **all three**. Built:
+
+- **Sub-slice 1 — host fees.** `CommsRadioHook` (Harmony prefix per mode's `OnUse`, acting only in the
+  CONFIRM state — the ChainHook pattern) + `CommsRadioSync`. The prefix snapshots the game's computed
+  price (the mode clears it before the event); the success event fires it as `FeeExternal(target 0)`.
+  The native `RemoveMoney` still happens but the reconcile reverts it, and the FeeExternal burns it
+  once through the ledger — charged exactly once, gated by the native affordability check (which reads
+  the mirrored balance). Rerail/delete/summon now cost money.
+- **Sub-slice 2 — delete → removal.** A native delete only unbinds locally in TrainSync
+  (indistinguishable from a distance stream-out), so the server kept the set and clients kept a ghost.
+  `TrainsetRegistry.TryDeleteCar` (last car → `TrainsetRemove`; else survivors re-form a fresh set) +
+  a world-source→server `CarDeleteNotice`. The host sends it on `CarDeleted` with the car id
+  snapshotted BEFORE the destroy unbinds it (order: `DeleteCar` → `OnCarAboutToBeDestroyed` unbinds →
+  `CarDeleted` fires; so the id must be captured in the prefix).
+- **Sub-slice 3 — remote initiation.** On a joined client the target is a host-owned kinematic
+  replica; the confirm prefix SUPPRESSES the local mutation and sends `CommsActionRequest`. The server
+  routes `CommsActionCommand` to the car's sim owner (the M3.5c CoupleRequest pattern), which runs
+  `CommsActionCommanded` → performs the real rerail/delete and charges the INITIATOR via `FeeExternal`
+  gaining a **target peer** (exactly how D15 extended LicenseGrantExternal). Also generalized
+  `WalletMirror` to joined clients (`isHost` param) so a client's money display + comms-radio
+  affordability read the LocoMP wallet — it does NOT report its own register buys. Bot `--rerail
+  <plate>` / `--clear <plate>` drive the wire path headlessly; the client-side `OnUse` interception is
+  friend-session (a bot has no radio). **Remote SUMMON banked** — spawning a new car at a remote
+  location with livery/garage resolution is a materially harder problem; host summon works + is
+  charged.
+
+**Design notes banked:** prices reimplemented from observed behaviour (clean-room, our own code) —
+rerail `RoundToInt(Clamp(500+dist·150,0,RerailMaxPrice))` (HandCar/newbie free), delete
+`playerSpawned?0:DeleteCarMaxPrice`, summon garage `summonPrice`. The affordability edge: a real
+client is now gated by the wallet mirror, but a bot/mismatch could act then have the fee refused
+server-side (the action already happened) — noted for the friend session.
+
+**Verified:** `dotnet test LocoMP.NoGame.slnf` = **161/161 ×3** (156→161: delete-removal ×3, remote
+comms routing, targeted external fee); `dotnet build LocoMP.sln -c Release` = **0 warnings**. NO new
+game ref (all comms-radio types in Assembly-CSharp). Protocol **v7→v8** (FeeExternal format change).
+Payload staged to `Mods/LocoMP/` + `dist/LocoMP/`. In-game verification (Runs A/B/C) rides the batched
+M4 smoke pass.
+
+**Snag:** `Object.FindObjectOfType` was ambiguous (UnityEngine.Object vs object) — added the
+`using Object = UnityEngine.Object;` alias ItemSync already uses.
+
+**Next:** commit + push on Cody's go (3 dependency-ordered commits: Core → Shim/bot → docs; `git
+commit -F <file>`). Then **manual service** is the last M4 scope item; remote summon + held-item
+display are banked follow-ons.
+
+---
+
 ## 2026-07-20 — M4.3: Shops — "a client buys a lantern" 🛒
 
 **Goal:** the highest-value remaining M4 slice, Cody's pick over comms-radio / held-item-display /

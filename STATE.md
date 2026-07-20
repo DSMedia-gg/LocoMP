@@ -1,8 +1,39 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-20 — **M4.3 (Shops — the "a client buys a lantern" half of the M4 exit) BUILT +
-PUSHED** (`8fd47af`/`8870cd3`/`d742960`, Cody's go). The purchase TRANSACTION was already done +
-fuzzed in M4.1 (charge-then-mint: a
+**Updated:** 2026-07-20 — **M4.4 (Comms-radio actions for all players — rerail/delete/summon + fees)
+BUILT, uncommitted.** Cody picked "go for all three sub-slices" after the recon flagged the size +
+one-PC-testability split. Recon-first (decompiled `RerailController`/`CommsRadioCarDeleter`/
+`CommsRadioCrewVehicle`/`CommsRadioController` → `research/comms-radio-recon.md`): all three fire a
+public `Action<TrainCar>` success event and charge a DIRECT `Inventory.RemoveMoney` (not a register),
+so **D14's WalletMirror reconcile was reverting the fee → the host acted FREE in a session** — the
+load-bearing finding. What shipped (protocol **v7→v8**, tests 156→**161 ×3**, full sln **0 warnings**,
+STAGED to Mods/ + dist/):
+- **Sub-slice 1 — host fees:** `Shim/CommsRadioSync` + `CommsRadioHook` (Harmony prefix per mode's
+  `OnUse`, acting only in the CONFIRM state — the ChainHook pattern). The prefix snapshots the game's
+  computed price; the mode's success event fires it as a `FeeExternal` (target 0 = host scope) so it
+  burns through the ledger once. Rerail/delete/summon now cost money.
+- **Sub-slice 2 — delete → removal:** `TrainsetRegistry.TryDeleteCar` (last car → `TrainsetRemove`;
+  else the survivors re-form a fresh set) + a world-source→server `CarDeleteNotice` (62). On the host
+  `CarDeleted` event, LocoMP sends the notice (car id snapshotted before the destroy unbinds it) and
+  the server removes the car everywhere — no more ghost replicas after a delete.
+- **Sub-slice 3 — remote initiation:** on a joined client the confirm prefix SUPPRESSES the local
+  mutation and sends `CommsActionRequest` (60); the server routes `CommsActionCommand` (61) to the
+  car's sim owner (the M3.5c CoupleRequest pattern); the host executes the real rerail/delete and
+  charges the INITIATOR via `FeeExternal`'s new **target peer** (43, D15's LicenseGrantExternal
+  pattern). `WalletMirror` now also runs on joined clients (money display + correct comms-radio
+  affordability; it does NOT report the client's own register buys). Bot `--rerail <plate>`/`--clear
+  <plate>` drive the wire path headlessly (the client Harmony interception itself needs a real game
+  client — friend-session). **Remote SUMMON banked** (spawning a new car at a remote location with
+  livery/garage resolution is a later slice; host summon works + is charged).
+- **NO new game ref** (all comms-radio types are in Assembly-CSharp). Prices reimplemented from
+  observed behaviour (clean-room, our own code): rerail `RoundToInt(Clamp(500+dist·150,0,cap))`
+  (HandCar/newbie free), delete `playerSpawned?0:DeleteCarMaxPrice`, summon garage `summonPrice`.
+- **Banked**: remote summon; a real game client's affordability now checks the mirrored wallet, but
+  the client-side interception is untested this session (bot drives the wire, not a radio); exact
+  rerail placement uses a trimmed track search vs the game's full valid-point solve.
+
+**Prior (2026-07-20): M4.3 (Shops) BUILT + PUSHED** (`8fd47af`/`8870cd3`/`d742960`, Cody's go). The
+purchase TRANSACTION was already done + fuzzed in M4.1 (charge-then-mint: a
 client's buy debits the CLIENT's wallet and mints the item into its possession). This slice is the
 front-end + catalog that makes it usable in-game: a host-side `ShopCatalogBuilder` reads DV's live
 `GlobalShopController.shopItemsData` into `ItemConfig.ShopPrices` (prefab→cents); the catalog rides
@@ -35,6 +66,14 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
 
 ## Where things stand
 
+- **M4.4 — Comms-radio actions (rerail/delete/summon + fees, for all players): BUILT 2026-07-20,
+  uncommitted. 161/161 ×3, full sln 0 warnings, STAGED to Mods/ + dist/.** All three sub-slices Cody
+  asked for. See the header above for the full breakdown. Net: comms-radio actions cost money through
+  the wallet (were free), deletes clear replicas everywhere (were ghosts), and joined players can
+  rerail/delete host cars (fee to the initiator). Protocol v8. Recon at
+  `research/comms-radio-recon.md`. In-game verification joins the batched M4 smoke pass (checklists
+  below). Remote summon banked; client-side radio interception is friend-session (the bot drives the
+  wire path solo).
 - **M4.3 — Shops: BUILT + PUSHED 2026-07-20 (Cody's go). 156/156 ×3, full sln 0 warnings, STAGED to
   Mods/ + dist/.** The "a client buys a lantern" half of the M4 exit (07 §M4). The purchase transaction is
   M4.1's (charge-then-mint, already fuzzed) — this is its catalog + front-end + one-PC driver:
@@ -787,6 +826,13 @@ career" toggle or delete the .lmps to re-mint).
 6. **Repo residuals, whenever** (05 §7): branch protection, DCO app (optional), repo topics.
 
 ## Push state
+- **UNCOMMITTED (awaiting Cody's go): M4.4 (Comms radio).** Suggested split = three dependency-ordered
+  commits: (1) Core — protocol v8, `CommsActionRequest/Command` + `CarDeleteNotice` + `CommsActionKind`,
+  `TrainsetRegistry.TryDeleteCar`, `FeeExternal` target peer, ServerTrains/ClientTrains/ClientCareer
+  senders+handlers, +5 tests; (2) Shim/mod/bot — `CommsRadioHook` + `CommsRadioSync`, WalletMirror
+  `isHost` + client mirror, SessionController + Main wiring, bot `--rerail`/`--clear` + CHANGELOG;
+  (3) docs (STATE + SESSION + recon). Each builds independently (Core has no Shim dep). Remote
+  unchanged since the M4.3 push. Use `git commit -F <file>` (PS 5.1 quote-mangling).
 - **PUSHED 2026-07-20 (Cody's go): M4.3 (Shops) as three dependency-ordered commits** `8fd47af`
   (feat(core): protocol v7 + `ItemShopCatalog` 59 + ClientItems.ShopCatalog + catalog-on-join test) →
   `8870cd3` (feat(shops): `ShopCatalogBuilder`, `DrawShop()` + item toast, bot `--buy` + CHANGELOG) →
@@ -827,16 +873,15 @@ career" toggle or delete the .lmps to re-mint).
 - Staged payload in the game's `Mods/LocoMP/` = **2026-07-19 13:22 build** = the verified commit.
 
 ## Blockers
-- None. **M4.3 (Shops) BUILT + PUSHED 2026-07-20 (Cody's go)** (`8fd47af`/`8870cd3`/`d742960`);
-  156/156 ×3, 0 warnings, staged to Mods/ + dist/. In-game verification joins the **batched M4 smoke
-  pass** (the shops Run-A checklist is banked below beside M4.2's). M4.2 (Shim ItemSync) is already
-  PUSHED. **M4 exit progress:** ✅ a client completes a job → right wallet (M3.5a–c); ✅ a client
-  buys a lantern → right wallet (M4.3); ✅ drop → another player picks it up (M4.2); ✅ server
-  restart persists items/inventory (M4.1 cold-restart). What's LEFT to close M4: comms-radio actions
-  for all players (summon/rerail/delete + fees) and manual service (07 §M4). Follow-on item slices
-  when Cody wants them: held-item avatar display (M4.2 Option 2, protocol v8); live shop stock
-  replication. Separately: M3.2 join phases (deferrable). D16 (M5 UI/UX) planned in
-  `../10-M5-UIUX-PLAN.md`.
+- None. **M4.4 (Comms radio) BUILT 2026-07-20, uncommitted — awaiting Cody's go to push**; 161/161
+  ×3, 0 warnings, staged to Mods/ + dist/. M4.1–M4.3 pushed. In-game verification joins the **batched
+  M4 smoke pass** (comms Runs A/B/C banked below). **M4 exit progress:** ✅ a client completes a job →
+  right wallet (M3.5a–c); ✅ a client buys a lantern → right wallet (M4.3); ✅ drop → another player
+  picks it up (M4.2); ✅ server restart persists items/inventory (M4.1); ✅ comms-radio actions for
+  all players + fees (M4.4). What's LEFT to close M4: **manual service** (07 §M4) — the last scope
+  item. Follow-on slices when Cody wants them: remote SUMMON; held-item avatar display (M4.2 Option 2,
+  protocol v9); live shop stock replication. Separately: M3.2 join phases (deferrable). D16 (M5 UI/UX)
+  planned in `../10-M5-UIUX-PLAN.md`.
 
 ## M4 milestone smoke pass (BATCHED — run all M4 slice checklists in one game session)
 
@@ -916,7 +961,57 @@ panel and physically holding the item (this slice routes the purchase through th
 materialize-into-inventory is the held-item slice); the host's real shelf stock decrementing with
 LocoMP purchases (client buys are independent mints — live stock replication is a later slice).
 
+### M4.4 — comms radio (staged, awaiting push)
+
+**Run A — host fees (you host; use your own comms radio):** at load expect `[comms] comms-radio hook
+installed` and, once the world's up, `[comms] host comms-radio fee capture installed`. Note your
+wallet. (1) **Rerail**: derail a car (or find one), comms-radio Rerail it → the fee (`$…`) leaves
+your wallet AND STAYS gone (`[comms] rerail <car>: $… charged to your wallet`) — before this slice it
+refunded itself within a second. Free cases still free: a HandCar, or in restricted/newbie mode. (2)
+**Clear**: comms-radio Clear a non-player car → wallet drops by the delete price (0 for a
+player-spawned car); `[comms] car N deleted — removing it from the session`. (3) **Summon**: summon a
+work train from a garage → wallet drops by the summon price; a non-garage vehicle is free. Watch: the
+two money displays (native == panel) converge within ~1 s; zero LocoMP exceptions.
+
+**Run B — delete removes the replica (listen rig: bot hosts, you join, OR normal rig + bot joins):**
+with the bot joined and a consist synced, delete one of the host's cars → on the OTHER peer the
+replica **vanishes** (previously it lingered as a ghost). Deleting a lone car removes the whole set;
+deleting one car of a consist leaves the rest.
+
+**Run C — remote action (normal rig: you host, the bot is the remote initiator):**
+1. Host on your career save. Get a car's plate from the host log / a synced consist (e.g. `L-014`).
+2. `LocoMP.Bot --rerail L-014 --at <coords>` (derail L-014 first). Expect: bot logs `asking the host
+   to rerail car N (L-014) …`; HOST log `[comms] rerailed car N for player <bot>`; the car returns to
+   the rails near your `--at`; **the BOT's wallet drops by the fee, YOURS does not** (the initiator
+   pays — the M4 "for all players" invariant). The set-rerail then propagates via the normal path.
+3. `LocoMP.Bot --clear L-014` → HOST `[comms] deleted car N for player <bot> — removed from the
+   session`; the car vanishes for everyone; the bot's wallet drops (0 if it was player-spawned).
+4. Affordability: run the bot with a near-empty wallet (buy something first, or a fresh profile on a
+   pricey action) → the fee is refused server-side and logged; note whether the action still happened
+   (the known banked gap — the bot has no native affordability gate; a real client's DOES via the new
+   client wallet mirror).
+5. Watch: zero LocoMP exceptions; no double-charge; the host's own wallet never moves for a remote
+   action.
+
+**Deferred to a friend session / later slice (banked):** a REAL joined game client using its own
+comms radio (the client-side `OnUse` interception — the bot drives the wire directly, not a radio);
+remote SUMMON (livery/garage/location resolution on the host); exact rerail placement (trimmed track
+search vs the game's full valid-point solve); the affordability edge above (a real client is gated by
+the wallet mirror, but a bot/mismatch could act then have the fee refused).
+
 ## Session log
+- **2026-07-20** — **M4.4 (Comms-radio actions for all players) BUILT, uncommitted.** Cody chose "go
+  for all three sub-slices" after the recon flagged the size + one-PC-testability split. Recon
+  decompiled the three comms-radio modes → `research/comms-radio-recon.md`; the load-bearing find:
+  each charges a DIRECT `Inventory.RemoveMoney`, which D14's WalletMirror reconcile REVERTS → host
+  acted free in a session. Built: (1) host fees — `CommsRadioSync` + `CommsRadioHook` (OnUse prefix,
+  confirm-state only; price snapshot → mode success event → FeeExternal target 0); (2) delete removal
+  — `TryDeleteCar` + `CarDeleteNotice` so a deleted car clears replicas everywhere; (3) remote
+  initiation — client suppress+route (CommsActionRequest/Command), host executes + charges the
+  initiator via FeeExternal's new target peer, client WalletMirror for correct affordability. Bot
+  `--rerail`/`--clear` drive the wire path (client radio interception = friend-session). Remote summon
+  banked. Protocol v7→v8, no new game ref, prices reimplemented clean-room. 156→**161 ×3**, full sln 0
+  warnings, STAGED. Comms Runs A/B/C banked in the M4 smoke pass. Push awaits Cody's go.
 - **2026-07-20** — **M4.3 (Shops) BUILT + PUSHED (`8fd47af`/`8870cd3`/`d742960`, Cody's go).** Cody picked "Shops + purchases" as the next
   M4 slice (highest exit value — the "a client buys a lantern" half of the M4 exit). Recon-first
   over the shop decomp dumps confirmed the whole flow: `GlobalShopController.Instance.shopItemsData`
