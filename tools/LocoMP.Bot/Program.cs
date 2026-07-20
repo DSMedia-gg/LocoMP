@@ -79,7 +79,7 @@ for (int i = 0; i < opts.Count; i++)
             startEdge, opts.Liveries, opts.CargoId, opts.CargoAmount,
             derailCarIndex: opts.DerailCar - 1, derailPose: derailPose);
     }
-    RemoteActor? actor = opts.ClaimFirst || opts.Drive || opts.AbandonAfterSeconds > 0
+    RemoteActor? actor = opts.ClaimFirst || opts.Drive || opts.AbandonAfterSeconds > 0 || opts.GrabItems
         ? new RemoteActor(opts, name, Console.WriteLine)
         : null;
     if (driver != null || actor != null)

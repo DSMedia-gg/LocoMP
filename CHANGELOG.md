@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Handheld items sync (M4.2): drop a lantern (or any world item) and everyone in the session sees
+  it appear where you left it; another player can pick it up and it vanishes from the world for
+  everyone, then reappears when they set it down again. The host's real items are mirrored onto the
+  session automatically — no new keypresses, and items you leave lying around are offered when
+  players join. (First slice: world-dropped items. Seeing what's in a player's hand, and buying
+  from shops, come next.) The bot gains `--grab-items` to pick up and re-drop items on the one-PC
+  test rig.
 - Session-loss prompt: when the host disappears, a joined client's panel now says so plainly
   ("SESSION LOST — Leave to restore your world, then reload your save") instead of sitting on
   "connecting…" forever. Native saving stays blocked until you leave — a dead session still
