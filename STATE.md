@@ -1,6 +1,24 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-20 — **M4.2 (Shim ItemSync — the world-item loop) BUILT, uncommitted.** Cody
+**Updated:** 2026-07-20 — **M4.3 (Shops — the "a client buys a lantern" half of the M4 exit) BUILT,
+uncommitted.** The purchase TRANSACTION was already done + fuzzed in M4.1 (charge-then-mint: a
+client's buy debits the CLIENT's wallet and mints the item into its possession). This slice is the
+front-end + catalog that makes it usable in-game: a host-side `ShopCatalogBuilder` reads DV's live
+`GlobalShopController.shopItemsData` into `ItemConfig.ShopPrices` (prefab→cents); the catalog rides
+the join burst (new `ItemShopCatalog` msg 59, **protocol v6→v7**) so a client renders Buy buttons;
+the panel gains a Shop section (Buy per item + "Drop here" on carried items); the bot gains `--buy
+<prefab>` (buy once joined → mint in its own possession → hold → drop) — the one-PC win-condition
+driver that proves wallet-scope isolation (bot's wallet debited, host's untouched) and then routes
+the bought item through the M4.2 world-drop loop where the host materializes it. **NO new game ref**
+(GlobalShopController is in Assembly-CSharp), NO Harmony (the shop read is a plain singleton walk).
+Tests 155→**156 ×3** (+catalog delivered on join), full sln **0 warnings**, payload STAGED to Mods/ +
+dist/. Awaiting Cody's go to push. In-game verification joins the batched **M4 milestone smoke pass**
+(new cadence, D8/2026-07-20 — the shops Run-A checklist is banked below beside M4.2's). Deferred +
+banked: live stock/restock replication (client buys are LocoMP mints, independent of the host shelf —
+correct for the win condition, but the host's shelf count and the catalog can drift); routing a
+client purchase through the host's real shelf; held-item avatar display (M4.2 Option 2, protocol v8).
+
+**Prior (2026-07-20): M4.2 (Shim ItemSync — the world-item loop) BUILT + PUSHED.** Cody
 picked Option 1 (world-dropped items only; held-item avatar display + shop materialization deferred
 to their own bursts). `ItemSync` (host-native capture + client materialization, NO Harmony — every
 seam is a public event), PresenceShim item-pose helpers, host `ItemConfig{AcceptExternalItems=true}`,
@@ -16,7 +34,35 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
 
 ## Where things stand
 
-- **M4.2 — Shim ItemSync (world-item loop): BUILT 2026-07-20, uncommitted. 155/155 ×3, full sln 0
+- **M4.3 — Shops: BUILT 2026-07-20, uncommitted. 156/156 ×3, full sln 0 warnings, STAGED to Mods/ +
+  dist/.** The "a client buys a lantern" half of the M4 exit (07 §M4). The purchase transaction is
+  M4.1's (charge-then-mint, already fuzzed) — this is its catalog + front-end + one-PC driver:
+  - **Core (protocol v6→v7):** `MessageType.ItemShopCatalog` (59) — the shop catalog (prefab→cents)
+    ships in the join burst before the item burst, mirroring how `CareerState` carries the license
+    price catalog. `ServerItems.OnPlayerAdmitted` sends it from `ItemConfig.ShopPrices`;
+    `ClientItems.ShopCatalog` mirrors it (cleared on Reset). No change to the purchase path itself.
+    Test +1 (catalog delivered to every client on join): 155→156.
+  - **Shim `ShopCatalogBuilder`** (host-only, read-only, NO Harmony): walks
+    `GlobalShopController.Instance.shopItemsData` → `itemPrefabName`→`basePrice*100` cents, skipping
+    `unavailableDueToGameMode` (career-only items outside a Career session) + malformed rows; logs
+    `shop catalog: N item(s) for sale from M shop(s)`. Wired into the host's `ItemConfig` beside
+    `AcceptExternalItems`. **Defining assembly = Assembly-CSharp (already referenced) → NO new game
+    ref, NO CI heredoc change** (same clean bill as M4.2).
+  - **Panel `DrawShop()`:** a Shop section (collapsible, Buy per catalog item at its price) + a
+    "Drop here" button on each item I'm carrying (drops at my pose over the wire). Renders uniformly
+    on host and client (both read `_client.Items.ShopCatalog` — the host joins its own hub). Item
+    proposal refusals now feed the panel toast too.
+  - **Bot `--buy <prefab>`** (+ reuses `--drop-after`/`--at`): buys once joined → the mint lands in
+    its OWN possession (charged to its OWN wallet — the win condition proof) → holds `--drop-after`
+    s → drops at `--at`, where M4.2's host ItemSync materializes it. `RemoteActor` catches the mint
+    via `ItemAdded` (possessed + owned by me), logs the debited balance.
+  - **Design call (host-native posture):** a client's purchase is a pure LocoMP mint, independent of
+    the host's real shop shelf — correct for the win condition (the money + item move together,
+    server-authoritative) and keeps the builder read-only. The host buying NATIVELY is already
+    covered end-to-end (D14 money + M4.2 world capture), so it needs no shop code. Consequence
+    (banked): the host's shelf stock and the LocoMP catalog can drift — live stock replication is a
+    later slice, not exit-critical.
+- **M4.2 — Shim ItemSync (world-item loop): BUILT 2026-07-20, PUSHED. 155/155 ×3, full sln 0
   warnings, STAGED to Mods/ + dist/.** Cody chose Option 1 of the M4.2 cut (world-dropped items
   only). This is the game-facing half of M4.1's Items core — the "drop a lantern, another player
   picks it up" win condition, made real in-game. What shipped:
@@ -740,6 +786,13 @@ career" toggle or delete the .lmps to re-mint).
 6. **Repo residuals, whenever** (05 §7): branch protection, DCO app (optional), repo topics.
 
 ## Push state
+- **UNCOMMITTED (awaiting Cody's go): M4.3 (Shops).** Suggested split = three dependency-ordered
+  commits: (1) Core — protocol v7 + `ItemShopCatalog` (59) + ClientItems.ShopCatalog + the
+  catalog-on-join test; (2) Shim/mod/bot — `ShopCatalogBuilder`, `DrawShop()` + item-toast wiring,
+  bot `--buy` + CHANGELOG; (3) docs (STATE + SESSION). All three build clean independently (Core has
+  no Shim dep; the Shim/bot commit only adds a builder + panel + flag). Remote unchanged since the
+  M4.2 push (no canary movement expected). Reminder from the M3.5c push: PS 5.1 mangles quotes in
+  `git commit -m` — use `git commit -F <file>` for the messages.
 - **PUSHED 2026-07-20 (Cody's go): M4.2 (Shim ItemSync) as two commits** `64a3382` (feat: ItemSync
   + PresenceShim helpers + SessionController wiring + bot `--grab-items` + CHANGELOG) → docs (STATE +
   SESSION, this commit). Only two commits (not the usual three) because M4.2 has NO Core changes —
@@ -772,12 +825,16 @@ career" toggle or delete the .lmps to re-mint).
 - Staged payload in the game's `Mods/LocoMP/` = **2026-07-19 13:22 build** = the verified commit.
 
 ## Blockers
-- None. **M4.2 (Shim ItemSync) BUILT + PUSHED 2026-07-20 (Cody's go)**; 155/155 ×3, 0 warnings,
-  staged to Mods/ + dist/. In-game verification is deferred to the **batched M4 milestone smoke
-  pass** (new cadence — see the run section above; the M4.2 Run-A checklist is banked there).
-  Follow-on slices when Cody wants them: M4.2 Option 2 (held-item avatar display, protocol v7),
-  Option 3 (shop materialization), then comms-radio actions (summon/rerail/delete + fees) round out
-  M4. Separately: M3.2 join phases (deferrable). D16 (M5 UI/UX) planned in `../10-M5-UIUX-PLAN.md`.
+- None. **M4.3 (Shops) BUILT 2026-07-20, uncommitted — awaiting Cody's go to push**; 156/156 ×3, 0
+  warnings, staged to Mods/ + dist/. In-game verification joins the **batched M4 milestone smoke
+  pass** (the shops Run-A checklist is banked below beside M4.2's). M4.2 (Shim ItemSync) is already
+  PUSHED. **M4 exit progress:** ✅ a client completes a job → right wallet (M3.5a–c); ✅ a client
+  buys a lantern → right wallet (M4.3); ✅ drop → another player picks it up (M4.2); ✅ server
+  restart persists items/inventory (M4.1 cold-restart). What's LEFT to close M4: comms-radio actions
+  for all players (summon/rerail/delete + fees) and manual service (07 §M4). Follow-on item slices
+  when Cody wants them: held-item avatar display (M4.2 Option 2, protocol v8); live shop stock
+  replication. Separately: M3.2 join phases (deferrable). D16 (M5 UI/UX) planned in
+  `../10-M5-UIUX-PLAN.md`.
 
 ## M4 milestone smoke pass (BATCHED — run all M4 slice checklists in one game session)
 
@@ -818,7 +875,60 @@ picks up / drops via the wire — exactly how it drove trains and jobs).
 **Deferred to a friend session (banked):** a real joined GAME client grabbing a replica natively
 (only the HOST captures native grabs this slice — the bot drives the client side over the wire).
 
+### M4.3 — shops (staged, awaiting push)
+
+The one-PC rig proves the purchase win condition with the bot as the "client" (it has a wallet and a
+possession over the wire; it buys, then routes the item through M4.2's world loop so the host sees it).
+
+**Run A — bot buys a lantern (its wallet), drops it, host picks it up:**
+1. Host per usual on your career save. NEW at load: `[shop] catalog: N item(s) for sale from M
+   shop(s)`. Open the panel → a **Shop (N)** toggle now appears; expand it → the item list with
+   prices (matches DV's shop prices; in a non-Career session most are $0). Your own wallet line is
+   the D14 native-money view as before.
+2. `LocoMP.Bot --buy <PrefabName> --at <your coords> --drop-after 15`. Use a real cheap item's
+   prefab name (from the panel Shop list — e.g. a lantern). Expect: bot logs `buying <Prefab> from
+   the shop…` → `bought item <id> (<Prefab>) — wallet now $X (the host's wallet is untouched)`.
+   **THE proof:** the bot's wallet drops by the price; **YOUR wallet does NOT move** (per-player
+   scope — the incumbent's gap closed for purchases). Panel `Items — 0 in the world, 1 carried`.
+3. After 15 s the bot logs `dropping item <id>…` → the item **materializes in your world** near the
+   `--at` point (M4.2's host ItemSync spawns it: `world item <id> (<Prefab>) materialized`); panel
+   `1 in the world, 0 carried`. Walk over and grab it natively → `left the world locally —
+   despawning from the session`; it's now yours in your SP save. That whole line — client buys →
+   drops → host receives — is the M4 exit demo on one PC.
+4. Refusal paths: `--buy NotARealPrefab` → bot toast/host log `purchase: … is not for sale`, nothing
+   minted, no wallet move. Buy something pricier than the bot can afford (rich catalog) →
+   `purchase: insufficient funds`, nothing minted.
+5. Panel self-serve (no bot): with a rich-enough wallet, expand Shop → **Buy** an item → wallet
+   drops, `Items — … carried` ticks up, a **Drop here** row appears → click it → the item spawns at
+   your feet (M4.2 loop). NB on the HOST this exercises the "materialize a genuinely-remote world
+   item" path (the host is the world source but did not natively drop this one).
+6. Persistence: buy with the bot, DON'T drop (`--drop-after 99999`), Leave + re-host → the bot's
+   possession resumes from the `.lmps` save (M4.1 cold-restart tail) — or drop it first and the
+   WORLD item resumes at its pose. Either way the purchased item survives a restart.
+7. Watch for: any wallet drift between the two money displays that doesn't converge in ~1 s; a
+   bought item that never materializes on drop (the M4.2 spawn/keep-alive path); the catalog showing
+   0 items (shop controller not up at host time — re-host once the world's fully loaded).
+
+**Deferred to a friend session / later slice (banked):** a real joined GAME client buying from the
+panel and physically holding the item (this slice routes the purchase through the world via drop —
+materialize-into-inventory is the held-item slice); the host's real shelf stock decrementing with
+LocoMP purchases (client buys are independent mints — live stock replication is a later slice).
+
 ## Session log
+- **2026-07-20** — **M4.3 (Shops) BUILT, uncommitted.** Cody picked "Shops + purchases" as the next
+  M4 slice (highest exit value — the "a client buys a lantern" half of the M4 exit). Recon-first
+  over the shop decomp dumps confirmed the whole flow: `GlobalShopController.Instance.shopItemsData`
+  holds every purchasable item + `basePrice`; the purchase TRANSACTION was already built + fuzzed in
+  M4.1 (charge-then-mint into the buyer's possession, wallet-scope isolated). So this slice was
+  front-end only: Core shipped the catalog to clients (protocol v6→v7, `ItemShopCatalog` msg 59,
+  `ClientItems.ShopCatalog`, +1 test = 156); Shim added `ShopCatalogBuilder` (read-only walk of the
+  live shops → `ItemConfig.ShopPrices`, no Harmony, no new game ref — GlobalShopController is in
+  Assembly-CSharp) + `DrawShop()` panel (Buy per item, Drop-here on carried items) + item-rejection
+  toast; bot gained `--buy <prefab>` (buy → mint in own possession → hold → drop, routing the item
+  through M4.2's world loop). One-PC win-condition driver proven headless. Design call banked: a
+  client's purchase is a pure LocoMP mint independent of the host's shelf (correct for the win
+  condition; host-shelf stock drift + live restock are a later slice). 156/156 ×3, full sln 0
+  warnings, STAGED. Shops Run-A checklist banked in the M4 smoke pass. Push awaits Cody's go.
 - **2026-07-20** — **M4.2 (Shim ItemSync — world-item loop) BUILT, uncommitted.** Cody picked
   Option 1 of the M4.2 cut (world drops only; held-display + shops deferred). Recon-first over the
   ~30 decomp dumps confirmed every seam: `itemPrefabName` is the only identity (LocoMP mints netIds,

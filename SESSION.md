@@ -5,6 +5,68 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-20 — M4.3: Shops — "a client buys a lantern" 🛒
+
+**Goal:** the highest-value remaining M4 slice, Cody's pick over comms-radio / held-item-display /
+manual-service. It retires half the M4 exit demo (07 §M4): *a client buys a lantern and the cash
+lands in the right wallet.*
+
+**The key realization (recon-first):** the purchase TRANSACTION was already built and fuzzed in M4.1
+— `ServerItems.HandlePurchase` does charge-then-mint (`ServerCareer.TryChargeShopPurchase` burns from
+the buyer's policy wallet, THEN `Registry.SpawnInPossession` mints), so money + item move together
+and a *client's* buy debits the *client's* wallet. `ItemSessionTests` already proved it. So this
+slice was never about the transaction — it was the **catalog + front-end + one-PC driver** that makes
+it reachable in-game. That reframing kept the burst small (like M4.2, almost no Core work).
+
+**Recon (shop decomp dumps under `../scratch/decomp/`, clean-room STUDY):** `GlobalShopController.
+Instance.shopItemsData` is a `List<ShopItemData>`; each has `.item.ItemPrefabName` + `.basePrice`
+(dollars) + `unavailableDueToGameMode`/`careerOnly`/`ItemsInStock`. Both native spawners use the same
+`Resources.Load(prefabName)` two-liner LocoMP already spawns items with (M4.2). Critically: **no
+`DV.Shops.dll` exists — GlobalShopController compiles into Assembly-CSharp (already referenced)**, so
+zero new game refs and no CI heredoc edits, same clean bill as M4.2.
+
+**Built:**
+- **Core (protocol v6→v7):** `MessageType.ItemShopCatalog` (59) ships the catalog (prefab→cents) in
+  the join burst before the item burst — the exact shape `CareerState` uses for the license price
+  catalog. `ServerItems.OnPlayerAdmitted` sends it from `ItemConfig.ShopPrices`; `ClientItems.
+  ShopCatalog` mirrors it (cleared on `Reset`). +1 test (catalog delivered to every client on join):
+  155→**156**. The purchase path itself is untouched.
+- **Shim `ShopCatalogBuilder`** (host-only, read-only, NO Harmony): walks the live shops →
+  `ItemConfig.ShopPrices`, skipping mode-unavailable + malformed rows, logging the count. Wired into
+  the host's `ItemConfig` beside `AcceptExternalItems`. Compiled first try against B99.7 (the recon
+  signatures were exact).
+- **Panel `DrawShop()`:** a collapsible Shop (Buy per item at its price) + a "Drop here" button on
+  each carried item (drops at my pose over the wire). Renders identically on host and client (both
+  read `_client.Items.ShopCatalog`; the host joins its own hub). Item refusals feed the panel toast.
+- **Bot `--buy <prefab>`** (+ reuses `--drop-after`/`--at`): buys once joined → the mint lands in its
+  OWN possession (own wallet charged) → holds → drops at `--at`, where M4.2's host ItemSync
+  materializes it. `RemoteActor` catches the mint via `ItemAdded` (possessed + owner == me), logs the
+  debited balance. This is the one-PC win-condition driver: bot's wallet drops, host's doesn't, and
+  the bought item flows through the already-proven M4.2 world loop back to the host.
+
+**Design call (banked):** a client's purchase is a pure LocoMP mint, independent of the host's real
+shop shelf. That's correct for the win condition (server-authoritative, money+item atomic) and keeps
+the builder read-only — but the host's shelf stock and the LocoMP catalog can drift. Live stock/
+restock replication is a later, non-exit-critical slice. The host buying NATIVELY is already covered
+end-to-end (D14 money + M4.2 world capture), so it needed no shop code.
+
+**Verified:** `dotnet test LocoMP.NoGame.slnf` = **156/156 ×3** (incl. the bot compiling); `dotnet
+build LocoMP.sln -c Release` = full solution **0 warnings**. Payload staged to the game's `Mods/
+LocoMP/` + `dist/LocoMP/`.
+
+**Testing cadence (D8 batched, 2026-07-20):** in-game verification is deferred to the consolidated M4
+milestone smoke pass — the shops Run-A checklist is banked in `STATE.md` beside M4.2's.
+
+**Snag:** first full build failed — the `--buy` help text I added to `BotOptions.cs` had embedded
+double quotes inside the verbatim usage string (`@"..."`), which need doubling; reworded without
+quotes. (The recurring lesson: verbatim strings + quotes.)
+
+**Next:** commit + push on Cody's go (3 dependency-ordered commits: Core → Shim/bot → docs; use
+`git commit -F <file>`). Then, to close M4: comms-radio actions (summon/rerail/delete + fees) +
+manual service. Banked item follow-ons: held-item avatar display (protocol v8), live shop stock.
+
+---
+
 ## 2026-07-20 — M4.2: Shim ItemSync, the world-item loop 🏮
 
 **Goal:** wire M4.1's game-free Items core to DV's real handheld objects — the "drop a lantern,
