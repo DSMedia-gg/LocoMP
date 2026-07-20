@@ -1,28 +1,53 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-20 — **M6-B.3: DRIVABLE server trains BUILT + verified headless + PUSHED** (`876d881`
-core+test / `047eaed` server+bot / `5d29963` docs, `5e57156..5d29963`, Cody's go). A player can now CLAIM
-one of the dedicated server's ambient trains, drive it (the server
-stops driving it), and hand it back — release OR disconnect returns it to the server, which resumes. Only
-the server's own trains are takeable (never another player's — no theft). Bot `--claim-server-train` runs
-the whole borrow → drive → release loop against a real server so it's watchable in-game. Protocol **v9 →
-v10** (new OwnershipRelease, msg 63). Suite **171 → 172 ×3, full sln 0 warnings** (Shim vs B99.7).
+**Updated:** 2026-07-20 — **M6-B career `--config` loader BUILT + verified headless (UNCOMMITTED — awaiting
+Cody's go).** The dedicated server can now load a REAL Derail Valley career from a `.lmpc` file
+(`--config`) — real yards, cargo economy, license gates, route distances, station world-locations — instead
+of the synthetic Alpha/Bravo placeholder. `--dump-config` writes the built-in default as a seed. Binary
+codec (`CareerConfigCodec`, magic "LMPC" v1) over PacketWriter/Reader like `.lmpw`/`.lmps` — zero deps, so
+the same bytes the net48 Shim exporter will write are what the net8 server reads. The in-game EXPORTER
+(reads the live DV world → `.lmpc`) is the deferred Shim half. Suite **172 → 177 ×3, full sln 0 warnings**.
 
-> **Next session — cold start here.** M6-B.1/B.2/B.3 all PUSHED (`origin/main` @ `5d29963`, tree clean).
-> The dedicated server is joinable, persistent, self-populating,
-> drives its own trains, and now lets a player borrow + drive one. Suite **172/172 ×3, 0 warnings**; SDK is
-> `C:\Users\User\.dotnet\dotnet.exe` (bash needs `DOTNET_ROOT` + `DOTNET_ROLL_FORWARD=Major`). **Still needs
-> Cody's PC/game:** the batched **M4 in-game smoke pass** (`repo/RUNBOOK-M4-SMOKE.md`) AND the new **M6-B
-> in-game smoke pass** (`repo/RUNBOOK-M6B-SERVER.md`) — the first real join of the dedicated server (B.1
-> join/persistence, B.2 trains roll, B.3 claim/drive/release). **Blocked this session:** the real-exe
-> bot+server live smoke — the Galleon hardware gate denied launching the exes; the headless integration
-> test covers the same wire path, and the server exe DID boot on protocol v10 driving 2 trains. **Candidate
-> next slices (Cody to pick):** (1) in-game Shim UX for a real player to claim/drive a server train (turns
-> B.3's wire path into a game action); (2) real DV career export → the server's `--config` hook; (3) deploy
-> the server to SVHost (container). Perf baseline (`docs/PERF-BASELINE.md`) says interest management
-> (D10/M6-B) is the real scaling gap once sessions get big.
+> **Next session — cold start here.** M6-B.1/B.2/B.3 PUSHED (`origin/main` @ `a47e080`); **the M6-B career
+> `--config` loader is uncommitted in the tree, awaiting Cody's go to push.** The dedicated server is
+> joinable, persistent, self-populating, drives its own trains, lets a player borrow + drive one, and now
+> loads a real career from `--config`. Suite **177/177 ×3, 0 warnings**; SDK is
+> `C:\Users\User\.dotnet\dotnet.exe` (bash needs `DOTNET_ROOT` + `DOTNET_ROLL_FORWARD=Major`). **Env trap:**
+> a detached background `LocoMP.Server` exe survives its shell and locks `LocoMP.Core.dll` in every
+> dependent project's `bin` (blocks even Core.Tests) — use self-terminating runs (`--dump-config` exits; a
+> bare server doesn't) or stop it (`taskkill //F //PID <pid>` in Git Bash). **Still needs Cody's PC/game:**
+> the batched **M4 in-game smoke pass** (`repo/RUNBOOK-M4-SMOKE.md`) AND the **M6-B in-game smoke pass**
+> (`repo/RUNBOOK-M6B-SERVER.md`) — the first real join of the dedicated server. **Candidate next slices
+> (Cody to pick):** (1) the in-game career EXPORTER (Shim: live DV world → `.lmpc`) — the other half of
+> `--config`, needs the game; (2) in-game Shim UX for a real player to claim/drive a server train (B.3
+> follow-on, needs the game); (3) deploy the server to SVHost (container). Perf baseline says interest
+> management (D10/M6-B) is the real scaling gap once sessions get big.
 
-**M6-B.3 detail (this burst):**
+**M6-B career `--config` loader detail (this burst):**
+- **The realization — model the WHOLE config, not just what the D13 builder emits.** On a host, jobs come
+  from native capture, so `CareerConfigBuilder` skips job shapes. But a dedicated server's core GENERATOR
+  is the job source, so a `.lmpc` must carry `JobTypes` too — the codec covers the full `CareerConfig`
+  surface so the eventual exporter has a complete target.
+- **Binary over JSON.** The `--config` stub said "JSON", but a hand-rolled binary codec (magic + schema
+  version over Core's PacketWriter/Reader) is zero-dep AND symmetric across the assembly boundary: the net8
+  server reads it, the net48 Shim exporter writes it — exactly like `TopologyCodec`/`.lmpw` serves both.
+- **Core:** `CareerConfigCodec` (Protocol/) — Write/Read the full `CareerConfig` (preset, scalars,
+  StartingLicenses, JobTypes w/ origins/destinations/licenses + per-km term, LicensePrices, distances,
+  StationLocations, proximity radius, AcceptExternalJobs). Magic "LMPC", schema v1; foreign/future/truncated
+  → InvalidDataException (count-capped like every read).
+- **Server:** `Program` `--config <path>` loads via the codec (the file is authoritative — its preset wins,
+  synced into `opts.Preset` for the save-mismatch guard/banner); missing/corrupt/foreign → notice + built-in
+  default (never crashes). `--dump-config <path>` writes the default `.lmpc` and exits (a seed + the
+  exporter's reference shape). `ServerOptions` gains `--dump-config`; `--config` help/comment updated.
+- **Verified (game-free):** `CareerConfigCodecTests` — full-field round-trip; a **round-tripped config
+  generates an IDENTICAL board** (same seed + config ⇒ same stream — the functional proof via CareerRegistry);
+  foreign-magic/future-schema/truncated all rejected. Suite **177/177 ×3**, full sln **0 warnings**. NOT
+  staged to Mods/ (no Shim change). Live dump/load exe smoke skipped (Galleon gate + orphan risk); unit
+  tests cover Write+Read, the server wiring is thin File IO + fallback.
+- **Deferred/banked:** the in-game EXPORTER (Shim: live DV world → `.lmpc`, the M3.3 CareerConfigBuilder
+  extended to emit job shapes + serialize) — the other half of a real dedicated-server career.
+
+**Prior (2026-07-20): M6-B.3 — drivable server trains (PUSHED `876d881`/`047eaed`/`5d29963`). Detail:**
 - **The realization — the sentinel-owner design pre-built the hard half.** B.2 registered server trains
   under `ServerOwnerId = int.MaxValue`. Once `TryClaim` admits a server-owned set, three things fall out for
   free: `PushServerSnapshot`'s `OwnerId != ServerOwnerId` guard makes the server STOP driving the instant

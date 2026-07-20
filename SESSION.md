@@ -5,6 +5,47 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-20 — Real careers on the dedicated server (M6-B): the `--config` loader 📋
+
+**Goal:** Cody: "let's do the next task." Offered the three cold-start candidates framed by testability;
+Cody picked the **real career `--config` loader** — the game-free HALF of giving the dedicated server a
+real DV career (real yards/jobs/licenses) instead of the Alpha/Bravo placeholder. The in-game EXPORTER
+(Shim reads the live world) stays a later PC slice.
+
+**Two design calls:**
+- **Model the WHOLE `CareerConfig`, not just what the D13 builder emits.** The Shim `CareerConfigBuilder`
+  skips job shapes (on a host, jobs come from native capture). But a dedicated server's core GENERATOR is
+  the job source — so a `.lmpc` MUST carry `JobTypes`. The codec covers the full config surface so the
+  eventual exporter has a complete target.
+- **Binary `.lmpc`, not the JSON the stub hinted at.** A hand-rolled binary codec (magic "LMPC" + schema
+  version over Core's PacketWriter/Reader) is zero-dep AND symmetric across the assembly boundary: the net8
+  server reads it, the net48 Shim exporter writes it — exactly how `TopologyCodec`/`.lmpw` already serves
+  both sides. JSON would need a parser net48/netstandard2.0 doesn't ship.
+
+**Built:** `CareerConfigCodec` (Core/Protocol) — full round-trippable Write/Read, foreign/future/truncated
+→ InvalidDataException. Server `--config <path>` loads it (file authoritative, incl. preset; unreadable →
+notice + built-in default, never a crash) + `--dump-config <path>` writes the default `.lmpc` seed and
+exits. `ServerOptions` + help updated.
+
+**Verified (game-free):** `CareerConfigCodecTests` — full-field round-trip, a **round-tripped config
+generates an IDENTICAL board** (same seed + config ⇒ same stream, the functional proof), and all three
+rejection paths. Suite **172 → 177 ×3**, full sln **0 warnings** (Shim vs B99.7 — no Shim change).
+
+**Snag (env, worth remembering):** a `LocoMP.Server` exe I'd launched detached in an EARLIER burst outlived
+its shell and locked `LocoMP.Core.dll` in the Server's `bin` — which blocked EVERY build that touches the
+server, including Core.Tests (it references the server for the integration tests), so the suite kept running
+stale at 172. The Galleon gate blocks process-kill and I didn't substitute; Cody stopped it with
+`taskkill //F //PID 34068` (Git Bash needs the `//` to stop MSYS mangling `/F`→`F:/`). Then the full build
+went green. Lesson banked in STATE: use self-terminating exe runs (`--dump-config` exits) or stop them.
+
+**Docs:** CHANGELOG entry, Server README (`--config`/`--dump-config` section + limitation), DefaultCareer
+comment refreshed, STATE + SESSION. **Uncommitted; commit + push await Cody's go** (hard rule 7).
+
+**Next:** the natural follow-on is the in-game EXPORTER (Shim: live DV world → `.lmpc`) — the other half of
+a real dedicated-server career; needs the game.
+
+---
+
 ## 2026-07-20 — Drivable server trains (M6-B.3): borrow the server's train and drive it 🕹️🚂
 
 **Goal:** Cody — "continue on locoMP" with the constraint "I can't test in person this session; append the

@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Real careers on the dedicated server (M6-B): the headless server can now load a real Derail Valley
+  career via `--config <file.lmpc>` — actual yards, cargo economy, license gates, route distances and
+  station locations — instead of the built-in Alpha/Bravo placeholder. `--dump-config <file>` writes the
+  built-in default to a file as a starting point, and a missing/corrupt/foreign config falls back to the
+  default so the server always runs. (The tool that EXPORTS a `.lmpc` from a running game is a later
+  mod-side slice; the file format, loader, and a seed writer are here now.)
 - Drivable server trains (M6-B.3): the dedicated server's own trains are no longer just scenery — a
   player can now **claim one and drive it**, then hand it back (or just disconnect) and the server picks
   its route back up. Taking over a server train can't be blocked by, and can't steal, another player's
