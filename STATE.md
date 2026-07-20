@@ -1,7 +1,7 @@
 # STATE — LocoMP (implementation)
 
 **Updated:** 2026-07-20 — **M4.5 (Manual service) — recon = VERIFY-NOT-BUILD, then a small
-defensive guard BUILT (uncommitted).** Recon (`research/manual-service-recon.md`) settled the last M4
+defensive guard BUILT + PUSHED** (`0e65c0a` feat / `8c70a0b` docs, Cody's go). Recon (`research/manual-service-recon.md`) settled the last M4
 scope item: manual service is the INVERSE of comms-radio. The metered loop (turn a valve → deposit
 cash → hit Buy) commits through **`CashRegisterWithModules.Buy()`** — one of the two exact `Buy`
 overrides D14's `WalletMirror` already patches — so the refuel/repair fee has been economy-correct for
@@ -23,7 +23,7 @@ game ref** (`PitStop*`/`LocoResourceModule` in Assembly-CSharp, `ResourceTypes` 
 already referenced). Tests unchanged **161/161 ×3** (pure Shim, no headless surface), full sln **0
 warnings**, payload STAGED to Mods/ + dist/. **This closes the M4 SCOPE — every item (items, world
 items, shops, comms-radio, manual service) is built or proven-covered; the only M4 work left is the
-batched in-game milestone smoke pass.** Awaiting Cody's go to commit + push.
+batched in-game milestone smoke pass.** PUSHED `e7412c3..8c70a0b`.
 
 **Prior (2026-07-20): M4.4 (Comms-radio actions for all players — rerail/delete/summon + fees)
 BUILT + PUSHED** (`5f073f4`/`887cd03`/`f9981f7`, Cody's go). Cody picked "go for all three sub-slices"
@@ -1088,7 +1088,7 @@ play is itself the expected result; note "no bypass path fired" and move on.
   (`ManualServiceHook` + `ManualServiceSync`) defensively bills the equivalent cost (read off the bay's
   own modules: `BuyMaxLimit` × `Data.pricePerUnit`) as a self-scope `FeeExternal`, never suppressing
   the service, disarmed outside a session. NO Core/protocol/game-ref change. **161/161 ×3**, full sln 0
-  warnings, STAGED. **Closes the M4 scope; only the batched smoke pass remains.** Push awaits Cody's go.
+  warnings, STAGED. **Closes the M4 scope; only the batched smoke pass remains.** PUSHED `0e65c0a` feat / `8c70a0b` docs.
 - **2026-07-20** — **M4.4 (Comms-radio actions for all players) BUILT + PUSHED (`5f073f4`/`887cd03`/`f9981f7`, Cody's go).** Cody chose "go
   for all three sub-slices" after the recon flagged the size + one-PC-testability split. Recon
   decompiled the three comms-radio modes → `research/comms-radio-recon.md`; the load-bearing find:
