@@ -1,15 +1,16 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-20 — **M6-B career `--config` loader BUILT + verified headless (UNCOMMITTED — awaiting
-Cody's go).** The dedicated server can now load a REAL Derail Valley career from a `.lmpc` file
+**Updated:** 2026-07-20 — **M6-B career `--config` loader BUILT + verified headless + PUSHED** (`9083da3`
+core+test / `8340c0b` server / `5a396d5` docs, `a47e080..5a396d5`, Cody's go). The dedicated server can now
+load a REAL Derail Valley career from a `.lmpc` file
 (`--config`) — real yards, cargo economy, license gates, route distances, station world-locations — instead
 of the synthetic Alpha/Bravo placeholder. `--dump-config` writes the built-in default as a seed. Binary
 codec (`CareerConfigCodec`, magic "LMPC" v1) over PacketWriter/Reader like `.lmpw`/`.lmps` — zero deps, so
 the same bytes the net48 Shim exporter will write are what the net8 server reads. The in-game EXPORTER
 (reads the live DV world → `.lmpc`) is the deferred Shim half. Suite **172 → 177 ×3, full sln 0 warnings**.
 
-> **Next session — cold start here.** M6-B.1/B.2/B.3 PUSHED (`origin/main` @ `a47e080`); **the M6-B career
-> `--config` loader is uncommitted in the tree, awaiting Cody's go to push.** The dedicated server is
+> **Next session — cold start here.** M6-B.1/B.2/B.3 + the M6-B career `--config` loader all PUSHED
+> (`origin/main` @ `5a396d5`, tree clean). The dedicated server is
 > joinable, persistent, self-populating, drives its own trains, lets a player borrow + drive one, and now
 > loads a real career from `--config`. Suite **177/177 ×3, 0 warnings**; SDK is
 > `C:\Users\User\.dotnet\dotnet.exe` (bash needs `DOTNET_ROOT` + `DOTNET_ROLL_FORWARD=Major`). **Env trap:**

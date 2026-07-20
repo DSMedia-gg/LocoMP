@@ -39,7 +39,8 @@ stale at 172. The Galleon gate blocks process-kill and I didn't substitute; Cody
 went green. Lesson banked in STATE: use self-terminating exe runs (`--dump-config` exits) or stop them.
 
 **Docs:** CHANGELOG entry, Server README (`--config`/`--dump-config` section + limitation), DefaultCareer
-comment refreshed, STATE + SESSION. **Uncommitted; commit + push await Cody's go** (hard rule 7).
+comment refreshed, STATE + SESSION. **PUSHED** `a47e080..5a396d5` (Cody's go — 3 dependency-ordered
+commits: core+test → server → docs).
 
 **Next:** the natural follow-on is the in-game EXPORTER (Shim: live DV world → `.lmpc`) — the other half of
 a real dedicated-server career; needs the game.
