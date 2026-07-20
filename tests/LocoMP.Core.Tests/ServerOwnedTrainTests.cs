@@ -37,6 +37,11 @@ public class ServerOwnedTrainTests
         for (int i = 0; i < rounds; i++) { server.Poll(); c.Poll(); }
     }
 
+    private static void Pump(NetServer server, NetClient a, NetClient b, int rounds = 8)
+    {
+        for (int i = 0; i < rounds; i++) { server.Poll(); a.Poll(); b.Poll(); }
+    }
+
     [Fact]
     public void A_server_owned_train_reaches_a_client_and_its_snapshots_move_it()
     {
@@ -82,22 +87,71 @@ public class ServerOwnedTrainTests
     }
 
     [Fact]
-    public void A_player_cannot_claim_a_server_owned_train()
+    public void A_player_can_claim_and_drive_a_server_owned_train_then_release_it()
     {
         var hub = new LoopbackNetwork();
         var clock = new ManualClock();
         using var server = new NetServer(hub.Server, new ServerConfig(Identity), clock);
-        using var c = new NetClient(hub.Connect(out _), Identity, "Solo", clock, playerKey: "k");
-        Pump(server, c);
+        using var driver = new NetClient(hub.Connect(out _), Identity, "Driver", clock, playerKey: "kd");
+        using var watcher = new NetClient(hub.Connect(out _), Identity, "Watcher", clock, playerKey: "kw");
+        Pump(server, driver, watcher);
+
+        TrainsetDef def = server.Trains.SpawnServerOwned(Cars(2));
+        Pump(server, driver, watcher);
+        Assert.Equal(ServerTrains.ServerOwnerId, watcher.Trains.View.Sets[def.Id].OwnerId);
+
+        // The driver takes over the ambient server train — now ALLOWED (M6-B.3, was refused at B.2).
+        driver.Trains.RequestOwnership(def.Id);
+        Pump(server, driver, watcher);
+        int driverId = driver.LocalId!.Value;
+        Assert.Equal(driverId, server.Trains.Registry.Sets[def.Id].OwnerId);
+        Assert.Equal(driverId, watcher.Trains.View.Sets[def.Id].OwnerId);
+        Assert.False(server.Trains.IsServerDriven(def.Id)); // the server stops driving it while on loan
+
+        // The driver drives it: their snapshots are admitted (owner == sender) and relayed to the watcher.
+        driver.Trains.SendSnapshot(SnapshotAt(def, 10f));
+        Pump(server, driver, watcher);
+        float first = watcher.Trains.View.LatestSnapshots[def.Id].Cars[0].Front.S;
+        driver.Trains.SendSnapshot(SnapshotAt(def, 55f)); // advanced 45 m
+        Pump(server, driver, watcher);
+        float second = watcher.Trains.View.LatestSnapshots[def.Id].Cars[0].Front.S;
+        Assert.True(second > first, "the driver's snapshot should move the watcher's replica forward");
+
+        // A second player can't steal a train someone is already driving (only server/parked is takeable).
+        watcher.Trains.RequestOwnership(def.Id);
+        Pump(server, driver, watcher);
+        Assert.Equal(driverId, server.Trains.Registry.Sets[def.Id].OwnerId);
+
+        // Release hands it back to the server, which resumes ownership (and its kinematic drive).
+        driver.Trains.ReleaseOwnership(def.Id);
+        Pump(server, driver, watcher);
+        Assert.Equal(ServerTrains.ServerOwnerId, server.Trains.Registry.Sets[def.Id].OwnerId);
+        Assert.Equal(ServerTrains.ServerOwnerId, watcher.Trains.View.Sets[def.Id].OwnerId);
+        Assert.True(server.Trains.IsServerDriven(def.Id));
+    }
+
+    [Fact]
+    public void A_disconnecting_borrower_hands_a_server_train_back_to_the_server()
+    {
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        using var server = new NetServer(hub.Server, new ServerConfig(Identity), clock);
+        using var watcher = new NetClient(hub.Connect(out _), Identity, "Watcher", clock, playerKey: "kw");
+        using var driver = new NetClient(hub.Connect(out _), Identity, "Driver", clock, playerKey: "kd");
+        Pump(server, driver, watcher);
 
         TrainsetDef def = server.Trains.SpawnServerOwned(Cars(1));
-        Pump(server, c);
+        Pump(server, driver, watcher);
 
-        c.Trains.RequestOwnership(def.Id); // a player tries to take it over
-        Pump(server, c);
+        driver.Trains.RequestOwnership(def.Id);
+        Pump(server, driver, watcher);
+        Assert.Equal(driver.LocalId!.Value, server.Trains.Registry.Sets[def.Id].OwnerId);
 
-        // Refused: the server stays the owner, both server-side and in the client's mirror.
+        driver.Leave(); // a borrower leaving must NOT strand the train at owner 0
+        Pump(server, driver, watcher);
+
         Assert.Equal(ServerTrains.ServerOwnerId, server.Trains.Registry.Sets[def.Id].OwnerId);
-        Assert.Equal(ServerTrains.ServerOwnerId, c.Trains.View.Sets[def.Id].OwnerId);
+        Assert.Equal(ServerTrains.ServerOwnerId, watcher.Trains.View.Sets[def.Id].OwnerId);
+        Assert.True(server.Trains.IsServerDriven(def.Id));
     }
 }

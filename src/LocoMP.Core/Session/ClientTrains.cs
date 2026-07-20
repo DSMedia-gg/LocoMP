@@ -137,8 +137,12 @@ public sealed class ClientTrains
     /// <summary>Manual escape hatch: ask for the trainset's current definition again (03 §4).</summary>
     public void RequestResync(int trainsetId) => SendIdOnly(MessageType.ResyncRequest, trainsetId);
 
-    /// <summary>Ask to simulate a parked trainset.</summary>
+    /// <summary>Ask to simulate a parked trainset — or take over an ambient server-owned train (M6-B.3).</summary>
     public void RequestOwnership(int trainsetId) => SendIdOnly(MessageType.OwnershipRequest, trainsetId);
+
+    /// <summary>Hand a trainset we simulate back (M6-B.3): a borrowed server train resumes its server
+    /// drive, a self-registered consist parks. The commit returns as TrainsetOwner to everyone.</summary>
+    public void ReleaseOwnership(int trainsetId) => SendIdOnly(MessageType.OwnershipRelease, trainsetId);
 
     /// <summary>Propose a junction throw. The commit comes back as JunctionState to everyone.</summary>
     public void ThrowJunction(uint junctionId, byte branch)
