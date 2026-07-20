@@ -8,7 +8,9 @@ using LocoMP.Core.Session;
 namespace LocoMP.Shim;
 
 /// <summary>
-/// D14: while hosting, the native money display IS the LocoMP wallet. The pre-session balance is
+/// D14/M4: in a session the native money display IS the LocoMP wallet (host AND joined client — the
+/// client mirror keeps money correct and its comms-radio affordability checks the right wallet; only
+/// the host reports native register purchases as fees). The pre-session balance is
 /// saved and restored on leave; in between, <see cref="Inventory.PlayerMoney"/> is reconciled to
 /// the ledger balance, and every FINALIZED register purchase (career manager licenses and fees,
 /// module shops) is reported to the server as an external fee — so the native "can I afford this"
@@ -29,6 +31,7 @@ public sealed class WalletMirror : IDisposable
 
     private readonly NetClient _client;
     private readonly Action<string> _log;
+    private readonly bool _isHost;
     private readonly double _savedNativeMoney;
     private readonly bool _saved;
     private bool _haveCareer;
@@ -56,9 +59,10 @@ public sealed class WalletMirror : IDisposable
         if (__result && __state > 0) _active?.OnNativePurchase(__instance, __state);
     }
 
-    public WalletMirror(NetClient client, Action<string> log)
+    public WalletMirror(NetClient client, bool isHost, Action<string> log)
     {
         _client = client ?? throw new ArgumentNullException(nameof(client));
+        _isHost = isHost;
         _log = log;
         _active = this;
 
@@ -119,6 +123,10 @@ public sealed class WalletMirror : IDisposable
 
     private void OnNativePurchase(CashRegisterBase register, double cost)
     {
+        // Only the HOST is the world source, so only it reports native register purchases as fees.
+        // On a joined client the wallet is mirrored for display + comms-radio affordability, but its
+        // native register interactions are not the session's economy (the host's shops are).
+        if (!_isHost) return;
         long cents = (long)Math.Round(cost * 100.0);
         string label = register is CashRegisterCareerManager ? "career manager" : "shop";
         _log($"[career] native purchase captured: ${cost:F2} at the {label}");

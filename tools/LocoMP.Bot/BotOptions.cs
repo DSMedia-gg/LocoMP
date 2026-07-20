@@ -56,6 +56,10 @@ public sealed class BotOptions
     // M4 shops: buy a prefab from the shop as the "remote client" — the win condition on one PC.
     public string BuyPrefab = "";       // itemPrefabName to buy once joined ("" = don't buy)
 
+    // M4 comms radio: drive the remote-action wire path (the host executes + charges YOUR wallet).
+    public string RerailCar = "";       // game plate (e.g. L-014) to rerail once joined (dest = --at)
+    public string ClearCar = "";        // game plate to delete (clear) once joined
+
     public HandshakeRequest ToIdentity() => new(ProtocolVersion.Current, GameBuild, ModVersion, ModListHash);
 
     /// <summary>The bot ships in the same tree as the mod, so the single version source
@@ -120,6 +124,8 @@ public sealed class BotOptions
                     case "--grab-items": o.GrabItems = true; break;
                     case "--drop-after": o.DropAfterSeconds = double.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--buy": o.BuyPrefab = Next(); break;
+                    case "--rerail": o.RerailCar = Next(); break;
+                    case "--clear": o.ClearCar = Next(); break;
                     case "--help" or "-h" or "/?": PrintUsage(); return null;
                     default:
                         Console.Error.WriteLine($"Unknown option: {args[i]} (try --help)");
@@ -206,6 +212,10 @@ Usage: LocoMP.Bot [options]
                          win condition: YOUR wallet is debited, the host's is not), then drop
                          it after --drop-after so the host sees it materialize
   --drop-after <s>       hold a grabbed/bought item this long before dropping it (default 20)
+  --rerail <plate>       rerail the host's car with this game plate (e.g. L-014) to the --at
+                         point once joined — the host does it, YOUR wallet pays the fee
+  --clear <plate>        delete (comms-radio Clear) the host's car with this plate; the host
+                         removes it everywhere and charges YOUR wallet
 
 Examples:
   LocoMP.Bot --at 671,132,591                        one bot orbiting those coords
