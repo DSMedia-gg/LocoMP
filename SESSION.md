@@ -5,6 +5,66 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-20 — Interest management Burst 1: the mechanism (D10), on player poses 📡
+
+**Goal:** Cody picked **interest management** from the cold-start candidates. The perf baseline + audit
+§6 name it the one real scaling gap (broadcast-everything = 6–42× over the 128 kbps budget at 32p), and
+it's the backbone D17's "Living World" fidelity depends on — pure game-free Core, fully solo-verifiable.
+
+**The recon crux (reshaped the whole slice):** the extracted topology carries **no world geometry** —
+`TrackEdge` is `{Id, LengthM, NodeA, NodeB}`, a pure graph; `BogieState` is spline-space (`EdgeId + S`).
+Player poses are world-space. So the server *cannot* place a railed train in the world to distance-test
+it — and I worked the bandwidth split from the perf numbers: at 32p/200 trains, **railed-train snapshots
+are ~96%, poses ~4%.** Filtering trains (the point) needs coarse edge geometry added to the topology +
+an in-game re-extract. That's a real architectural fork with a schema bump, so I planned it (plan-mode,
+approved) as **two bursts**: Burst 1 = the mechanism on world-space entities; Burst 2 = the train
+geometry (the 96%).
+
+**Design (validated by a Plan agent — converged + sharpened): `InterestManager`.** Per-client relevance
+set; hot-path `IsRelevant(peer, key)` (O(1) hashset read) gates the send loops; a throttled `Recompute`
+(in `NetServer.Poll`, ~2.5 Hz) fires enter/leave callbacks. **Hysteresis** (enter 500 / leave 750 m)
+kills boundary flicker; **fail-open** everywhere data is missing (disabled config, unknown observer, no
+pose yet → everything relevant). One new wire message `InterestHide` (64) — a *presence hint*, not an
+authoritative remove (the network twin of "delete ≠ distance stream-out"); enter reuses the existing
+pose. Protocol **v10 → v11**. `InterestConfig` on `ServerConfig`, **OFF by default** → zero behaviour
+change until a server opts in.
+
+**The one real bug I hit (and the fix):** during fail-open over-subscription the server relays a far
+player's poses (avatar appears) but never adds them to `InScope` — so when they later go out of range
+there's no leave, leaving a frozen ghost. Fix = the plan's "seed on first anchor": a client's first real
+pose seeds its scope with everything it was over-subscribed to, then the same Recompute pass trims the
+out-of-range ones via a real leave (hide). The unit tests caught my pre-seeding mental model and now
+document the correct semantics (nearby entities are seeded silently; enter fires only on a genuine later
+crossing).
+
+**Scope refinement (FLAG FOR CODY):** the approved plan gated *poses + items*. Tracing the code, items
+carry a possessed/world duality and are **discrete** (they don't stream → ~0 steady-state bandwidth), so
+gating them cleanly means wrestling the delicate M4 paths for no bandwidth gain. So Burst 1 gates **poses
+only** — a clean continuous stream that exercises the whole enter/leave/hide machine at zero M4 risk —
+and **items regroup into Burst 2** alongside trains as "spatial world objects." The manager is already
+generic over Player/Item/Trainset and `InterestHide` carries all three kinds, so Burst 2 plugs in with no
+rework. Veto if you'd rather items ship now.
+
+**Built:** `Session/InterestManager.cs` (+ `EntityKind`/`EntityKey`/`SpatialEntity`), `InterestConfig.cs`,
+`MessageType.InterestHide`, protocol v11, `ServerConfig.Interest`, `NetServer` (owns the manager, gates
+`HandlePose`, `_posed` set, AddClient/RemoveClient/ForgetEntity lifecycle, throttled Recompute, the
+hide-send callback), `NetClient` (`InterestHide` → `PlayerHidden` event; Item/Trainset kinds reserved for
+Burst 2), Shim `RemoteAvatar.Hide` + `AvatarManager.Hide` + the `SessionController` subscription
+(hide-not-destroy; a later pose re-shows).
+
+**Verified (headless):** `InterestManagerTests` (10 — enter-on-approach, leave, the hysteresis band both
+directions, first-pose seed-then-trim, fail-open unposed, ForgetEntity silent, disabled inert,
+FilterPlayers-off, unknown observer, self-exclusion), `InterestSessionTests` (3 — far player hidden then
+re-shown over Loopback, global roster identity never filtered, disabled relays far poses unchanged), and
+a **MEASURED** `BudgetBench` proof: two clusters ~2 km apart, filtering ON → the probe gets **50%** of
+the pose bytes (exactly its near cluster). Suite **177 → 191 ×3**, full sln **0 warnings** (Shim vs
+B99.7). Staged to Mods/ + dist/ (SHA-identical). Docs: CHANGELOG, `PERF-BASELINE.md` §3b + verdict.
+
+**Next:** Burst 2 — the railed-train 96% (edge geometry + TopologyCodec v2 + gate the snapshot streams);
+the one in-game step is re-extracting a geometry-carrying `.lmpw`. Push of this burst awaits Cody's go.
+
+---
+
 ## 2026-07-20 — Real careers on the dedicated server (M6-B): the `--config` loader 📋
 
 **Goal:** Cody: "let's do the next task." Offered the three cold-start candidates framed by testability;

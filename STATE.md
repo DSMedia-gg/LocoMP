@@ -1,6 +1,42 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-20 — **M6-B career `--config` loader BUILT + verified headless + PUSHED** (`9083da3`
+**Updated:** 2026-07-20 — **Interest management Burst 1 (D10 mechanism, players only) BUILT + verified
+headless + STAGED (uncommitted).** The server now keeps a per-client spatial relevance set and can gate
+**player pose relays** by it: a player who walks out of range stops streaming to you and their avatar is
+hidden (re-shown on approach), instead of broadcasting everyone's position to everyone. New
+`InterestManager` (the enter/stay/leave state machine with hysteresis + fail-open, game-free/headless-
+fuzzable) + `InterestConfig` (on `ServerConfig`, **OFF by default** → zero behaviour change until a
+server opts in) + one new wire message `InterestHide` (64), **protocol v10 → v11**. Client side: NetClient
+raises `PlayerHidden`; the Shim's `AvatarManager`/`RemoteAvatar` hide-not-destroy (a later pose re-shows).
+**Measured (BudgetBench, not modelled):** a probe ~2 km from half the players receives **50%** of the
+pose bytes with filtering on (`docs/PERF-BASELINE.md` §3b). Suite **177 → 191 ×3** (+14: 10
+InterestManager unit + 3 Loopback session + 1 bench), full sln **0 warnings** (Shim vs B99.7). Staged to
+Mods/ + dist/ (SHA-identical). **This is the MECHANISM only — players are ~4% of the bandwidth; the ~96%
+(railed-train snapshots) is Burst 2, which needs coarse edge geometry in the topology.** Push awaits
+Cody's go.
+
+**Scope note (a refinement of the approved plan, FLAG FOR CODY):** the approved Burst 1 plan gated
+*poses + world items*. Tracing the code, items carry a possessed/world duality and are discrete (they
+don't stream), so they contribute ~0 to steady-state bandwidth and gating them cleanly means wrestling
+the delicate M4 item paths for no bandwidth gain. So Burst 1 gates **poses only** (a pure continuous
+stream that exercises the whole enter/leave/hide machine at zero risk to M4), and **items regroup into
+Burst 2 alongside trains** as "spatial world objects". The `InterestManager` is already generic over
+Player/Item/Trainset and `InterestHide` carries all three kinds, so Burst 2 plugs in with no rework.
+Veto the regrouping if you'd rather items ship in Burst 1.
+
+> **Cold start (Burst 2, the payoff):** add coarse per-edge endpoint world geometry to `TrackEdge` +
+> `TopologyCodec` **v2** (back-compat: v1 `.lmpw` still loads; geometry-absent ⇒ train filter
+> auto-disables, fail-open); a `TryEdgeWorldPoint` helper; anchor railed trains from
+> `ServerTrains._latest`; gate `HandleSnapshot` + `PushServerSnapshot`; Enter replays
+> `TrainsetCreate`+snapshot(+controls); `InterestHide{Trainset}`; plumb a `WorldTopology` into
+> `NetServer` (dedicated: `Program.cs` loads it; host: `SessionController` builds it via
+> `TopologyExtractor`, emitting the new geometry). One deferred in-game step: **re-extract a
+> geometry-carrying `.lmpw`** — nothing breaks before it. Then re-run BudgetBench for the 6–42×→<1×
+> headline. SDK: `C:\Users\User\.dotnet\dotnet.exe` (Git Bash needs `DOTNET_ROOT=/c/Users/User/.dotnet`
+> + `DOTNET_ROLL_FORWARD=Major`; a second SDK-less dotnet sits on PATH, so call the .exe by full path;
+> `cd` to the repo root each command).
+
+**Prior (2026-07-20): M6-B career `--config` loader BUILT + verified headless + PUSHED** (`9083da3`
 core+test / `8340c0b` server / `5a396d5` docs, `a47e080..5a396d5`, Cody's go). The dedicated server can now
 load a REAL Derail Valley career from a `.lmpc` file
 (`--config`) — real yards, cargo economy, license gates, route distances, station world-locations — instead

@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Spatial interest management — the mechanism (D10, Burst 1): the server can now relay a player's
+  movement only to the OTHER players near them, instead of broadcasting everyone's position to everyone.
+  A player who walks out of range has their avatar hidden for you (and re-shown when you meet again),
+  rather than lingering as a distant ghost — the groundwork for scaling past small co-op sessions
+  (the perf baseline measured broadcast-everything at 6–42× over the bandwidth budget at 32 players).
+  This first cut proves the whole "who can see whom" machinery on player movement; the big win — the same
+  filtering applied to trains, which are ~96% of the traffic — comes in the follow-on. **Off by default**
+  (a server opts in), so nothing changes for existing sessions. Network protocol is now v11 (a new
+  "hide this" message). Measured: with filtering on, a client ~2 km from half the players receives half
+  the movement traffic.
 - Real careers on the dedicated server (M6-B): the headless server can now load a real Derail Valley
   career via `--config <file.lmpc>` — actual yards, cargo economy, license gates, route distances and
   station locations — instead of the built-in Alpha/Bravo placeholder. `--dump-config <file>` writes the
