@@ -390,6 +390,21 @@ public class CareerSessionTests
     }
 
     [Fact]
+    public void A_targeted_external_fee_charges_the_named_player_not_the_host()
+    {
+        var (_, _, server, a, b) = Session(); // a is the world source; b is a remote
+
+        // The M4 comms-radio case: a remote initiates a rerail, the HOST performs it and reports the
+        // fee AGAINST THE INITIATOR (target = b's peer id). The fee must land on b, never on the host.
+        a.Career.ReportExternalFee(80_00, "rerail L-014", b.LocalId!.Value);
+        Pump(server, new[] { a, b });
+
+        Assert.Equal(500_00, a.Career.BalanceCents);          // the host did the work but doesn't pay
+        Assert.Equal(420_00, b.Career.BalanceCents);          // the initiator's wallet paid the fee
+        Assert.True(server.Career.Registry.Ledger.ConservationHolds);
+    }
+
+    [Fact]
     public void Host_grant_of_an_unheld_license_is_refused()
     {
         var (_, _, server, a, b) = Session();

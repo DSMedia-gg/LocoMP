@@ -208,6 +208,40 @@ public sealed class TrainsetRegistry
         return true;
     }
 
+    /// <summary>
+    /// Commit a comms-radio Clear (delete) of a single car (M4). The car leaves the world: if it was
+    /// its set's last car, the whole set is removed (caller broadcasts TrainsetRemove); otherwise the
+    /// remaining cars re-form as a FRESH set with a bumped epoch and the old set is retired (the
+    /// membership-change invariant — a stale snapshot can't even name the survivor). Either way the
+    /// deleted car appears in no product, so every client despawns exactly its replica.
+    /// </summary>
+    public bool TryDeleteCar(int carId, out TrainsetTransaction? txn, out int removedSetId, out string? reason)
+    {
+        txn = null;
+        removedSetId = 0;
+        if (!_carToSet.TryGetValue(carId, out int setId) || !_sets.TryGetValue(setId, out TrainsetDef? set))
+        {
+            reason = $"unknown car {carId}";
+            return false;
+        }
+
+        CarDef[] remaining = set.Cars.Where(c => c.Id != carId).ToArray();
+        if (remaining.Length == 0)
+        {
+            Remove(setId);          // last car → the set is gone; caller sends TrainsetRemove
+            removedSetId = setId;
+            reason = null;
+            return true;
+        }
+
+        var product = new TrainsetDef(_nextTrainsetId++, set.Epoch + 1, set.OwnerId, remaining);
+        Retire(setId);
+        Commit(product);
+        txn = new TrainsetTransaction(TrainsetTransactionType.Split, new[] { setId }, new[] { product });
+        reason = null;
+        return true;
+    }
+
     /// <summary>Park every trainset a departing player owns (owner → 0, positions freeze, 03 §3).
     /// Returns the affected trainset ids for the ownership broadcast.</summary>
     public List<int> Park(int ownerId)

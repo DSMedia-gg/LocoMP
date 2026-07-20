@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LocoMP.Core.Net;
+using LocoMP.Core.Presence;
 using LocoMP.Core.Protocol;
 using LocoMP.Core.Trains;
 
@@ -59,6 +60,11 @@ public sealed class ClientTrains
     /// <summary>We simulate this car's consist and a remote player physically uncoupled the named
     /// coupler — perform the real uncouple; the native event then proposes the split (M3.5c).</summary>
     public event Action<int, CoupleEnd>? UncoupleRequested; // (carId, end — the car's own coupler)
+
+    /// <summary>We are the world source and a remote player used their comms radio on a car we own —
+    /// perform the real action (rerail to the pose, or delete the car); the native event then drives
+    /// the normal path, and we charge <c>initiatorPeer</c> the fee (M4). (kind, carId, dest, initiator)</summary>
+    public event Action<CommsActionKind, int, Pose, int>? CommsActionCommanded;
 
     // ── send side (all silently no-op until joined, matching NetClient.SendPose) ──
 
@@ -231,6 +237,24 @@ public sealed class ClientTrains
         _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
     }
 
+    /// <summary>Ask the server to route a comms-radio action (rerail/delete) on a car we don't
+    /// simulate to its sim owner (M4). The destination pose is used for rerail (where to put it);
+    /// delete ignores it. Fee lands on us — the owner charges the initiator.</summary>
+    public void RequestCommsAction(CommsActionKind kind, int carId, Pose dest)
+    {
+        if (!_joined()) return;
+        var w = new PacketWriter(32)
+            .WriteByte((byte)MessageType.CommsActionRequest)
+            .WriteByte((byte)kind)
+            .WriteVarUInt((uint)carId);
+        PresenceCodec.WritePose(w, dest);
+        _transport.Send(NetProtocol.ServerPeer, w.ToArray(), DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>World source only: tell the server a car was deleted natively so every client
+    /// despawns its replica (M4 — the destroy hook alone can't distinguish delete from stream-out).</summary>
+    public void NotifyCarDeleted(int carId) => SendIdOnly(MessageType.CarDeleteNotice, carId);
+
     // ── receive side ──
 
     internal bool TryHandle(MessageType type, PacketReader r)
@@ -320,6 +344,15 @@ public sealed class ClientTrains
                 int carId = (int)r.ReadVarUInt();
                 var end = (CoupleEnd)r.ReadByte();
                 UncoupleRequested?.Invoke(carId, end);
+                return true;
+            }
+            case MessageType.CommsActionCommand:
+            {
+                var kind = (CommsActionKind)r.ReadByte();
+                int carId = (int)r.ReadVarUInt();
+                Pose dest = PresenceCodec.ReadPose(r);
+                int initiator = (int)r.ReadVarUInt();
+                CommsActionCommanded?.Invoke(kind, carId, dest, initiator);
                 return true;
             }
             default:

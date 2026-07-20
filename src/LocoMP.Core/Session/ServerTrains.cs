@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using LocoMP.Core.Net;
 using LocoMP.Core.Persistence;
+using LocoMP.Core.Presence;
 using LocoMP.Core.Protocol;
 using LocoMP.Core.Trains;
 
@@ -80,6 +81,8 @@ public sealed class ServerTrains
             case MessageType.CargoState: HandleCargoState(peerId, r); return true;
             case MessageType.CoupleRequest: HandleCoupleRequest(peerId, r); return true;
             case MessageType.UncoupleRequest: HandleUncoupleRequest(peerId, r); return true;
+            case MessageType.CommsActionRequest: HandleCommsActionRequest(peerId, r); return true;
+            case MessageType.CarDeleteNotice: HandleCarDeleteNotice(peerId, r); return true;
             default: return false;
         }
     }
@@ -400,6 +403,51 @@ public sealed class ServerTrains
         _transport.Send(set.OwnerId, payload, DeliveryMethod.ReliableOrdered);
     }
 
+    /// <summary>Route a remote player's comms-radio action (rerail/delete) to the target car's sim
+    /// owner — the owner performs the real action, its native event drives the normal path, and the
+    /// owner charges the initiator via FeeExternal (M4, the CoupleRequest pattern). The command
+    /// carries the initiator peer so the fee lands on the RIGHT wallet.</summary>
+    private void HandleCommsActionRequest(int peerId, PacketReader r)
+    {
+        byte kind = r.ReadByte();
+        int carId = (int)r.ReadVarUInt();
+        Pose dest = PresenceCodec.ReadPose(r);
+
+        if (!Registry.TryFindCar(carId, out TrainsetDef set)) { ProposalRejected?.Invoke(peerId, $"comms: unknown car {carId}"); return; }
+        if (set.OwnerId == 0) { ProposalRejected?.Invoke(peerId, $"comms: trainset {set.Id} is parked — nobody can act on it"); return; }
+        if (set.OwnerId == peerId) return; // the requester simulates it — they act locally, nothing to route
+
+        var w = new PacketWriter(32)
+            .WriteByte((byte)MessageType.CommsActionCommand)
+            .WriteByte(kind)
+            .WriteVarUInt((uint)carId);
+        PresenceCodec.WritePose(w, dest);
+        w.WriteVarUInt((uint)peerId); // initiator — whose wallet the owner charges
+        _transport.Send(set.OwnerId, w.ToArray(), DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>The world source deleted a car natively (comms-radio Clear) — remove it everywhere so
+    /// no client keeps a ghost replica. Gated to the car's OWNER (in host-native mode that is the
+    /// host): a delete is authoritative, unlike a distance stream-out (which keeps the def).</summary>
+    private void HandleCarDeleteNotice(int peerId, PacketReader r)
+    {
+        int carId = (int)r.ReadVarUInt();
+        if (!Registry.TryFindCar(carId, out TrainsetDef set) || set.OwnerId != peerId)
+        {
+            ProposalRejected?.Invoke(peerId, $"delete: only the owner of car {carId} may remove it");
+            return;
+        }
+        if (Registry.TryDeleteCar(carId, out TrainsetTransaction? txn, out int removedSetId, out string? reason))
+        {
+            if (txn != null) BroadcastTransaction(txn);
+            else Broadcast(BuildRemove(removedSetId), DeliveryMethod.ReliableOrdered);
+        }
+        else
+        {
+            ProposalRejected?.Invoke(peerId, $"delete: {reason}");
+        }
+    }
+
     // ── packet builders ──
 
     private static byte[] BuildCreate(uint token, TrainsetDef def)
@@ -410,6 +458,12 @@ public sealed class ServerTrains
         TrainCodec.WriteDef(w, def);
         return w.ToArray();
     }
+
+    private static byte[] BuildRemove(int trainsetId) =>
+        new PacketWriter(8)
+            .WriteByte((byte)MessageType.TrainsetRemove)
+            .WriteVarUInt((uint)trainsetId)
+            .ToArray();
 
     private void BroadcastTransaction(TrainsetTransaction txn)
     {
