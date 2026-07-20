@@ -1,6 +1,33 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-20 — **M4.5 (Manual service) — recon = VERIFY-NOT-BUILD, then a small
+**Updated:** 2026-07-20 — **M4.6 (Locked personal essentials, v9) BUILT (prior burst) + VERIFIED +
+DOCUMENTED this session; uncommitted, push awaits Cody's go.** A `/clear`-interrupted burst was found
+complete in the working tree; this session verified it programmatically and wrote it up (no new code).
+Three threads, protocol **v8→v9**, save schema **v4→v5**:
+- **The feature — look-but-don't-touch essentials.** A DV personal essential (Map/CommsRadio/wallet/
+  Compass/DVGuide) set down in the world syncs LOCKED: visible to all, pickup refused for everyone but
+  its owner (who reclaims it natively, never via a wire request). Core: `ItemRecord.WorldLocked` +
+  `SpawnInWorld(locked)` + `TryPickUp` refusal + save-codec v5 byte + register/broadcast wire byte.
+  Shim `ItemSync`: `IsEssential` (`InventorySpecs.IsEssential`) sets the lock, **`IsJobItem`
+  (JobBooklet/Overview/Report) EXEMPT** — job paper is shared crew state, stays shareable. **Lineage:
+  not a corpus decision; an M4 refinement off the item recon's `BelongsToPlayer`/`IsEssential` finding
+  (`../research/item-system-recon.md:55,66`). FLAG FOR CODY: confirm intended + go to commit/push.**
+- **Host-native hide-not-destroy (correctness).** A remote carrying off the host's REAL item now
+  `SetActive(false)`s + tracks it in `_hiddenNatives` instead of `Object.Destroy` (destroying fights
+  DV's `RespawnOnDrop` → "Cannot set parent while being destroyed"). `ReShowNative` re-shows the SAME
+  object on drop-back (no duplicate); Dispose reactivates still-hidden natives. Replicas we spawned are
+  still destroyed. `_applying` guard intact.
+- **CommsRadioSync perf fix.** Discovery ran 3× `FindObjectOfType` per FRAME (host-FPS crater); now 1 Hz,
+  anchored on the always-active `CommsRadioController`'s public mode fields, hooked once.
+- **Verified programmatically (no VR/2nd-PC/in-game):** clean full-solution rebuild (Shim vs real
+  B99.7) = **0 warnings**; game-free suite **164/164 ×3** (+3 locked-item tests over 161); staged
+  `LocoMP.Shim.dll` SHA-256 **byte-identical** across fresh `bin/`, `dist/`, and live game `Mods/`
+  (deterministic build ⇒ deploy == tested source, no re-stage). Smoke checks added to
+  `RUNBOOK-M4-SMOKE.md` (**A5** + folds into **A1**/**A3**). **Open in-game unknown:** some essentials
+  auto-return to inventory on drop (RespawnOnDrop) → may never rest as a world item; which ones stay
+  set-down is a live question for the smoke pass.
+
+**Prior (2026-07-20): M4.5 (Manual service) — recon = VERIFY-NOT-BUILD, then a small
 defensive guard BUILT + PUSHED** (`0e65c0a` feat / `8c70a0b` docs, Cody's go). Recon (`research/manual-service-recon.md`) settled the last M4
 scope item: manual service is the INVERSE of comms-radio. The metered loop (turn a valve → deposit
 cash → hit Buy) commits through **`CashRegisterWithModules.Buy()`** — one of the two exact `Buy`

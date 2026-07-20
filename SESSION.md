@@ -5,6 +5,60 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-20 — M4.6: Locked personal essentials (v9) + hide-native fix + comms perf fix 🔒
+
+**Goal:** Cody: "let's keep working on LocoMP" (away 6 hrs — verify programmatically, collate testing
+into the runbook). The working tree held a **complete, uncommitted burst** from the immediately prior
+(pre-`/clear`) session; this session **verified it programmatically, documented it, and extended the M4
+smoke runbook** — no new code written here. Code authored prior burst; everything below is what that
+burst contains + how it was verified.
+
+**Three cohesive threads in the tree (v8→v9, save schema v4→v5):**
+1. **Locked "personal essential" world items (the feature).** A DV essential (Map, CommsRadio, wallet,
+   Compass, DVGuide) set down in the world now syncs **look-but-don't-touch** — visible to everyone,
+   pickup refused for all but its owner (who reclaims it natively, never over the wire). Core:
+   `ItemRecord.WorldLocked` + `SpawnInWorld(…, locked)` + `TryPickUp` refusal (`"item N is a personal
+   item — only its owner can take it"`) + save codec v5 byte + the register/broadcast wire byte
+   (ServerItems/ClientItems). Shim: `ItemSync.IsEssential` (`InventorySpecs.IsEssential`) gates the
+   lock, **but `IsJobItem` (JobBooklet/JobOverview/JobReport) is deliberately EXEMPT** — job paperwork
+   is shared crew state (anyone reads the brief; the claim follows via career sync, not the paper), so
+   it stays a normal shareable item. Lineage: not a corpus decision — an M4 refinement off the item
+   recon's `BelongsToPlayer`/`IsEssential` finding (`../research/item-system-recon.md:55,66`). **Flag
+   for Cody: confirm this is the intended slice + give the go to commit/push.**
+2. **Host-native hide-not-destroy (correctness fix, ItemSync).** When a remote carries off the host's
+   REAL item, `DespawnLocal` no longer `Object.Destroy`s it — it `SetActive(false)`s it and tracks it in
+   `_hiddenNatives`. Destroying a real DV item fights `RespawnOnDrop` (→ "Cannot set parent while being
+   destroyed", and essentials respawn). `ReShowNative` re-shows the SAME object at the new pose if the
+   remote drops it back (no duplicate replica); Dispose reactivates any still-hidden natives so the
+   host's world is whole on Leave. Replicas WE spawned are still destroyed outright. `_applying` guard
+   intact (verified line 279).
+3. **CommsRadioSync per-frame-scan fix (perf).** Discovery ran 3× `FindObjectOfType` **every frame**
+   (three full-scene scans/frame = host FPS crater). Now throttled to 1 Hz and anchored on the
+   always-active `CommsRadioController`, reading its public `rerailControl`/`deleteControl`/
+   `crewVehicleControl` fields (populated even while a mode GameObject is inactive), hooking once.
+
+**Verified programmatically this session (no VR / 2nd PC / in-game):**
+- **Clean full-solution rebuild** (`dotnet build LocoMP.sln -c Release --no-incremental`, Shim included
+  against real B99.7) = **0 errors / 0 warnings**. This confirms every game-API assumption the burst
+  makes (`CommsRadioController.*Control`, `InventorySpecs.IsEssential`, `JobBooklet/Overview/Report`,
+  `PresenceShim.ToLocalPosition/ToRotation`) — the check the 07-19 audit's subagent couldn't reach.
+- **Game-free suite** = **164/164 ×3** (161 at M4.5 + 3 new: locked-pickup-refused, locked-flag
+  survives capture/restore, locked-essential visible-but-unpickable over a session). Clean, no flakes.
+- **Staged payload proven current by hash:** `LocoMP.Shim.dll` SHA-256 is byte-identical (`D3DD824D…`,
+  113 664 B) across the fresh clean-rebuild `bin/`, `dist/LocoMP/`, and the live game `Mods/LocoMP/` —
+  deterministic build ⇒ the DLLs Cody will test ARE the verified source. No re-stage needed.
+
+**Not done (needs Cody / a PC):** commit + push (hard rule 7 — awaits go); the in-game smoke of all
+three threads (added as **A5** + folded into **A1**/**A3** in `RUNBOOK-M4-SMOKE.md`); confirm intended
+scope of the locked-essentials feature. **Open in-game unknown flagged in the runbook:** some DV
+essentials auto-return to inventory on drop (RespawnOnDrop) and may never rest as a stable world item —
+which essentials actually stay set-down is a live question for the smoke pass.
+
+**Net:** M4.6 is code-complete + fully green headless + staged, byte-verified against the deploy. It sits
+in the tree as one reviewable burst (code + these docs) awaiting Cody's review → go.
+
+---
+
 ## 2026-07-20 — M4.5: Manual service — the recon that closed a scope item with (almost) no code 🔧
 
 **Goal:** the last M4 scope item (07 §M4). Cody: "let's continue with LocoMP."
