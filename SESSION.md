@@ -5,6 +5,59 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-20 — M4.5: Manual service — the recon that closed a scope item with (almost) no code 🔧
+
+**Goal:** the last M4 scope item (07 §M4). Cody: "let's continue with LocoMP."
+
+**Recon-first, and it paid the best kind of dividend — proving there's nothing to build.** Decompiled
+the pit-stop system (`PitStop` / `PitStopStation` / `LocoResourceModule : CashRegisterModule` /
+`CashRegisterWithModules`, plus `SimulatedCarPitStopParameters`) → `research/manual-service-recon.md`.
+Manual service is the **inverse of comms-radio**: where the radio modes charged a direct
+`Inventory.RemoveMoney` that D14's reconcile silently reverted (→ free, the M4.4 fix), manual service
+runs the fee through **`CashRegisterWithModules.Buy()`** — one of the exact two `Buy` overrides
+WalletMirror already patches (D14). So the refuel/repair fee has been economy-correct since the day
+D14 shipped, on a feature not yet written. The full chain: hose flow only accumulates
+`Data.unitsToBuy` (no money) → buy button → `Buy()` → `CashRegisterBase.Buy` consumes deposited till
+cash → `GetBoughtResource()` realizes the price. And the till subtlety is already handled too — the
+player deposits physical cash (`Wallet.TrySpend → RemoveMoney`) and `WalletMirror.Reconcile` guards on
+`AnyRegisterHoldsCash()` so it never refunds mid-transaction. License: `GeneralLicenseType.ManualService`
+already mirrors via D14 LicenseSync. Resource/damage STATE sync is genuinely out of scope — it lives
+in `SimulatedCarPitStopParameters` (the loco-sim layer LocoMP doesn't replicate; remote cars are
+kinematic ghosts), so synced fuel/damage has nowhere to land yet (seams banked for that milestone).
+
+**The one edge, and Cody's call.** `PitStopStation.RefillAll()`/`RepairAll()` apply a full service
+bypassing the buy button (free). Recon found they have **zero callers** in any B99.7 assembly (the
+`Dev_LocoRefill*`/`Dev_LocoRepair*` console commands hit a different path entirely —
+`ResourceContainerController`/`DamageController`). I surfaced this as verify-only vs a defensive guard;
+Cody chose **guard it** — under D14's ledger-is-truth posture a session should never mint value for
+free, even down a dead path.
+
+**Built (defensive, small):**
+- **`ManualServiceHook`** — Harmony prefixes on `RefillAll`/`RepairAll` (mirrors CommsRadioHook), armed
+  only while a session is live (native = free in SP, as intended). Never suppresses — the guard bills,
+  it doesn't block the service.
+- **`ManualServiceSync`** — host-only. Sums the equivalent cost straight off the bay's own resource
+  modules (`BuyMaxLimit` × `Data.pricePerUnit` over `ResourceTypes.Consumable`/`Damageable`) — so no
+  re-implemented price formula, we bill exactly what the metered path would have — and burns it as a
+  self-scope `FeeExternal`. Best-effort: an unknown/zero-priced module is skipped + logged.
+- Wired into `SessionController` (host arms, client constructs disarmed for a symmetric lifecycle) +
+  `Main` install. **NO Core change (reuses D14's `ReportExternalFee`), NO protocol bump, NO new game
+  ref** (`PitStop*` in Assembly-CSharp, `ResourceTypes` in DV.ThingTypes — both already referenced).
+
+**Verified:** `dotnet test LocoMP.NoGame.slnf -c Release` = **161/161 ×3** (unchanged — pure Shim, no
+headless surface); `dotnet build LocoMP.sln -c Release` = full solution **0 warnings** (the new Shim
+files compiled first try against the game assemblies — confirmed every signature before writing).
+Payload staged to `Mods/LocoMP/` + `dist/LocoMP/`.
+
+**Net:** this **closes the M4 scope** — items, world items, shops, comms-radio, manual service all
+built or proven-covered. The only M4 work left is the batched in-game milestone smoke pass (manual-
+service checks added to the M4 smoke section in STATE). Uncommitted; push awaits Cody's go.
+
+**Snag:** none — bash couldn't resolve the SDK until `DOTNET_ROOT=/c/Users/User/.dotnet` +
+`DOTNET_ROLL_FORWARD=Major` were set (noted for next session's build/test commands).
+
+---
+
 ## 2026-07-20 — M4.4: Comms-radio actions for all players 📻
 
 **Goal:** the last big M4 feature — rerail / delete / summon "for all players (… + fees)" (07 §M4).

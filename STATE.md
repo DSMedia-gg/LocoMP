@@ -1,6 +1,31 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-20 — **M4.4 (Comms-radio actions for all players — rerail/delete/summon + fees)
+**Updated:** 2026-07-20 — **M4.5 (Manual service) — recon = VERIFY-NOT-BUILD, then a small
+defensive guard BUILT (uncommitted).** Recon (`research/manual-service-recon.md`) settled the last M4
+scope item: manual service is the INVERSE of comms-radio. The metered loop (turn a valve → deposit
+cash → hit Buy) commits through **`CashRegisterWithModules.Buy()`** — one of the two exact `Buy`
+overrides D14's `WalletMirror` already patches — so the refuel/repair fee has been economy-correct for
+free since D14 shipped. NO direct `RemoveMoney`, so no free-service hole in normal play. The
+`ManualService` license is a `GeneralLicenseType`, already mirrored both ways by D14 `LicenseSync`.
+Resource/damage STATE sync (fuel/water/coal/sand/damage visible to others) is deliberately OUT of
+scope — it lives in the loco-sim layer LocoMP doesn't replicate yet (remote cars are kinematic
+ghosts); public seams (`LocoResourceModule.OnResourceBought`, `SimulatedCarPitStopParameters.
+ParametersUpdated`) are banked for when it lands. **The one edge — `PitStopStation.RefillAll()`/
+`RepairAll()` bypass the buy button (free full service) — now has a guard** (Cody's pick over
+verify-only): recon found these have ZERO callers in any B99.7 assembly (a scene UnityEvent or a
+future free-service mode is the only way they'd fire), but under D14's ledger-is-truth posture a
+session must never mint value for free, so a host-side Harmony prefix (`ManualServiceHook`) bills the
+equivalent cost — read straight off the bay's own resource modules (`BuyMaxLimit` × `Data.pricePerUnit`
+per resource, so no re-implemented price formula) — as a self-scope `FeeExternal`
+(`ManualServiceSync`). Never suppresses the service, just bills it; disarmed outside a session (native
+= free, as SP intends). **NO Core change (reuses D14's `ReportExternalFee`), NO protocol bump, NO new
+game ref** (`PitStop*`/`LocoResourceModule` in Assembly-CSharp, `ResourceTypes` in DV.ThingTypes — both
+already referenced). Tests unchanged **161/161 ×3** (pure Shim, no headless surface), full sln **0
+warnings**, payload STAGED to Mods/ + dist/. **This closes the M4 SCOPE — every item (items, world
+items, shops, comms-radio, manual service) is built or proven-covered; the only M4 work left is the
+batched in-game milestone smoke pass.** Awaiting Cody's go to commit + push.
+
+**Prior (2026-07-20): M4.4 (Comms-radio actions for all players — rerail/delete/summon + fees)
 BUILT + PUSHED** (`5f073f4`/`887cd03`/`f9981f7`, Cody's go). Cody picked "go for all three sub-slices"
 after the recon flagged the size +
 one-PC-testability split. Recon-first (decompiled `RerailController`/`CommsRadioCarDeleter`/
@@ -67,6 +92,34 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
 
 ## Where things stand
 
+- **M4.5 — Manual service: recon = VERIFY-NOT-BUILD; defensive RefillAll/RepairAll guard BUILT
+  2026-07-20 (uncommitted). 161/161 ×3, full sln 0 warnings, STAGED to Mods/ + dist/.** The last M4
+  scope item (07 §M4). Recon (`research/manual-service-recon.md`) proved the servicing economy is
+  already correct:
+  - **Fee already mirrored (NO fix needed).** The metered manual-service loop commits through
+    `CashRegisterWithModules.Buy()`, which WalletMirror patches (D14, WalletMirror.cs:48–49) → the
+    finalized refuel/repair fires `FeeExternal` (msg 43). Money mechanics detail: the register is a
+    till (player deposits physical cash via `Wallet.TrySpend → Inventory.RemoveMoney`), and
+    `WalletMirror.Reconcile` guards on `AnyRegisterHoldsCash()` so it won't revert while cash is in the
+    till. No race, no free service. The pit-stop chain: hose flow only accumulates
+    `LocoResourceModule.Data.unitsToBuy` (no money) → buy button → `Buy()` → `CashRegisterBase.Buy`
+    consumes deposited cash → `GetBoughtResource()` realizes the price + fires `OnResourceBought`.
+  - **License already mirrored.** `GeneralLicenseType.ManualService` rides D14 `LicenseSync` both ways.
+  - **State sync OUT of scope (deferred).** Servicing mutates `SimulatedCarPitStopParameters` (the
+    loco-sim layer) — LocoMP doesn't replicate loco sim yet (remote cars are kinematic ghosts), so
+    synced fuel/damage has nowhere to land. Public seams (`OnResourceBought`,
+    `SimulatedCarPitStopParameters.ParametersUpdated`) banked for the loco-sim milestone (post-M4).
+  - **The guard (Cody's pick over verify-only).** `PitStopStation.RefillAll()`/`RepairAll()` apply a
+    full free service bypassing the buy button (`UpdateCarPitStopParameter` directly). Recon found
+    ZERO callers in any B99.7 assembly (the `Dev_LocoRefill*`/`Dev_LocoRepair*` console commands hit a
+    different path — `ResourceContainerController`/`DamageController`), so this is defensive
+    future-proofing, not a live leak. `ManualServiceHook` (Harmony prefix on both, host-only, armed
+    only in-session) hands the station to `ManualServiceSync`, which sums the equivalent cost from the
+    bay's own modules (`BuyMaxLimit` × `Data.pricePerUnit` over `ResourceTypes.Consumable`/`Damageable`)
+    and burns it as a self-scope `FeeExternal` — never suppressing the service. Best-effort: a module
+    with unknown/zero price is skipped + logged. NO Core/protocol/game-ref change.
+  - **This closes the M4 SCOPE.** Every M4 item is built or proven-covered; only the batched in-game M4
+    milestone smoke pass remains (manual-service checks added below beside the other M4 slices').
 - **M4.4 — Comms-radio actions (rerail/delete/summon + fees, for all players): BUILT + PUSHED
   2026-07-20 (Cody's go). 161/161 ×3, full sln 0 warnings, STAGED to Mods/ + dist/.** All three sub-slices Cody
   asked for. See the header above for the full breakdown. Net: comms-radio actions cost money through
@@ -1000,7 +1053,42 @@ remote SUMMON (livery/garage/location resolution on the host); exact rerail plac
 search vs the game's full valid-point solve); the affordability edge above (a real client is gated by
 the wallet mirror, but a bot/mismatch could act then have the fee refused).
 
+### M4.5 — manual service (staged, uncommitted)
+
+Mostly a VERIFY pass — the metered fee already rides D14, so the checks confirm that rather than a new
+feature. All host-side (no bot involvement; a serviceable loco is the host's own).
+
+**Run A — metered service bills the wallet (the D14 confirmation):**
+1. Host on your career save. Drive a loco needing fuel/repair into a manual-service bay.
+2. Note your wallet ($). Service normally: connect the hose / turn the valve, deposit cash, hit the
+   **Buy** button. The loco refuels/repairs.
+3. **Confirm:** your wallet drops by the service cost and STAYS down after ~1 s (the reconcile does
+   NOT refund it — the till-holds-cash guard + the `CashRegisterWithModules.Buy` → `FeeExternal` hook
+   are doing their jobs). No LocoMP exceptions. (There's no new log line for the metered path — it's
+   the existing D14 wallet hook; the proof is simply that the money stays spent.)
+4. **License:** buy the Manual Service general license at a career manager if you don't hold it → it
+   mirrors like any general license (join a bot afterward with auto-grant on and it inherits it).
+
+**Run B — the guard (best-effort; only if you can trigger it):** `RefillAll()`/`RepairAll()` have no
+in-game callers, so there's usually nothing to press. IF you have a way to invoke them (a mod/scene
+button that calls them, or a free-service mode), expect a host log `[service] free refuel at the bay —
+billed $X to your wallet` (or `… no priced deficit to bill` if the bay had no live prices) and your
+wallet to drop accordingly — the service still applies, it's just no longer free. Its absence in normal
+play is itself the expected result; note "no bypass path fired" and move on.
+
 ## Session log
+- **2026-07-20** — **M4.5 (Manual service) — recon = VERIFY-NOT-BUILD; RefillAll/RepairAll guard BUILT (uncommitted).**
+  Last M4 scope item. Recon (`research/manual-service-recon.md`) proved manual service is the INVERSE
+  of comms-radio: the metered loop commits via `CashRegisterWithModules.Buy()`, one of the two `Buy`
+  overrides D14's WalletMirror already patches → the refuel/repair fee has been economy-correct since
+  D14 (no direct `RemoveMoney`, no free-service hole). `ManualService` license already mirrors (D14
+  LicenseSync). Resource/damage STATE sync is out of scope (loco-sim layer LocoMP doesn't replicate;
+  seams banked). Cody picked "also guard RefillAll/RepairAll" over verify-only: those two bypass the
+  buy button (free full service) but have ZERO in-game callers — so a host-side Harmony prefix
+  (`ManualServiceHook` + `ManualServiceSync`) defensively bills the equivalent cost (read off the bay's
+  own modules: `BuyMaxLimit` × `Data.pricePerUnit`) as a self-scope `FeeExternal`, never suppressing
+  the service, disarmed outside a session. NO Core/protocol/game-ref change. **161/161 ×3**, full sln 0
+  warnings, STAGED. **Closes the M4 scope; only the batched smoke pass remains.** Push awaits Cody's go.
 - **2026-07-20** — **M4.4 (Comms-radio actions for all players) BUILT + PUSHED (`5f073f4`/`887cd03`/`f9981f7`, Cody's go).** Cody chose "go
   for all three sub-slices" after the recon flagged the size + one-PC-testability split. Recon
   decompiled the three comms-radio modes → `research/comms-radio-recon.md`; the load-bearing find:
