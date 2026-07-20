@@ -75,6 +75,25 @@ Model: every other player emits a pose each tick and every moving consist emits 
 | 32 | 100 |  2,791.2 | 21.8× over |
 | 32 | 200 |  5,359.2 | **41.9× over** |
 
+### 3b. Interest management — MEASURED (D10 Burst 1, protocol v11)
+
+The §3 numbers above are the *broadcast-everything* model. Burst 1 of interest management (players
+only) is now in and measured, not modelled — `BudgetBench.Interest_management_cuts_a_distant_clients_
+pose_bandwidth`. Two equal clusters of players ~2 km apart, all streaming poses at 30 Hz; the bytes the
+server actually sends to a probe in one cluster, filtering **off vs on**:
+
+| filtering | bytes to the probe (steady interval) | vs broadcast-all |
+|---|---:|---|
+| OFF (broadcast-all) | 9,600 B | — |
+| ON (spatial, 200 m enter / 300 m leave) | 4,800 B | **50%** |
+
+The probe receives exactly its near cluster and none of the far one — the far half of the pose traffic
+is gated out. This is deterministic (a pure function of who is in range), so it is asserted, not just
+recorded. **Scope of Burst 1:** players only (~4% of the total steady-state bandwidth), so this proves
+the *mechanism* end-to-end; the dominant channel — railed-train snapshots (~96%, §3) — is gated in
+Burst 2 (it needs coarse world geometry added to the extracted topology to place a spline-space train in
+the world). Off by default; a host/dedicated server opts in via `InterestConfig`.
+
 ### 4. Host tick cost
 
 **~24.8 µs/tick** (`server.Poll` + relay, 8 players actively moving, over 2,000 ticks) — **~80× under**
@@ -97,6 +116,10 @@ fan-out.
    M5 private alpha (P0, ≤8) is not blocked**. But the **32-player ceiling (D10) is unviable** without
    relevance filtering. This is already scoped as **M6 Track B** ("interest-management tuning toward
    16+"); this data says it should **lead** the scaling work and precede any 16+ tester session.
+   **Status (2026-07-20): interest management Burst 1 (the mechanism, players only) is BUILT and
+   measured (§3b) — a distant client's pose stream is halved in the two-cluster test. The dominant
+   channel (railed-train snapshots, ~96%) is Burst 2, which needs coarse edge geometry in the topology;
+   only then does the 6–42×→<1× headline win land.**
 
 3. **Host tick: no concern** (80× headroom). Revisit only if the 32-player relay loops or future
    per-tick snapshot assembly change the picture.
