@@ -564,6 +564,9 @@ public sealed class SessionController
         client.PlayerJoined += p => { _avatars.AddOrUpdate(p.Id, p.Name, p.Pose); _log($"[session] player joined: {p.Name} (id {p.Id})"); };
         client.PlayerLeft += id => { _avatars.Remove(id); _log($"[session] player left: id {id}"); };
         client.PlayerMoved += (id, pose) => _avatars.Move(id, pose);
+        // D10 interest management: the server hid a player who left our spatial relevance set. Keep the
+        // avatar object (a later Move re-shows it) — unlike PlayerLeft, they are still in the session.
+        client.PlayerHidden += id => _avatars.Hide(id);
 
         client.Career.RequestRejected += (r, _) => { _careerToast = r; _log("[career] refused: " + r); };
         // Item proposal refusals (a doomed purchase/pickup/drop) surface as the same panel toast;
