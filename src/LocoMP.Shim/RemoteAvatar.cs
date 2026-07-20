@@ -55,12 +55,20 @@ public sealed class RemoteAvatar
     public void SetTarget(Pose pose)
     {
         _target = pose;
+        // A pose after an interest-hide (D10) re-shows us; the player will have moved far while out of
+        // range, so the next Apply snaps rather than glides.
+        if (!_root.activeSelf) _root.SetActive(true);
         if (!_hasTarget)
         {
             _hasTarget = true;
             Apply(snap: true);
         }
     }
+
+    /// <summary>Hide the avatar because this player left our spatial relevance set (D10). The
+    /// GameObject is kept (deactivated), so a later <see cref="SetTarget"/> re-shows it cheaply — this
+    /// is a presence hint, not a leave (that path calls <see cref="Destroy"/>).</summary>
+    public void Hide() => _root.SetActive(false);
 
     /// <summary>Advance smoothing + billboard the name tag. Call once per frame.</summary>
     public void Tick(float dt)

@@ -39,6 +39,13 @@ public sealed class AvatarManager
         }
     }
 
+    /// <summary>Hide (but keep) the avatar for a player who left our spatial relevance set (D10). A
+    /// later <see cref="Move"/> re-shows it. No-op for an id we don't track.</summary>
+    public void Hide(int id)
+    {
+        if (_byId.TryGetValue(id, out RemoteAvatar? avatar)) avatar.Hide();
+    }
+
     /// <summary>Advance smoothing + billboards. Call once per frame while a session is live.</summary>
     public void Tick(float dt)
     {
