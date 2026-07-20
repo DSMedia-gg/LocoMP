@@ -46,11 +46,24 @@ dotnet run --project src/LocoMP.Server -- --port 8877
 Want more players/activity? Run bots too (`LocoMP.Bot --host 127.0.0.1 --count 4 --behavior wander`,
 `--claim-first`, `--grab-items`, `--consist 3 --livery ...`). See `LocoMP.Bot --help`.
 
-## Known limitations (this alpha, M6-B.1/B.2)
+**Watch a server train get driven (M6-B.3):** run one bot that borrows and drives one of the server's
+own trains, then hands it back:
+```
+LocoMP.Bot --host 127.0.0.1 --claim-server-train --world <same .lmpw> --drive-seconds 20
+```
+It claims an ambient server train, drives it along the topology for 20 s (its trajectory diverges from
+the server's route — visible from your game), then releases it and the server resumes. Ctrl+C also hands
+it back (reclaim-on-disconnect). A structured in-game smoke checklist is in `../../RUNBOOK-M6B-SERVER.md`.
 
-- **Server-owned trains are ambient (kinematic).** They roll along the topology and everyone sees them,
-  but a player can't yet *claim* or physically couple to one (the server is their sole authority — a
-  claim/couple is a safe no-op). Player takeover of a server train is a later refinement.
+## Known limitations (this alpha, M6-B.1/B.2/B.3)
+
+- **Player takeover of a server train is wire-level + bot-only so far (M6-B.3).** A client can claim one
+  of the server's ambient trains, drive it (the server stops, and hands it back on release/disconnect),
+  and no one can steal or block another player's train — all proven headless and drivable via the bot
+  (`--claim-server-train`). What's *not* here yet: the in-game mod UX for a real player to request and
+  physically drive a claimed server train from within Derail Valley (a Shim slice). Physical coupling to
+  a server train, and junction-throwing as it crosses switches (movement is snapshot-correct regardless),
+  remain later refinements.
 - **The career board is a synthetic placeholder** (stations Alpha/Bravo/Charlie/Delta; jobs need no
   license). A real Derail Valley career — actual yards, cargo economy, license gates, route distances — is
   *exported from the game* (a Shim/extractor slice, like the topology `.lmpw`); `--config` is the reserved
@@ -66,4 +79,8 @@ Want more players/activity? Run bots too (`LocoMP.Bot --host 127.0.0.1 --count 4
 
 Game-free, headless: `tests/LocoMP.Core.Tests/DedicatedServerIntegrationTests.cs` stands the server up over
 real UDP in-process, joins with a real client, asserts a non-empty board arrives, and proves the world
-survives a cold restart through the save file.
+survives a cold restart through the save file. `ServerOwnedTrainTests.cs` covers server-owned trains: they
+ride the join burst and move under the server's snapshots, a player can **claim and drive** one (the
+server stops driving it, the driver's snapshots reach a watching client, and a release hands it back), a
+second player can't steal a train someone's already driving, and a disconnecting borrower's train returns
+to the server rather than stranding.
