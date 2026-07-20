@@ -3,6 +3,7 @@ using LocoMP.Core.Career;
 using LocoMP.Core.Persistence;
 using LocoMP.Core.Protocol;
 using LocoMP.Core.Session;
+using LocoMP.Core.World;
 using LocoMP.Server;
 using LocoMP.Transport;
 
@@ -74,6 +75,28 @@ Console.WriteLine($"LocoMP.Server '{opts.Name}' — protocol v{ProtocolVersion.C
 Console.WriteLine($"[server] listening on UDP {udp.Port} — join from the game (Direct connect 127.0.0.1:{udp.Port}).");
 Console.WriteLine($"[server] world save: {opts.SavePath} (autosave every {opts.AutosaveSeconds}s). Board: {server.Career.Registry.Jobs.Count} job(s). Type 'help' for commands.");
 
+// Server-owned kinematic trains (M6-B.2): the server drives its own consists along the extracted
+// topology, so a fresh server has moving trains with no bot. Needs a .lmpw to walk.
+var kinematicTrains = new List<ServerKinematicTrain>();
+if (opts.SpawnTrains > 0)
+{
+    string? worldPath = opts.ResolveWorldFile();
+    if (worldPath is null)
+    {
+        Console.Error.WriteLine("[server] --spawn-trains needs an extracted topology (.lmpw): pass --world <path>, " +
+                                "set LOCOMP_WORLD_FILE, or run from the repo. No server trains spawned.");
+    }
+    else
+    {
+        WorldTopology topo = TopologyCodec.Read(File.ReadAllBytes(worldPath));
+        for (int i = 0; i < opts.SpawnTrains; i++)
+            kinematicTrains.Add(new ServerKinematicTrain(server.Trains, topo, opts.TrainCars, opts.TrainSpeed,
+                                                         seed: 1000 + i, liveries: opts.TrainLiveries));
+        Console.WriteLine($"[server] driving {kinematicTrains.Count} server-owned train(s) of {opts.TrainCars} car(s) " +
+                          $"at {opts.TrainSpeed:F0} m/s along {Path.GetFileName(worldPath)} ({topo.Edges.Count} edges).");
+    }
+}
+
 var stopwatch = Stopwatch.StartNew();
 string Status() =>
     $"[status] up {stopwatch.Elapsed:hh\\:mm\\:ss} | {server.PlayerCount}/{opts.MaxPlayers} player(s) | " +
@@ -83,12 +106,15 @@ bool stopping = false;
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; stopping = true; };
 
 long tickMs = (long)(1000 / opts.Hz);
-long lastTimeSync = 0;
+long lastTimeSync = 0, lastTick = 0;
 while (!stopping)
 {
     long now = stopwatch.ElapsedMilliseconds;
+    double dt = lastTick == 0 ? 1.0 / opts.Hz : (now - lastTick) / 1000.0;
+    lastTick = now;
 
     server.Poll();                 // pumps the transport + Career.Tick() (board refill, TTL/grace)
+    foreach (ServerKinematicTrain t in kinematicTrains) t.Tick(dt); // advance + publish server trains
     if (now - lastTimeSync >= 5_000)
     {
         lastTimeSync = now;

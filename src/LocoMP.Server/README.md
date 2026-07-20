@@ -12,12 +12,13 @@ the job board).
 ## Run it
 
 ```
-LocoMP.Server --port 8877
+LocoMP.Server --port 8877 --spawn-trains 3
 ```
 
-Binds UDP 8877, generates a small built-in job board, and persists to `locomp-server.save` beside the exe
-(autosave every 60 s + a save on clean exit). Type `help` at the prompt for console commands
-(`status`, `save`, `stop`).
+Binds UDP 8877, generates a small built-in job board, **drives 3 trains of its own** along the extracted
+world topology, and persists to `locomp-server.save` beside the exe (autosave every 60 s + a save on clean
+exit). Type `help` at the prompt for console commands (`status`, `save`, `stop`). Drop `--spawn-trains` for
+a bare server (presence + jobs only).
 
 Build/run from source:
 ```
@@ -29,33 +30,33 @@ dotnet run --project src/LocoMP.Server -- --port 8877
 (99-build2702) · `--mod-version` · `--modlist-hash` · `--name` · `--autosave-seconds` (60) · `--preset`
 (perplayer|shared) · `--tick-hz` (30) · `--world`/`--config` (reserved — see below). `--help` for details.
 
-## Solo-test recipe (no friend needed)
+## Solo-test recipe (no friend, no bot needed)
 
-1. **Start the server:**
+1. **Start the server with its own trains:**
    ```
-   LocoMP.Server --port 8877
+   LocoMP.Server --port 8877 --spawn-trains 3
    ```
-2. **Populate it with a train** — run a bot that joins *first* (so it becomes the world source) and
-   registers a real consist:
-   ```
-   LocoMP.Bot --host 127.0.0.1 --port 8877 --consist 3 --livery LocoDiesel,BoxcarBrown,BoxcarBrown
-   ```
-3. **Join from Derail Valley** as a second client (LocoMP's Direct-connect to `127.0.0.1:8877`). You'll see
-   the bot's train, the job board, and presence. Restart your game — or the server — and rejoin: the world
-   persists.
+   The server drives 3 consists along the extracted topology. (`--spawn-trains` needs a `.lmpw` — pass
+   `--world <path>`, set `LOCOMP_WORLD_FILE`, or run from the repo, which finds `tests/data/world-*.lmpw`.
+   Extract the real map in-game via the mod panel.)
+2. **Join from Derail Valley** (LocoMP's Direct-connect to `127.0.0.1:8877`). You'll see the server's
+   trains rolling through the valley, the job board, and presence. Restart your game — or the server — and
+   rejoin: the world persists.
 
-Run more bots (`--count`, `--behavior wander`, `--claim-first`, `--grab-items`, …) to populate presence,
-jobs, and items. See `LocoMP.Bot --help`.
+Want more players/activity? Run bots too (`LocoMP.Bot --host 127.0.0.1 --count 4 --behavior wander`,
+`--claim-first`, `--grab-items`, `--consist 3 --livery ...`). See `LocoMP.Bot --help`.
 
-## Known limitations (this alpha slice, M6-B.1)
+## Known limitations (this alpha, M6-B.1/B.2)
 
-- **A fresh server has no trains of its own.** Trains come from whichever client registers them (a bot, or
-  a second game client). Server-owned *kinematic* trains — so no bot is needed — are the next slice
-  (kinematic coaster).
+- **Server-owned trains are ambient (kinematic).** They roll along the topology and everyone sees them,
+  but a player can't yet *claim* or physically couple to one (the server is their sole authority — a
+  claim/couple is a safe no-op). Player takeover of a server train is a later refinement.
 - **The career board is a synthetic placeholder** (stations Alpha/Bravo/Charlie/Delta; jobs need no
   license). A real Derail Valley career — actual yards, cargo economy, license gates, route distances — is
   *exported from the game* (a Shim/extractor slice, like the topology `.lmpw`); `--config` is the reserved
   hook and currently falls back to the built-in default with a notice.
+- **Trains need a topology to walk.** Without `--spawn-trains` (or a `.lmpw`), the server runs bare
+  (presence + jobs + persistence); trains can still come from a registering client (bot or game).
 - **Joining from the real game** requires the client's handshake to match exactly: protocol version, game
   build (`--build`), mod version, and mod-list hash. If DV sends a non-empty mod-list hash, pass it with
   `--modlist-hash`. A mismatch is a clean reject (logged), not a crash.

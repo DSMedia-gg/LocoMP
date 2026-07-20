@@ -6,6 +6,8 @@ using LocoMP.Core.Career;
 using LocoMP.Core.Persistence;
 using LocoMP.Core.Protocol;
 using LocoMP.Core.Session;
+using LocoMP.Core.Trains;
+using LocoMP.Core.World;
 using LocoMP.Server;
 using LocoMP.Transport;
 using Xunit;
@@ -53,6 +55,37 @@ public class DedicatedServerIntegrationTests
         // The deterministic generator fills the board on Poll() with no host peer — the join burst carries it.
         Assert.True(SpinUntil(() => c.Career.Jobs.Count > 0, 5000, pumps),
             "a solo joiner should receive a non-empty job board");
+    }
+
+    [Fact]
+    public void A_server_owned_kinematic_train_is_seen_moving_by_a_udp_client()
+    {
+        // The repo ships an extracted topology under tests/data; ServerOptions probes for it.
+        string? worldPath = new ServerOptions().ResolveWorldFile();
+        Assert.NotNull(worldPath);
+        WorldTopology topo = TopologyCodec.Read(File.ReadAllBytes(worldPath!));
+
+        using var serverT = LiteNetLibTransport.StartServer(0, Key);
+        using var server = new NetServer(serverT, new ServerConfig(Identity), new ManualClock());
+        var train = new ServerKinematicTrain(server.Trains, topo, carCount: 3, speed: 10, seed: 1);
+
+        using var cT = LiteNetLibTransport.ConnectClient("127.0.0.1", serverT.Port, Key);
+        using var c = new NetClient(cT, Identity, "Solo", new ManualClock(), playerKey: "k");
+
+        // The server advances the train every tick (0.1 s of sim per pump); the client just polls.
+        Action[] pumps = { () => { server.Poll(); train.Tick(0.1); }, c.Poll };
+
+        Assert.True(SpinUntil(() => c.Joined && c.Trains.View.Sets.ContainsKey(train.TrainsetId), 5000, pumps),
+            "the client should join and receive the server-owned trainset");
+        Assert.True(SpinUntil(() => c.Trains.View.LatestSnapshots.ContainsKey(train.TrainsetId), 5000, pumps),
+            "the server train should stream a position once its trail history is built");
+
+        BogieState start = c.Trains.View.LatestSnapshots[train.TrainsetId].Cars[0].Front;
+        Assert.True(SpinUntil(() =>
+        {
+            BogieState now = c.Trains.View.LatestSnapshots[train.TrainsetId].Cars[0].Front;
+            return now.EdgeId != start.EdgeId || System.Math.Abs(now.S - start.S) > 1f;
+        }, 5000, pumps), "the client's replica of the server train should visibly move");
     }
 
     [Fact]
