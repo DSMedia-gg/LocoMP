@@ -48,7 +48,8 @@ coverage isn't lost; the live-exe smoke is offered to Cody to approve.
 **Docs (the "append the runbook" ask):** new **`RUNBOOK-M6B-SERVER.md`** — the first structured in-game
 smoke plan for the whole dedicated-server track (B.1 join/persistence, B.2 trains roll, B.3 claim/drive/
 release + reclaim-on-disconnect), with a results table. Server README limitation + verification updated;
-CHANGELOG entry added; STATE refreshed. **Uncommitted; commit + push await Cody's go** (hard rule 7).
+CHANGELOG entry added; STATE refreshed. **PUSHED** `5e57156..5d29963` (Cody's go — 3 dependency-ordered
+commits: core+test → server/bot → docs).
 
 **Next:** the in-game M6-B smoke pass when the game's up; then the natural follow-on — the **Shim UX** for a
 real player to claim/drive a server train from inside DV (turns B.3's wire path into a game action).

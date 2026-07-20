@@ -1,14 +1,15 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-20 — **M6-B.3: DRIVABLE server trains BUILT + verified headless (UNCOMMITTED — awaiting
-Cody's go).** A player can now CLAIM one of the dedicated server's ambient trains, drive it (the server
+**Updated:** 2026-07-20 — **M6-B.3: DRIVABLE server trains BUILT + verified headless + PUSHED** (`876d881`
+core+test / `047eaed` server+bot / `5d29963` docs, `5e57156..5d29963`, Cody's go). A player can now CLAIM
+one of the dedicated server's ambient trains, drive it (the server
 stops driving it), and hand it back — release OR disconnect returns it to the server, which resumes. Only
 the server's own trains are takeable (never another player's — no theft). Bot `--claim-server-train` runs
 the whole borrow → drive → release loop against a real server so it's watchable in-game. Protocol **v9 →
 v10** (new OwnershipRelease, msg 63). Suite **171 → 172 ×3, full sln 0 warnings** (Shim vs B99.7).
 
-> **Next session — cold start here.** M6-B.1 + B.2 PUSHED (`origin/main` @ `5e57156`); **B.3 is uncommitted
-> in the tree, awaiting Cody's go to push.** The dedicated server is joinable, persistent, self-populating,
+> **Next session — cold start here.** M6-B.1/B.2/B.3 all PUSHED (`origin/main` @ `5d29963`, tree clean).
+> The dedicated server is joinable, persistent, self-populating,
 > drives its own trains, and now lets a player borrow + drive one. Suite **172/172 ×3, 0 warnings**; SDK is
 > `C:\Users\User\.dotnet\dotnet.exe` (bash needs `DOTNET_ROOT` + `DOTNET_ROLL_FORWARD=Major`). **Still needs
 > Cody's PC/game:** the batched **M4 in-game smoke pass** (`repo/RUNBOOK-M4-SMOKE.md`) AND the new **M6-B
