@@ -1,9 +1,20 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-20 — **M6-B.2: server-owned kinematic trains BUILT + verified headless (clean,
-server-authoritative). Committed locally, push awaits Cody's go.** Cody picked the clean build over the
-quick internal-client hack. Now a fresh `LocoMP.Server --spawn-trains N` **drives its own trains** along
-the extracted topology — **no bot needed** — retiring M6-B.1's "a fresh server has no trains" limitation.
+**Updated:** 2026-07-20 — **M6-B.2: server-owned kinematic trains BUILT + verified headless + PUSHED**
+(`d0e4b93` feat / `d67fbba` docs, `b38b7df..d67fbba`, Cody's go). Clean server-authoritative build (Cody
+picked it over the quick internal-client hack). A fresh `LocoMP.Server --spawn-trains N` **drives its own
+trains** along the extracted topology — **no bot needed** — retiring M6-B.1's "a fresh server has no
+trains" limitation.
+
+> **Next session — cold start here.** M6-B.1 + B.2 shipped: a joinable, persistent, self-populating
+> dedicated server (`src/LocoMP.Server/`, all pushed, `origin/main` @ `d67fbba`, tree clean). Suite
+> **171/171 ×3, 0 warnings**; the SDK is `C:\Users\User\.dotnet\dotnet.exe` (bash needs `DOTNET_ROOT`).
+> **Still needs Cody's PC/game:** the batched **M4 in-game smoke pass** (`repo/RUNBOOK-M4-SMOKE.md`) and a
+> first in-game join of the dedicated server. **Candidate next slices (Cody to pick):** (1) real DV career
+> export from the game → the server's `--config` hook (real yards/jobs/licenses vs the Alpha/Bravo
+> placeholder); (2) player claim/couple of an ambient server train (drive it); (3) deploy the server to
+> SVHost (container). Perf baseline (`docs/PERF-BASELINE.md`) says interest management (D10/M6-B) is the
+> real scaling gap, not M3.2 join cost — relevant once sessions get big.
 - **Core (small, clean):** `ServerTrains.ServerOwnerId` (=`int.MaxValue`, never a peer, never 0) +
   `SpawnServerOwned(cars)` + `PushServerSnapshot(snap)`. Server-authoritative: the consist is registered
   under that sentinel owner, so `TrainsetRegistry.TryClaim` (owner≠0 → refuse) **can't be hijacked** by a
