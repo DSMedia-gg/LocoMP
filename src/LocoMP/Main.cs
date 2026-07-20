@@ -45,6 +45,7 @@ public static class Main
         WalletMirror.Install(harmony, log);
         SaveSuppressor.Install(harmony, log);
         CommsRadioHook.Install(harmony, log);
+        ManualServiceHook.Install(harmony, log);
 
         _session = new SessionController(log);
 

@@ -57,6 +57,7 @@ public sealed class SessionController
     private WalletMirror? _walletMirror;
     private ItemSync? _itemSync;
     private CommsRadioSync? _commsRadio;
+    private ManualServiceSync? _manualService;
     private string _careerToast = "";
 
     // IMGUI field state
@@ -493,6 +494,10 @@ public sealed class SessionController
             // M4 comms radio: capture rerail/delete/summon fees through the wallet, remove deleted
             // cars everywhere, and execute the comms actions remote players route to the host.
             _commsRadio = new CommsRadioSync(_client, _trains, isHost: true, _log);
+            // M4 manual service: bill the buy-button-bypassing RefillAll/RepairAll shortcuts so a bay
+            // can never hand out a free full service in-session (host-only — the metered valve+Buy path
+            // already rides D14's WalletMirror, so it needs nothing here).
+            _manualService = new ManualServiceSync(_client, isHost: true, _log);
             _mode = Mode.Hosting;
 
             _log($"[session] hosting on UDP {port} (game reports version '{PresenceShim.ReportedGameVersion}', handshake build '{PresenceShim.GameBuild}')");
@@ -531,6 +536,9 @@ public sealed class SessionController
             // M4 comms radio: a joined player's rerail/delete on a host-owned car is intercepted and
             // routed to the host (remote summon is banked).
             _commsRadio = new CommsRadioSync(_client, _trains, isHost: false, _log);
+            // Constructed for a symmetric lifecycle; on a client the guard stays disarmed (the only
+            // serviceable cars in a session are the host's, and a self-scope fee bills the host).
+            _manualService = new ManualServiceSync(_client, isHost: false, _log);
             _mode = Mode.Joined;
             _log($"[session] joining {_address}:{_portText}…");
         }
@@ -606,6 +614,8 @@ public sealed class SessionController
         _itemSync = null;
         _commsRadio?.Dispose();                        // clears the comms-radio hook filters
         _commsRadio = null;
+        _manualService?.Dispose();                     // clears the manual-service hook filters
+        _manualService = null;
         JobGenSuppressor.Active = false;               // DV's own generation resumes outside sessions
         SaveSuppressor.Active = false;                 // native saving resumes outside sessions
         _careerToast = "";
