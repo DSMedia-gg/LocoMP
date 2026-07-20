@@ -1,7 +1,8 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-20 — **M4.3 (Shops — the "a client buys a lantern" half of the M4 exit) BUILT,
-uncommitted.** The purchase TRANSACTION was already done + fuzzed in M4.1 (charge-then-mint: a
+**Updated:** 2026-07-20 — **M4.3 (Shops — the "a client buys a lantern" half of the M4 exit) BUILT +
+PUSHED** (`8fd47af`/`8870cd3`/`d742960`, Cody's go). The purchase TRANSACTION was already done +
+fuzzed in M4.1 (charge-then-mint: a
 client's buy debits the CLIENT's wallet and mints the item into its possession). This slice is the
 front-end + catalog that makes it usable in-game: a host-side `ShopCatalogBuilder` reads DV's live
 `GlobalShopController.shopItemsData` into `ItemConfig.ShopPrices` (prefab→cents); the catalog rides
@@ -34,8 +35,8 @@ Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current mi
 
 ## Where things stand
 
-- **M4.3 — Shops: BUILT 2026-07-20, uncommitted. 156/156 ×3, full sln 0 warnings, STAGED to Mods/ +
-  dist/.** The "a client buys a lantern" half of the M4 exit (07 §M4). The purchase transaction is
+- **M4.3 — Shops: BUILT + PUSHED 2026-07-20 (Cody's go). 156/156 ×3, full sln 0 warnings, STAGED to
+  Mods/ + dist/.** The "a client buys a lantern" half of the M4 exit (07 §M4). The purchase transaction is
   M4.1's (charge-then-mint, already fuzzed) — this is its catalog + front-end + one-PC driver:
   - **Core (protocol v6→v7):** `MessageType.ItemShopCatalog` (59) — the shop catalog (prefab→cents)
     ships in the join burst before the item burst, mirroring how `CareerState` carries the license
@@ -786,13 +787,14 @@ career" toggle or delete the .lmps to re-mint).
 6. **Repo residuals, whenever** (05 §7): branch protection, DCO app (optional), repo topics.
 
 ## Push state
-- **UNCOMMITTED (awaiting Cody's go): M4.3 (Shops).** Suggested split = three dependency-ordered
-  commits: (1) Core — protocol v7 + `ItemShopCatalog` (59) + ClientItems.ShopCatalog + the
-  catalog-on-join test; (2) Shim/mod/bot — `ShopCatalogBuilder`, `DrawShop()` + item-toast wiring,
-  bot `--buy` + CHANGELOG; (3) docs (STATE + SESSION). All three build clean independently (Core has
-  no Shim dep; the Shim/bot commit only adds a builder + panel + flag). Remote unchanged since the
-  M4.2 push (no canary movement expected). Reminder from the M3.5c push: PS 5.1 mangles quotes in
-  `git commit -m` — use `git commit -F <file>` for the messages.
+- **PUSHED 2026-07-20 (Cody's go): M4.3 (Shops) as three dependency-ordered commits** `8fd47af`
+  (feat(core): protocol v7 + `ItemShopCatalog` 59 + ClientItems.ShopCatalog + catalog-on-join test) →
+  `8870cd3` (feat(shops): `ShopCatalogBuilder`, `DrawShop()` + item toast, bot `--buy` + CHANGELOG) →
+  `d742960` (docs). `cc72abd..d742960`, in sync with origin/main. Each commit builds independently
+  (Core has no Shim dep; the Shim/bot commit only adds a builder + panel + flag). Remote was unchanged
+  since the M4.2 push (no canary movement). Commit messages authored via `git commit -s -F <file>`
+  (DCO sign-off + the PS-5.1-quote-mangling workaround). In-game verification rides the batched M4
+  smoke pass.
 - **PUSHED 2026-07-20 (Cody's go): M4.2 (Shim ItemSync) as two commits** `64a3382` (feat: ItemSync
   + PresenceShim helpers + SessionController wiring + bot `--grab-items` + CHANGELOG) → docs (STATE +
   SESSION, this commit). Only two commits (not the usual three) because M4.2 has NO Core changes —
@@ -825,8 +827,8 @@ career" toggle or delete the .lmps to re-mint).
 - Staged payload in the game's `Mods/LocoMP/` = **2026-07-19 13:22 build** = the verified commit.
 
 ## Blockers
-- None. **M4.3 (Shops) BUILT 2026-07-20, uncommitted — awaiting Cody's go to push**; 156/156 ×3, 0
-  warnings, staged to Mods/ + dist/. In-game verification joins the **batched M4 milestone smoke
+- None. **M4.3 (Shops) BUILT + PUSHED 2026-07-20 (Cody's go)** (`8fd47af`/`8870cd3`/`d742960`);
+  156/156 ×3, 0 warnings, staged to Mods/ + dist/. In-game verification joins the **batched M4 smoke
   pass** (the shops Run-A checklist is banked below beside M4.2's). M4.2 (Shim ItemSync) is already
   PUSHED. **M4 exit progress:** ✅ a client completes a job → right wallet (M3.5a–c); ✅ a client
   buys a lantern → right wallet (M4.3); ✅ drop → another player picks it up (M4.2); ✅ server
@@ -915,7 +917,7 @@ materialize-into-inventory is the held-item slice); the host's real shelf stock 
 LocoMP purchases (client buys are independent mints — live stock replication is a later slice).
 
 ## Session log
-- **2026-07-20** — **M4.3 (Shops) BUILT, uncommitted.** Cody picked "Shops + purchases" as the next
+- **2026-07-20** — **M4.3 (Shops) BUILT + PUSHED (`8fd47af`/`8870cd3`/`d742960`, Cody's go).** Cody picked "Shops + purchases" as the next
   M4 slice (highest exit value — the "a client buys a lantern" half of the M4 exit). Recon-first
   over the shop decomp dumps confirmed the whole flow: `GlobalShopController.Instance.shopItemsData`
   holds every purchasable item + `basePrice`; the purchase TRANSACTION was already built + fuzzed in

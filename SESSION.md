@@ -61,9 +61,10 @@ milestone smoke pass — the shops Run-A checklist is banked in `STATE.md` besid
 double quotes inside the verbatim usage string (`@"..."`), which need doubling; reworded without
 quotes. (The recurring lesson: verbatim strings + quotes.)
 
-**Next:** commit + push on Cody's go (3 dependency-ordered commits: Core → Shim/bot → docs; use
-`git commit -F <file>`). Then, to close M4: comms-radio actions (summon/rerail/delete + fees) +
-manual service. Banked item follow-ons: held-item avatar display (protocol v8), live shop stock.
+**Pushed** (Cody's go): 3 dependency-ordered commits `8fd47af` (core) → `8870cd3` (shops feat) →
+`d742960` (docs), `cc72abd..d742960`. **Next**, to close M4: comms-radio actions (summon/rerail/
+delete + fees) + manual service. Banked item follow-ons: held-item avatar display (protocol v8),
+live shop stock.
 
 ---
 
