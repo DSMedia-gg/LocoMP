@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Comms-radio actions in multiplayer (M4): the rerail, clear (delete), and summon tools now work in a
+  session and cost money through the shared economy. Rerailing a derailed car, deleting a car, or
+  summoning a work train charges the player who did it — previously these were silently FREE in a
+  session (the fee was being refunded by the money mirror). A deleted car now disappears for everyone
+  (it used to linger as a ghost on other players' screens). And any player — not just the host — can
+  rerail or delete one of the host's cars with their own comms radio: the host performs it and the
+  fee comes out of the initiator's wallet. Joined players' on-screen money now shows their real
+  session balance, so the radio's "can I afford this" check is correct. The bot gains `--rerail
+  <plate>` and `--clear <plate>` to drive the remote-action path on the one-PC rig. Network protocol
+  is now v8. (Remote *summon* — spawning a work train at a joined player's location — is deferred to a
+  later slice; summoning from the host works.)
 - Shops (M4): buy from the game's shops in multiplayer. A joining player picks an item from the
   session panel's Shop list (the catalog is read from the host's live world) and the price comes out
   of THEIR wallet, not the host's — then the item is theirs to carry and drop wherever they like,

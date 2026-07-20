@@ -81,6 +81,7 @@ for (int i = 0; i < opts.Count; i++)
     }
     RemoteActor? actor = opts.ClaimFirst || opts.Drive || opts.AbandonAfterSeconds > 0
             || opts.GrabItems || opts.BuyPrefab.Length > 0
+            || opts.RerailCar.Length > 0 || opts.ClearCar.Length > 0
         ? new RemoteActor(opts, name, Console.WriteLine)
         : null;
     if (driver != null || actor != null)

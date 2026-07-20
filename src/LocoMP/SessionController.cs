@@ -56,6 +56,7 @@ public sealed class SessionController
     private LicenseSync? _licenseSync;
     private WalletMirror? _walletMirror;
     private ItemSync? _itemSync;
+    private CommsRadioSync? _commsRadio;
     private string _careerToast = "";
 
     // IMGUI field state
@@ -122,6 +123,7 @@ public sealed class SessionController
         _cabControls?.Tick((float)dt);
         _walletMirror?.Tick(dt);
         _itemSync?.Tick(dt);
+        _commsRadio?.Tick(dt);
         _autosaver?.Tick();
         if (_worldUnloaded)
         {
@@ -484,10 +486,13 @@ public sealed class SessionController
             // D14: the native career manager is the shop and native money is the wallet's view —
             // licenses sync both ways, register purchases burn through the ledger.
             _licenseSync = new LicenseSync(_client, _log);
-            _walletMirror = new WalletMirror(_client, _log);
+            _walletMirror = new WalletMirror(_client, isHost: true, _log);
             // M4.2: mirror the host's real world items onto the session; materialize remote-dropped
             // items back as real DV items. Host is the world source (registers native world items).
             _itemSync = new ItemSync(_client, isHost: true, _log);
+            // M4 comms radio: capture rerail/delete/summon fees through the wallet, remove deleted
+            // cars everywhere, and execute the comms actions remote players route to the host.
+            _commsRadio = new CommsRadioSync(_client, _trains, isHost: true, _log);
             _mode = Mode.Hosting;
 
             _log($"[session] hosting on UDP {port} (game reports version '{PresenceShim.ReportedGameVersion}', handshake build '{PresenceShim.GameBuild}')");
@@ -520,6 +525,12 @@ public sealed class SessionController
             // M4.2: spawn replicas of the host's world items (a joined client is not the world
             // source, so it only materializes — never registers).
             _itemSync = new ItemSync(_client, isHost: false, _log);
+            // M4: mirror the LocoMP wallet onto native money so the client's money display and its
+            // comms-radio affordability are correct (it never reports its own register purchases).
+            _walletMirror = new WalletMirror(_client, isHost: false, _log);
+            // M4 comms radio: a joined player's rerail/delete on a host-owned car is intercepted and
+            // routed to the host (remote summon is banked).
+            _commsRadio = new CommsRadioSync(_client, _trains, isHost: false, _log);
             _mode = Mode.Joined;
             _log($"[session] joining {_address}:{_portText}…");
         }
@@ -593,6 +604,8 @@ public sealed class SessionController
         _licenseSync = null;
         _itemSync?.Dispose();                          // removes replicas we spawned; leaves host natives
         _itemSync = null;
+        _commsRadio?.Dispose();                        // clears the comms-radio hook filters
+        _commsRadio = null;
         JobGenSuppressor.Active = false;               // DV's own generation resumes outside sessions
         SaveSuppressor.Active = false;                 // native saving resumes outside sessions
         _careerToast = "";

@@ -42,6 +42,8 @@ public sealed class RemoteActor
     private double _grabScanAccum;
     private readonly HashSet<int> _refusedItems = new();
     private bool _buyRequested;         // --buy: the purchase has been sent
+    private bool _commsSent;            // --rerail/--clear: the comms action has been sent
+    private double _commsWaitAccum;
 
     public RemoteActor(BotOptions opts, string name, Action<string> log)
     {
@@ -57,6 +59,45 @@ public sealed class RemoteActor
         TickCareer(client, dt);
         TickDrive(client, dt);
         TickItems(client, dt);
+        TickComms(client, dt);
+    }
+
+    /// <summary>M4 comms radio: as the "remote player", ask the host to rerail/delete one of its cars
+    /// once it's on the wire. The host performs the real action and charges OUR wallet — the one-PC
+    /// proof of the remote-action loop (a real client's comms radio would send the same request).</summary>
+    private void TickComms(NetClient client, double dt)
+    {
+        if (_commsSent || (_opts.RerailCar.Length == 0 && _opts.ClearCar.Length == 0)) return;
+        if (!client.Joined) return;
+        _commsWaitAccum += dt;
+        if (_commsWaitAccum < 1.0) return; // let the world burst land first
+        _commsWaitAccum = 0;
+
+        string plate = _opts.RerailCar.Length > 0 ? _opts.RerailCar : _opts.ClearCar;
+        int carId = FindCarByPlate(client, plate);
+        if (carId < 0) return; // not on the wire yet — try again next second
+
+        _commsSent = true;
+        if (_opts.RerailCar.Length > 0)
+        {
+            var dest = new Pose(_opts.Center.Px, _opts.Center.Py, _opts.Center.Pz, 0f, 0f, 0f, 1f);
+            _log($"[{_name}] asking the host to rerail car {carId} ({plate}) to {_opts.Center.Px:F0},{_opts.Center.Py:F0},{_opts.Center.Pz:F0} — watch your wallet");
+            client.Trains.RequestCommsAction(CommsActionKind.Rerail, carId, dest);
+        }
+        else
+        {
+            _log($"[{_name}] asking the host to delete car {carId} ({plate}) — watch it vanish and your wallet drop");
+            client.Trains.RequestCommsAction(CommsActionKind.Delete, carId, Pose.Identity);
+        }
+    }
+
+    private static int FindCarByPlate(NetClient client, string plate)
+    {
+        foreach (TrainsetDef set in client.Trains.View.Sets.Values)
+            foreach (CarDef car in set.Cars)
+                if (string.Equals(car.GameId, plate, StringComparison.OrdinalIgnoreCase))
+                    return car.Id;
+        return -1;
     }
 
     private void Bind(NetClient client)
@@ -78,6 +119,8 @@ public sealed class RemoteActor
         _grabScanAccum = 0;
         _refusedItems.Clear();
         _buyRequested = false;
+        _commsSent = false;
+        _commsWaitAccum = 0;
 
         client.Career.CareerStateReceived += () =>
             _log($"[{_name}] career: ${client.Career.BalanceCents / 100.0:F2}, licenses: {LicenseList(client)}");
