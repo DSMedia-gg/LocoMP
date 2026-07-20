@@ -67,10 +67,12 @@ public sealed class SessionController
     private bool _freshCareer;
     private bool _autoGrant;
     private bool _showShop;
+    private bool _showItemShop;
     private bool _showGrant;
     private int _grantTarget;
     private Vector2 _jobsScroll;
     private Vector2 _grantScroll;
+    private Vector2 _itemShopScroll;
 
     public SessionController(Action<string> log) => _log = log;
 
@@ -206,6 +208,7 @@ public sealed class SessionController
                         GUILayout.Label($"  Items — {worldItems} in the world, {heldItems} carried");
                 }
                 DrawCareer();
+                DrawShop();
                 if (GUILayout.Button("Leave", GUILayout.Width(100))) Leave();
                 break;
         }
@@ -361,6 +364,46 @@ public sealed class SessionController
         GUILayout.EndScrollView();
     }
 
+    /// <summary>The M4 shop: what's for sale (the catalog read from the host's live world and fed
+    /// down the join burst) with a Buy button each, plus the items I'm carrying with a "Drop here"
+    /// button. Buying debits MY wallet and mints the item into my possession (02 §4 win condition);
+    /// dropping places it in the world at my feet, where every player sees it and can pick it up
+    /// (M4.2). Only ever SENDS proposals — the server commits and the state comes back (03 §3).</summary>
+    private void DrawShop()
+    {
+        if (_client is not { Joined: true }) return;
+        ClientItems items = _client.Items;
+        int? myId = _client.LocalId;
+
+        // Items I'm holding — offer to drop each into the world at my current position. This is what
+        // lets a joined client complete the buy → drop → someone-picks-it-up loop entirely from the
+        // panel (the headless bot does the same over the wire via --buy/--drop-after).
+        var carried = items.Items.Values
+            .Where(i => i.Location == ItemLocationKind.Possessed && i.OwnerPeerId == myId)
+            .OrderBy(i => i.Def.Id).ToList();
+        foreach (ClientItem it in carried)
+        {
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Drop here", GUILayout.Width(90)) && PresenceShim.TryCaptureLocalPose(out var pose))
+                items.RequestDrop(it.Def.Id, pose);
+            GUILayout.Label($"carrying [{it.Def.Id}] {it.Def.PrefabName}");
+            GUILayout.EndHorizontal();
+        }
+
+        if (items.ShopCatalog.Count == 0) return;
+        _showItemShop = GUILayout.Toggle(_showItemShop, $"Shop ({items.ShopCatalog.Count})");
+        if (!_showItemShop) return;
+        _itemShopScroll = GUILayout.BeginScrollView(_itemShopScroll, GUILayout.Height(180));
+        foreach (var entry in items.ShopCatalog.OrderBy(kv => kv.Key).ToList())
+        {
+            GUILayout.BeginHorizontal();
+            if (GUILayout.Button("Buy", GUILayout.Width(50))) items.Purchase(entry.Key);
+            GUILayout.Label($"{entry.Key} — {Money(entry.Value)}");
+            GUILayout.EndHorizontal();
+        }
+        GUILayout.EndScrollView();
+    }
+
     private static string Describe(JobDef def)
     {
         string needs = def.RequiredLicenses.Count > 0 ? $" (needs {string.Join("+", def.RequiredLicenses.ToArray())})" : "";
@@ -407,9 +450,14 @@ public sealed class SessionController
             var udp = LiteNetLibTransport.StartServer(port, NetDefaults.ConnectKey);
             _serverTransport = new CompositeTransport(_hub.Server, udp);
             // Host-native items (D13 posture): the host's real world items ARE the world source, so
-            // the server must accept its registrations. No proximity gate for now (0 = off) and no
-            // shop catalog yet (M4.2 is the world-drop loop; shops are a later slice).
-            var itemConfig = new ItemConfig { AcceptExternalItems = true };
+            // the server must accept its registrations. No proximity gate for now (0 = off). The shop
+            // catalog is read from the live world (M4 shops): a client's purchase debits its OWN
+            // wallet and mints the item — an unlisted prefab is refused.
+            var itemConfig = new ItemConfig
+            {
+                AcceptExternalItems = true,
+                ShopPrices = ShopCatalogBuilder.Build(_log),
+            };
             _server = new NetServer(_serverTransport,
                 new ServerConfig(Identity(), _password.Length > 0 ? _password : null, career: careerConfig, items: itemConfig),
                 _clock, restore);
@@ -499,6 +547,9 @@ public sealed class SessionController
         client.PlayerMoved += (id, pose) => _avatars.Move(id, pose);
 
         client.Career.RequestRejected += (r, _) => { _careerToast = r; _log("[career] refused: " + r); };
+        // Item proposal refusals (a doomed purchase/pickup/drop) surface as the same panel toast;
+        // ItemSync already writes the log line, so this only feeds the UI.
+        client.Items.RequestRejected += (r, _) => _careerToast = r;
         client.Career.EconomyEventReceived += (kind, cents, reason) =>
         {
             _careerToast = $"{kind}: {Money(cents)} — {reason}";

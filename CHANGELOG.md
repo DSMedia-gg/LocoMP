@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Shops (M4): buy from the game's shops in multiplayer. A joining player picks an item from the
+  session panel's Shop list (the catalog is read from the host's live world) and the price comes out
+  of THEIR wallet, not the host's — then the item is theirs to carry and drop wherever they like,
+  where anyone can pick it up. This closes the incumbent's headline gap for purchases: a *client*
+  buys a lantern and the cash lands in the right wallet. The bot gains `--buy <item>` to run the
+  whole buy-then-drop loop on the one-PC test rig. (This slice covers world-dropped purchases;
+  showing a bought item in a player's hands, and live shop stock, come next.) Network protocol is
+  now v7 (the join burst carries the shop catalog so a client can price its Buy buttons).
 - Handheld items sync (M4.2): drop a lantern (or any world item) and everyone in the session sees
   it appear where you left it; another player can pick it up and it vanishes from the world for
   everyone, then reappears when they set it down again. The host's real items are mirrored onto the

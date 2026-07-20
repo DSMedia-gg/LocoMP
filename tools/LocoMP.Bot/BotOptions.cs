@@ -51,7 +51,10 @@ public sealed class BotOptions
 
     // M4.2 item rig: pick up world items the host drops, then re-drop them elsewhere.
     public bool GrabItems;              // pick up world items as they appear, then drop them again
-    public double DropAfterSeconds = 20; // hold a picked-up item this long before dropping it
+    public double DropAfterSeconds = 20; // hold a picked-up/bought item this long before dropping it
+
+    // M4 shops: buy a prefab from the shop as the "remote client" — the win condition on one PC.
+    public string BuyPrefab = "";       // itemPrefabName to buy once joined ("" = don't buy)
 
     public HandshakeRequest ToIdentity() => new(ProtocolVersion.Current, GameBuild, ModVersion, ModListHash);
 
@@ -116,6 +119,7 @@ public sealed class BotOptions
                     case "--drive-seconds": o.DriveSeconds = double.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--grab-items": o.GrabItems = true; break;
                     case "--drop-after": o.DropAfterSeconds = double.Parse(Next(), CultureInfo.InvariantCulture); break;
+                    case "--buy": o.BuyPrefab = Next(); break;
                     case "--help" or "-h" or "/?": PrintUsage(); return null;
                     default:
                         Console.Error.WriteLine($"Unknown option: {args[i]} (try --help)");
@@ -198,7 +202,10 @@ Usage: LocoMP.Bot [options]
   --drive-seconds <s>    driving time before throttle 0 + release (default 15)
   --grab-items           pick up world items as the host drops them, then re-drop them —
                          watch the item vanish from the host's world and reappear
-  --drop-after <s>       hold a grabbed item this long before dropping it (default 20)
+  --buy <prefabName>     buy this item from the shop once joined (the client-buys-a-lantern
+                         win condition: YOUR wallet is debited, the host's is not), then drop
+                         it after --drop-after so the host sees it materialize
+  --drop-after <s>       hold a grabbed/bought item this long before dropping it (default 20)
 
 Examples:
   LocoMP.Bot --at 671,132,591                        one bot orbiting those coords
@@ -209,6 +216,7 @@ Examples:
   LocoMP.Bot --listen --consist 3 --livery ...       host a session; join from the game
   LocoMP.Bot --claim-first --report-interval 30      claim a captured job; report until paid
   LocoMP.Bot --drive --drive-seconds 20              drive the host's loco from outside
-  LocoMP.Bot --grab-items --at 671,132,591           pick up items you drop, re-drop them near you");
+  LocoMP.Bot --grab-items --at 671,132,591           pick up items you drop, re-drop them near you
+  LocoMP.Bot --buy Lantern --at 671,132,591          buy a lantern (your wallet), drop it near you");
     }
 }
