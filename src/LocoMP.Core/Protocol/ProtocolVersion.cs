@@ -24,6 +24,10 @@ public static class ProtocolVersion
     /// target peer id on LicenseGrantExternal (host-admin grants). The registration format change
     /// makes this incompatible by construction.
     /// v6 (M4): items — server-authoritative inventory/world items/shops (MessageType 50–58). A v5
-    /// peer cannot interpret item state, so the new message family is a deliberate incompatible bump.</remarks>
-    public const int Current = 6;
+    /// peer cannot interpret item state, so the new message family is a deliberate incompatible bump.
+    /// v7 (M4 shops): the join burst now carries the shop catalog (prefab→price, MessageType 59) so a
+    /// client can render its Buy UI — a v6 peer would desync on the unknown message, so it is a
+    /// deliberate bump (the purchase transaction itself was already v6; this is only its front-end
+    /// feed).</remarks>
+    public const int Current = 7;
 }

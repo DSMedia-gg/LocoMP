@@ -32,6 +32,7 @@ public sealed class ClientItems
     private readonly ITransport _transport;
     private readonly Func<bool> _joined;
     private readonly Dictionary<int, ClientItem> _items = new();
+    private readonly Dictionary<string, long> _shopCatalog = new(StringComparer.Ordinal);
 
     internal ClientItems(ITransport transport, Func<bool> joined)
     {
@@ -41,6 +42,11 @@ public sealed class ClientItems
 
     /// <summary>The mirrored item set, keyed by item id.</summary>
     public IReadOnlyDictionary<int, ClientItem> Items => _items;
+
+    /// <summary>What the shops sell, from the join burst: itemPrefabName → price in cents. Drives the
+    /// panel's Buy UI (the mirror of <see cref="ClientCareer.LicenseCatalog"/>). Empty until admitted,
+    /// or if the host built no catalog.</summary>
+    public IReadOnlyDictionary<string, long> ShopCatalog => _shopCatalog;
 
     public event Action<ClientItem>? ItemAdded;
     public event Action<ClientItem>? ItemMoved;
@@ -137,13 +143,29 @@ public sealed class ClientItems
                 RequestRejected?.Invoke(reason, itemId);
                 return true;
             }
+            case MessageType.ItemShopCatalog:
+            {
+                int count = (int)r.ReadVarUInt();
+                _shopCatalog.Clear();
+                for (int i = 0; i < count; i++)
+                {
+                    string prefab = r.ReadString();
+                    long price = r.ReadInt64();
+                    _shopCatalog[prefab] = price;
+                }
+                return true;
+            }
             default:
                 return false;
         }
     }
 
-    /// <summary>Wipe the mirror on disconnect (the next join's item burst rebuilds it).</summary>
-    internal void Reset() => _items.Clear();
+    /// <summary>Wipe the mirror on disconnect (the next join's item burst + catalog rebuild it).</summary>
+    internal void Reset()
+    {
+        _items.Clear();
+        _shopCatalog.Clear();
+    }
 
     private static void ReadLocation(PacketReader r, ClientItem item)
     {

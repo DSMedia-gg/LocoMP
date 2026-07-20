@@ -64,6 +64,11 @@ public sealed class ServerItems
     /// dead one (mirrors the career claim rebind).</summary>
     internal void OnPlayerAdmitted(int peerId)
     {
+        // Catalog first, so the client can price its Buy UI before any item arrives (the way
+        // CareerState precedes the job board). It never changes mid-session in this slice, so a
+        // single join-burst send is enough — a live-restock feed is a later stock-sync slice.
+        _transport.Send(peerId, BuildShopCatalog(), DeliveryMethod.ReliableOrdered);
+
         foreach (ItemRecord rec in Registry.Items.Values)
             _transport.Send(peerId, BuildSpawned(0, rec), DeliveryMethod.ReliableOrdered);
 
@@ -214,6 +219,19 @@ public sealed class ServerItems
             .WriteByte((byte)MessageType.ItemMoved)
             .WriteVarUInt((uint)rec.Def.Id);
         WriteLocation(w, rec);
+        return w.ToArray();
+    }
+
+    /// <summary>The shop catalog for the join burst: count then (itemPrefabName, price-cents) pairs
+    /// from <see cref="ItemConfig.ShopPrices"/>. A prefab absent here is simply not for sale (the
+    /// purchase is refused server-side); an empty catalog is a valid, empty message.</summary>
+    private byte[] BuildShopCatalog()
+    {
+        var w = new PacketWriter(64)
+            .WriteByte((byte)MessageType.ItemShopCatalog)
+            .WriteVarUInt((uint)_config.ShopPrices.Count);
+        foreach (KeyValuePair<string, long> entry in _config.ShopPrices)
+            w.WriteString(entry.Key).WriteInt64(entry.Value);
         return w.ToArray();
     }
 
