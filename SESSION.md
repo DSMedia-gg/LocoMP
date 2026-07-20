@@ -5,6 +5,51 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-20 — Dedicated server pulled forward (M6-B.1): multiplayer becomes solo-testable 🖥️
+
+**Goal:** Cody — "can we pull forward the dedicated server work? That would make testing 1 million times
+easier as I don't have a friend to test with (won't until ~next weekend)." A headless server he joins
+from his own game as a client turns most of the "needs a friend" joined-client surface (world handover,
+reconnect grace, persistence, presence, the board) into solo work — and it's the real M6 Track B product,
+not the ephemeral bot rig.
+
+**Feasibility (investigated first, plan-mode + approved):** very high. Three of the four hard parts already
+existed and were tested — NetServer + persistence run headless; the bot's `--listen` already ran NetServer
+over real LiteNetLib UDP; the deterministic job generator is game-free Core (D13 reserved it for exactly
+this). Two Explore passes + a Plan agent validated the integration flow and caught the gotchas:
+- The core generator fills the board gated ONLY on `Stations>=2 && JobTypes>=1` — it runs on `Poll` with
+  **zero players connected**, so a solo joiner gets a populated board.
+- "First admitted peer = world source" is **inert** when `AcceptExternalJobs`/`AcceptExternalItems` are
+  false (defaults) — assigned but never read. Server owns the board; trains come from a registering client.
+- Handshake admits only on EXACT match of protocol/build/modVersion/modListHash — `""` hash is right for a
+  bot; exposed `--modlist-hash` for the real game.
+- **Trap:** a preset switch between runs throws from `CareerRegistry` restore **inside the NetServer ctor** —
+  so the Program guards the preset before constructing and starts fresh on mismatch.
+
+**Built (all game-free, `src/LocoMP.Server/`):** `Program.cs` (was an 8-line stub — the full wiring:
+save load/restore with clean fallback on corrupt/foreign/preset-mismatch, config, UDP transport, 30 Hz
+loop, autosave, Ctrl+C→SaveNow), `ServerOptions.cs` (mirrors BotOptions), `DefaultCareer.cs` (synthetic
+starter board so it runs out-of-the-box), `ConsoleAdmin.cs` (stdin→queue drained on the loop thread;
+status/save/stop/help), `README.md` (solo-test recipe + honest limits).
+
+**Verified (game-free, the whole point):**
+- `DedicatedServerIntegrationTests` — real LiteNetLib UDP in-process: a solo client joins and receives a
+  non-empty board; the world survives a **cold restart** through the save file. Suite **165→167 ×3**
+  (UDP tests stable ×3), full sln **0 warnings**.
+- **Headless smoke on the built exe:** server binds UDP 18899 → a real `LocoMP.Bot` joins as id 1 over the
+  wire → board generates 8 jobs → `status`/`stop` console admin works → graceful save (678 B) → restart
+  **reloads** the world ("loaded world … Board: 8 job(s)"). This is exactly what Cody will run.
+
+**Solo-test recipe (README):** `LocoMP.Server --port 8877`, then `LocoMP.Bot --host 127.0.0.1 --consist 3
+--livery ...` (bot joins first = world source, provides a train), then join from DV as a second client.
+
+**Deferred (documented):** server-owned kinematic trains (no bot needed — M6-B.2); a real DV career
+exported from the game (`--config` is the reserved hook; today warns + uses the built-in default); container
++ SVHost deploy; `kick`/richer admin; interest management. Roadmap: re-sequences M6-B ahead of M5 to unblock
+testing; changes no locked decision. **Committed locally; push awaits Cody's go.**
+
+---
+
 ## 2026-07-20 — Perf baseline: measuring the §9 budgets (and re-pointing the roadmap) 📊
 
 **Goal:** Cody: "do the next item." M4 scope is code-complete; its only remaining work is the in-game

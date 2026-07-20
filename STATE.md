@@ -1,7 +1,41 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-20 — **Perf baseline harness BUILT + measured (the audit §6 "no numbers" gap);
-game-free, 165/165. Committed locally, push awaits Cody's go.** Closes the recurring "budgets have no
+**Updated:** 2026-07-20 — **M6-B.1: dedicated server PULLED FORWARD + BUILT + smoke-verified headless.
+Committed locally, push awaits Cody's go.** Cody has no test partner until ~next weekend, so we pulled
+the M6 Track B dedicated server ahead of M5 to make multiplayer **solo-testable**: a standalone game-free
+process he joins from his own game as a client, against a world that persists across game/server restarts.
+Feasible now because the hard parts already existed and are tested (NetServer + persistence run headless;
+the bot's `--listen` already ran NetServer over real UDP; the deterministic job generator is game-free
+Core, D13-reserved). This slice is **wiring**, not new networking. What shipped (all in `src/LocoMP.Server/`,
+game-free):
+- **`Program.cs`** (was an 8-line stub): loads/creates a `.lmps` save (corrupt/foreign/preset-mismatch →
+  clean fresh start, never a crash — the preset guard dodges the `CareerRegistry` restore throw *in the
+  NetServer ctor*), builds the config, opens `LiteNetLibTransport.StartServer`, runs a 30 Hz loop
+  (`Poll` + `BroadcastTime` every 5 s + `Autosaver.Tick`), primes the board with one `Poll` so the banner
+  count is real, Ctrl+C / `stop` → `SaveNow` before `Dispose`.
+- **`ServerOptions.cs`** (mirrors BotOptions): `--port/--key/--save/--world/--config/--password/
+  --max-players/--build/--mod-version/--modlist-hash/--name/--autosave-seconds/--preset/--tick-hz`.
+- **`DefaultCareer.cs`**: a synthetic starter board (4 stations, 3 license-free job types, target 8) so it
+  runs out-of-the-box — the core generator fills the board on `Poll` with **zero players connected**, so a
+  solo joiner arrives to a populated board.
+- **`ConsoleAdmin.cs`**: stdin thread → queue drained on the loop thread; `status`/`save`/`stop`/`help`.
+- **`README.md`**: the solo-test recipe + the honest limitations.
+- **Verified programmatically (game-free):** `DedicatedServerIntegrationTests` (real UDP, in-process) — a
+  solo client joins and gets a non-empty board; the world survives a **cold restart** through the save
+  file. Suite **165 → 167 ×3** (UDP tests stable ×3), full sln **0 warnings**. **Headless smoke on the real
+  exe:** bind UDP → a real `LocoMP.Bot` joins as id 1 over the wire → board = 8 jobs → `status`/`stop`
+  console admin → graceful save (678 B) → **cold reload** ("loaded world … Board: 8 job(s)").
+- **The honest limitation (in the README):** a fresh server has **no trains of its own** — trains come
+  from a client that registers them (a bot joining first is the world source; the "first peer = world
+  source" concept is otherwise inert with `AcceptExternal*` off). Server-owned **kinematic** trains (no bot
+  needed) are the next slice (M6-B.2). The career board is a synthetic placeholder; a **real DV career
+  exported from the game** (like the topology `.lmpw`) is a Shim slice — `--config` is the reserved hook
+  (currently warns + falls back to the default).
+- **Roadmap:** this re-sequences M6-B ahead of M5 to unblock solo testing; changes no locked decision.
+  Plan at `../` planning corpus; approved by Cody. Push awaits Cody's go (hard rule 7).
+
+**Prior (2026-07-20): Perf baseline harness BUILT + measured (the audit §6 "no numbers" gap);
+game-free, 165/165. PUSHED** (`2cf3d58` test / `3c8a634` docs, `fecc886..3c8a634`, Cody's go). Closes the recurring "budgets have no
 measurement harness or recorded numbers" finding and — the point — produces the data that decides what
 to build next. `tests/…/BudgetBench.cs` + `CountingTransport.cs` (an ITransport decorator that weighs
 every byte the server sends; zero production change); results written to `docs/PERF-BASELINE.md`.
