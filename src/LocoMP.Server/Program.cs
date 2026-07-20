@@ -19,10 +19,36 @@ if (opts is null) return 1;
 
 var clock = new SystemClock();
 
-// Career board. A real game-exported career is a later slice; --config is reserved for it.
-if (opts.ConfigPath is not null)
-    Console.WriteLine($"[server] --config is not supported yet ({opts.ConfigPath}); using the built-in default career.");
+// --dump-config: write the built-in default career to a .lmpc file and exit — a seed to edit, a way to
+// produce a config for testing --config without the game, and the reference shape the Shim exporter fills.
+if (opts.DumpConfigPath is not null)
+{
+    byte[] seed = CareerConfigCodec.Write(DefaultCareer.Build(opts.Preset));
+    File.WriteAllBytes(opts.DumpConfigPath, seed);
+    Console.WriteLine($"[server] wrote the built-in default career to {opts.DumpConfigPath} ({seed.Length} bytes) — " +
+                      "replace it with a game-exported career and pass it with --config.");
+    return 0;
+}
+
+// Career board. --config loads a real career (.lmpc — a Shim export or a --dump-config seed); the file is
+// authoritative (including the preset). Without it — or if the file is missing/foreign/corrupt — fall back
+// to the built-in synthetic default so the server always runs.
 CareerConfig career = DefaultCareer.Build(opts.Preset);
+if (opts.ConfigPath is not null)
+{
+    try
+    {
+        career = CareerConfigCodec.Read(File.ReadAllBytes(opts.ConfigPath));
+        opts.Preset = career.Preset; // keep the rest of the run (save-preset guard, banner) consistent
+        Console.WriteLine($"[server] loaded career config from {opts.ConfigPath}: preset {career.Preset}, " +
+                          $"{career.Stations.Count} station(s), {career.JobTypes.Count} job type(s), " +
+                          $"{career.LicensePrices.Count} purchasable license(s).");
+    }
+    catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
+    {
+        Console.WriteLine($"[server] career config unreadable ({e.Message}) — using the built-in default career.");
+    }
+}
 var config = new ServerConfig(opts.ToIdentity(), opts.Password, opts.MaxPlayers, career);
 
 // Restore a saved world if one exists. A corrupt/foreign/older save is refused cleanly — start fresh,

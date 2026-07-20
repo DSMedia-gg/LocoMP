@@ -18,7 +18,8 @@ public sealed class ServerOptions
     public string Key = NetDefaults.ConnectKey;
     public string SavePath = "locomp-server.save";
     public string? WorldFile;              // extracted .lmpw — parsed now; used by the later train slice
-    public string? ConfigPath;             // optional career JSON — deferred; warns + uses the default
+    public string? ConfigPath;             // optional career config (.lmpc) — real yards/jobs/licenses
+    public string? DumpConfigPath;         // write the built-in default career to this .lmpc path and exit
     public string? Password;
     public int MaxPlayers = 32;
     public string GameBuild = "99-build2702"; // what B99.7 reports at runtime; must match every joiner
@@ -65,6 +66,7 @@ public sealed class ServerOptions
                     case "--save": o.SavePath = Next(); break;
                     case "--world": o.WorldFile = Next(); break;
                     case "--config": o.ConfigPath = Next(); break;
+                    case "--dump-config": o.DumpConfigPath = Next(); break;
                     case "--password": o.Password = Next(); break;
                     case "--max-players": o.MaxPlayers = Math.Max(1, int.Parse(Next(), CultureInfo.InvariantCulture)); break;
                     case "--build": o.GameBuild = Next(); break;
@@ -133,7 +135,8 @@ Usage: LocoMP.Server [options]
   --key <key>            transport connect key       (default {NetDefaults.ConnectKey})
   --save <path>          world save file             (default locomp-server.save)
   --world <path>         extracted .lmpw topology    (default none; reserved for server-owned trains)
-  --config <path>        career config JSON          (not yet — falls back to the built-in default)
+  --config <path>        career config (.lmpc): real yards/jobs/licenses (else the built-in default)
+  --dump-config <path>   write the built-in default career to a .lmpc file and exit (a seed to edit)
   --password <pw>        session password            (default none)
   --max-players <n>      player cap                  (default 32)
   --build <s>            game build clients must match(default 99-build2702)
