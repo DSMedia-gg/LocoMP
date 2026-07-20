@@ -476,23 +476,33 @@ public sealed class ServerCareer
         }
     }
 
-    /// <summary>D14: a native register finalized a purchase against the mirrored wallet — burn it
-    /// through the policy layer. A refusal here means the mirror drifted from the ledger; the
-    /// rejection tells the Shim to resynchronize loudly rather than let them diverge further.</summary>
+    /// <summary>D14/M4: a native fee the world source charges through the policy layer — a register
+    /// purchase (target 0 = the host's own scope) OR a comms-radio action a REMOTE player initiated
+    /// (target = their peer id, so the rerail/delete fee lands on the initiator's wallet, not the
+    /// host's — the M4 "for all players" invariant). Target resolution mirrors LicenseGrantExternal
+    /// (D15). A refusal means the mirror drifted from the ledger (or the remote can't afford it) — the
+    /// rejection tells the Shim rather than letting them diverge silently.</summary>
     private void HandleFeeExternal(int peerId, PacketReader r)
     {
         long amountCents = r.ReadInt64();
         string label = r.ReadString();
-        if (KeyOf(peerId) is not string key) return;
+        int targetPeer = (int)r.ReadVarUInt();
+        if (KeyOf(peerId) is not string senderKey) return;
         if (peerId != _worldSourcePeer)
         {
             Reject(peerId, "fee: only the world source reports native fees");
             return;
         }
-        if (Registry.TryChargeExternalFee(key, amountCents, out string? reason))
+        string? targetKey = targetPeer == 0 ? senderKey : KeyOf(targetPeer);
+        if (targetKey is null)
         {
-            SendWalletUpdate(key);
-            SendEconomyEvent(key, EconomyEventKind.ExternalFee, amountCents, label);
+            Reject(peerId, $"fee: player {targetPeer} is not connected");
+            return;
+        }
+        if (Registry.TryChargeExternalFee(targetKey, amountCents, out string? reason))
+        {
+            SendWalletUpdate(targetKey);
+            SendEconomyEvent(targetKey, EconomyEventKind.ExternalFee, amountCents, label);
         }
         else
         {

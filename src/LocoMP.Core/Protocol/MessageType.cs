@@ -234,4 +234,24 @@ public enum MessageType : byte
     /// the license price catalog. The purchase transaction itself is the v6 <see cref="ItemPurchaseRequest"/>;
     /// this only feeds the front-end what is for sale.</summary>
     ItemShopCatalog = 59,
+
+    // ── M4 comms radio (protocol v8): rerail / delete / summon for all players. A remote player's
+    // comms-radio action on a host-owned car is intercepted and ROUTED to the car's sim owner (the
+    // M3.5c couple/uncouple-request pattern); the owner performs the real action and its native event
+    // drives the normal path. Fees burn from the INITIATOR via FeeExternal's new target peer. ──
+
+    /// <summary>client → server: a comms-radio action (rerail/delete) on a car I don't simulate —
+    /// the server routes it to the car's sim owner (the world source) as a CommsActionCommand.
+    /// Carries the action kind, the target car id, and a destination pose (rerail only).</summary>
+    CommsActionRequest = 60,
+
+    /// <summary>server → world source: perform this comms-radio action natively (the initiator can't,
+    /// the car is yours). Same payload plus the initiator peer id, so the owner charges the right
+    /// wallet via <see cref="FeeExternal"/> with a target.</summary>
+    CommsActionCommand = 61,
+
+    /// <summary>world source → server: a car was deleted natively (comms-radio Clear) — remove it from
+    /// the registry and broadcast the removal so every client despawns its replica (a deleted car
+    /// otherwise lingers as a ghost, since the destroy hook can't tell delete from distance-streaming).</summary>
+    CarDeleteNotice = 62,
 }

@@ -28,6 +28,11 @@ public static class ProtocolVersion
     /// v7 (M4 shops): the join burst now carries the shop catalog (prefab→price, MessageType 59) so a
     /// client can render its Buy UI — a v6 peer would desync on the unknown message, so it is a
     /// deliberate bump (the purchase transaction itself was already v6; this is only its front-end
-    /// feed).</remarks>
-    public const int Current = 7;
+    /// feed).
+    /// v8 (M4 comms radio): comms-radio actions for all players — CommsActionRequest/Command
+    /// (MessageType 60/61) route a remote player's rerail/delete to the car's sim owner, CarDeleteNotice
+    /// (62) removes a deleted car everywhere, and FeeExternal (43) gains a target peer so a comms fee
+    /// can burn the INITIATOR's wallet. The FeeExternal format change makes this incompatible by
+    /// construction.</remarks>
+    public const int Current = 8;
 }

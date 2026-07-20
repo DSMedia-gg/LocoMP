@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using LocoMP.Core.Net;
+using LocoMP.Core.Presence;
 using LocoMP.Core.Protocol;
 using LocoMP.Core.Session;
 using LocoMP.Core.Trains;
@@ -73,6 +74,74 @@ public class TrainSessionTests
         Assert.Equal(2, server.Trains.Registry.Sets.Count);
         Assert.Equal(2, a.Trains.View.Sets.Count);          // both clients mirror both trainsets
         Assert.Equal(2, b.Trains.View.Sets.Count);
+    }
+
+    [Fact]
+    public void World_source_delete_notice_reforms_the_survivors_and_removes_the_car_everywhere()
+    {
+        var (_, _, server, a, b, set) = SessionWithOneTrainset(); // A owns a two-car set
+        int deletedCar = set.Cars[1].Id;
+        int keptCar = set.Cars[0].Id;
+
+        a.Trains.NotifyCarDeleted(deletedCar);                 // comms-radio Clear on the host
+        Pump(server, new[] { a, b });
+
+        // The deleted car is gone from the registry; the survivor re-formed into a fresh set.
+        var serverCars = server.Trains.Registry.Sets.Values.SelectMany(s => s.Cars).Select(c => c.Id).ToList();
+        Assert.DoesNotContain(deletedCar, serverCars);
+        Assert.Contains(keptCar, serverCars);
+        // B's mirror agrees — the transaction retired the old set and spawned the survivor's.
+        var bCars = b.Trains.View.Sets.Values.SelectMany(s => s.Cars).Select(c => c.Id).ToList();
+        Assert.DoesNotContain(deletedCar, bCars);
+        Assert.Contains(keptCar, bCars);
+    }
+
+    [Fact]
+    public void Deleting_the_last_car_removes_the_whole_set_everywhere()
+    {
+        var (_, clock, server, a, b, _) = SessionWithOneTrainset();
+        a.Trains.RegisterTrainset(token: 7, Specs("handcar")); // a lone car A owns
+        Pump(server, new[] { a, b });
+        clock.Advance(3000);
+        TrainsetDef lone = server.Trains.Registry.Sets.Values.Single(s => s.Cars.Count == 1);
+
+        a.Trains.NotifyCarDeleted(lone.Cars[0].Id);
+        Pump(server, new[] { a, b });
+
+        Assert.False(server.Trains.Registry.Sets.ContainsKey(lone.Id)); // set gone
+        Assert.False(b.Trains.View.Sets.ContainsKey(lone.Id));          // TrainsetRemove despawned it on B
+    }
+
+    [Fact]
+    public void A_non_owner_cannot_delete_a_car()
+    {
+        var (_, _, server, a, b, set) = SessionWithOneTrainset(); // A owns
+        string? refusal = null;
+        server.Trains.ProposalRejected += (_, reason) => refusal = reason;
+
+        b.Trains.NotifyCarDeleted(set.Cars[0].Id); // B does not own it
+        Pump(server, new[] { a, b });
+
+        Assert.Contains("only the owner", refusal);
+        Assert.Equal(2, server.Trains.Registry.Sets.Values.Single().Cars.Count); // untouched
+    }
+
+    [Fact]
+    public void A_remote_comms_action_routes_to_the_cars_sim_owner_with_the_initiator()
+    {
+        var (_, _, server, a, b, set) = SessionWithOneTrainset(); // A owns the car
+        CommsActionKind? kind = null;
+        int carSeen = 0, initiator = 0;
+        Pose destSeen = default;
+        a.Trains.CommsActionCommanded += (k, car, dest, init) => { kind = k; carSeen = car; destSeen = dest; initiator = init; };
+
+        b.Trains.RequestCommsAction(CommsActionKind.Rerail, set.Cars[0].Id, new Pose(1f, 2f, 3f, 0f, 0f, 0f, 1f));
+        Pump(server, new[] { a, b });
+
+        Assert.Equal(CommsActionKind.Rerail, kind);
+        Assert.Equal(set.Cars[0].Id, carSeen);
+        Assert.Equal(b.LocalId, initiator); // the owner charges the INITIATOR's wallet, not its own
+        Assert.Equal(1f, destSeen.Px);
     }
 
     [Fact]

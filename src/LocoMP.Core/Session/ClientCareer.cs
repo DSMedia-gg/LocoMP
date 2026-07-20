@@ -143,15 +143,17 @@ public sealed class ClientCareer
         _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
     }
 
-    /// <summary>World source only (D14): a native register finalized a purchase against the
-    /// mirrored wallet; the server burns the amount from the policy wallet.</summary>
-    public void ReportExternalFee(long amountCents, string label)
+    /// <summary>World source only (D14/M4): a native fee the server burns from the policy wallet.
+    /// <paramref name="targetPeerId"/> 0 = the host's own scope (a register purchase); a peer id =
+    /// the initiator of a remote comms-radio action, whose wallet pays the rerail/delete fee.</summary>
+    public void ReportExternalFee(long amountCents, string label, int targetPeerId = 0)
     {
         if (!_joined()) return;
         byte[] payload = new PacketWriter(32)
             .WriteByte((byte)MessageType.FeeExternal)
             .WriteInt64(amountCents)
             .WriteString(label)
+            .WriteVarUInt((uint)targetPeerId)
             .ToArray();
         _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
     }
