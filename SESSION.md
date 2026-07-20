@@ -5,6 +5,66 @@ narrative history. See `../CLAUDE.md` for the discipline.
 
 ---
 
+## 2026-07-20 — M4.2: Shim ItemSync, the world-item loop 🏮
+
+**Goal:** wire M4.1's game-free Items core to DV's real handheld objects — the "drop a lantern,
+another player picks it up" win condition, in-game. Cody was tired ("ELI5 please"), so I framed the
+M4.2 cut as three furniture-sized options and he picked **Option 1: world-dropped items only**
+(held-item avatar display and shop materialization deferred to their own bursts).
+
+**Recon-first (the ~30 decomp dumps under `../scratch/decomp/`, all clean-room STUDY):** confirmed
+every seam before writing a line. Headlines that shaped the design:
+- Capture is ALL public events — `StorageBase.ItemAdded/ItemRemoved` on the world bucket +
+  `ItemBase.AboutToBeDestroyed` (the item analog of `OnCarAboutToBeDestroyed`). **Zero Harmony**
+  (Main.cs untouched — a first for a Shim sync class).
+- Spawn is the game's own two-liner: `Resources.Load(itemPrefabName)` + Instantiate +
+  `StorageController.AddItemToWorldStorage`; `ItemBase.Awake` self-assembles rigidbody/ECS/etc.
+- **Keep-alive is FREE**: `ItemDisabler.OnItemDisablePositionUpdated` exempts any item where
+  `!isOnDisablingStaticParent && item.BelongsToPlayer()`, and that parent flag is true ONLY on a
+  paint station. So a replica spawned `BelongsToPlayer = true` on the normal world parent is
+  auto-exempt from distance streaming-off — no proximity band (unlike cars), no patch, no per-frame
+  SetActive fight. The recon's "items are SetActive'd, never destroyed" prediction paid off: item
+  replication is strictly SIMPLER than the M3.5b car materialization.
+- Defining-assembly check (ilspycmd): everything is in already-referenced Assembly-CSharp +
+  DV.Inventory. **No new game reference, no protocol bump** — the cleanest possible slice.
+
+**Done (155/155 ×3, full sln 0 warnings, STAGED to Mods/ + dist/):**
+- `Shim/ItemSync.cs` — host-native capture (world source, D13 posture; join-time sweep like
+  JobCapture) + a reconcile-materialization pass (both roles; 0.5 s + dirty-flag). `_applying`
+  reentrancy guard (M2 idiom) so our own spawn/despawn never echoes back as a capture. `_spawnedIds`
+  tracks OUR replicas so `Dispose` deletes only those and spares the host's real native items.
+- Host `ItemConfig{AcceptExternalItems=true}` — the default gates external items OFF (dedicated-
+  server posture) and would have refused the host's own registrations; same fix D13 made with
+  `AcceptExternalJobs`. Caught by reading `ServerItems.HandleRegister` before building, not by a
+  failed run.
+- Host restore deliberately keeps the item store EMPTY (`ServerSaveData` items=null default) — the
+  host-native posture (like trainsets): DV's own save persists the host's items, the sweep re-offers
+  them. The LocoMP item save is the source only on the dedicated server (M6).
+- `PresenceShim.ToAbsolutePose(Transform)` + `ToRotation(Pose)`; panel `Items — N in the world`
+  line; bot `--grab-items` (+ `--drop-after`) as the one-PC pickup/drop driver (in RemoteActor).
+
+**Learned / notes:**
+- `ItemBase.AboutToBeDestroyed` is `Action<ItemBase>`, NOT the parameterless `Action` that
+  `TrainCar.OnCarAboutToBeDestroyed` is — cost one compile round-trip (CS0029). Watch the arity
+  when copying the car destroy-hook idiom to items.
+- `StorageWorld` holds only `BelongsToPlayer` items (shelf/display items live outside storage until
+  bought), so `StorageWorld.ItemAdded` is a clean "a player dropped something" trigger — no filter
+  needed.
+
+**Deferred (banked in STATE):** held-item avatar display (Option 2, protocol v7), shop
+materialization (Option 3), joined-GAME-client native grab capture (friend session), item state
+blob, containers.
+
+**Process decision (Cody, this session):** in-game smoke runs are now **batched per MILESTONE, not
+per burst** — each slice builds + stages + pushes on merit; live verification is one consolidated
+pass at the milestone boundary. M4.2's Run-A checklist joins the pending M4 milestone smoke pass.
+
+**PUSHED (Cody's go):** committed + pushed to `main` without waiting on the live run (same call as
+the debt pass). **Next:** the batched M4 smoke pass when the game's up; meanwhile the M4.2 follow-on
+options / comms-radio to finish M4.
+
+---
+
 ## 2026-07-19 (late) — M4.1: the game-free Items core 📦
 
 **Goal:** with D15 pushed and the item recon banked, build the M4 authority layer — an item

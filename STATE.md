@@ -1,14 +1,72 @@
 # STATE — LocoMP (implementation)
 
-**Updated:** 2026-07-19 late — D15 PUSHED (`7b93bc8`/`0c1bfe9`), then **M4.1 (game-free Items core)
-BUILT + PUSHED** (`6064759` feat/`31d1f5c` docs, `0c1bfe9..31d1f5c`): ItemRegistry + protocol v6 +
-LMPS schema v4 + full session stack, 155/155 ×3, full sln 0 warnings, payload staged. This is the
-**implementation** memory (burst cadence, D8).
+**Updated:** 2026-07-20 — **M4.2 (Shim ItemSync — the world-item loop) BUILT, uncommitted.** Cody
+picked Option 1 (world-dropped items only; held-item avatar display + shop materialization deferred
+to their own bursts). `ItemSync` (host-native capture + client materialization, NO Harmony — every
+seam is a public event), PresenceShim item-pose helpers, host `ItemConfig{AcceptExternalItems=true}`,
+bot `--grab-items` driver. 155/155 ×3 (Core item loop already fuzzed in M4.1; the Shim is
+game-facing = in-game verified, not headless), full sln **0 warnings**, payload STAGED to Mods/ +
+dist/. **PUSHED (Cody's go).** **NEW TESTING CADENCE (Cody, 2026-07-20): in-game smoke runs are
+BATCHED per MILESTONE, not per burst** — each slice builds + stages + pushes on merit; live
+verification is deferred to ONE consolidated pass at the milestone boundary. So M4.2's Run-A
+checklist joins the pending **M4 milestone smoke pass** (with M4.1's and whatever M4.3+ adds). This
+is the **implementation** memory (burst cadence, D8).
 The **planning corpus** lives one level up at `../` (00–09, INDEX, research/) — strategic, kept private.
 Cold-starting? Read `../CLAUDE.md` (hard rules) → this file → the current milestone in `../07-ROADMAP.md`.
 
 ## Where things stand
 
+- **M4.2 — Shim ItemSync (world-item loop): BUILT 2026-07-20, uncommitted. 155/155 ×3, full sln 0
+  warnings, STAGED to Mods/ + dist/.** Cody chose Option 1 of the M4.2 cut (world-dropped items
+  only). This is the game-facing half of M4.1's Items core — the "drop a lantern, another player
+  picks it up" win condition, made real in-game. What shipped:
+  - **`Shim/ItemSync.cs`** (the deliverable) — parallels JobCapture (D13 host-native capture) +
+    RealCarSync (spawn/despawn) but SIMPLER, because the recon's key finding held: **items are
+    `SetActive(false)`'d, never destroyed like cars** (no ECS storms, netId maps survive streaming),
+    so the M3.5b 250/330 m proximity-materialization band collapses to a plain keep-alive.
+    **NO Harmony patches** — every seam is a public event (Main.cs unchanged).
+    - **Host capture (world source, D13 posture):** subscribes `StorageController.Instance.
+      StorageWorld.ItemAdded/ItemRemoved`; a player-owned item entering world storage (a native
+      drop) → `ClientItems.RegisterWorldItem(prefab, absPose, "", token)`; leaving it (native grab/
+      dumpster) → `DespawnItem`. A join-time sweep of `GetStorageItemList()` offers items already
+      lying in the world (JobCapture's pre-session-jobs pattern). `ItemBase.AboutToBeDestroyed`
+      (the item analog of OnCarAboutToBeDestroyed) is the despawn signal.
+    - **Materialization (both roles):** a **Reconcile** pass (0.5 s + dirty-flag on any server item
+      event) brings the local world in line with the server board — every WORLD item gets a real
+      GameObject via the game's own two-liner (`Resources.Load(prefabName)` + Instantiate +
+      `AddItemToWorldStorage`, `ItemBase.Awake` self-assembles the rest); a possessed/removed one is
+      despawned. Host natives are mapped at `RegisterAccepted` (skip-respawn); only genuinely-remote
+      world items get a fresh replica. `_spawnedIds` tracks OUR replicas so **Dispose deletes only
+      those, never the host's real native items** (their SP save owns them).
+    - **Keep-alive = FREE (recon-confirmed):** `ItemDisabler.OnItemDisablePositionUpdated` exempts
+      any item where `!isOnDisablingStaticParent && item.BelongsToPlayer()`, and
+      `isOnDisablingStaticParent` is true ONLY on a paint-station parent. Replicas spawn
+      `InventoryItemSpec.BelongsToPlayer = true` (also required for world-storage acceptance) on the
+      normal world parent → automatically exempt from distance streaming-off. No patch, no per-frame
+      SetActive fight.
+    - **`_applying` reentrancy guard** (the M2 idiom) around every native change WE initiate, so our
+      own spawn/despawn's StorageBase + AboutToBeDestroyed events never echo back as captures.
+  - **`ItemConfig{AcceptExternalItems=true}`** passed to the host's ServerConfig — the default gates
+    external items OFF (dedicated-server posture), which would have REJECTED the host's own
+    registrations. Same fix D13 made with `AcceptExternalJobs`. PickupRadiusM=0 (no gate yet, so the
+    headless bot can pick up from anywhere), no shop catalog (shops are a later slice).
+  - **Host restore keeps starting the item store EMPTY** (`ServerSaveData(career, trains)`, items=null
+    default) — the CORRECT host-native posture (like trainsets): the host's real items persist via
+    DV's own save + re-sweep each session. The LocoMP item save becomes the source only on the
+    dedicated server (M6).
+  - **PresenceShim** gained `ToAbsolutePose(Transform)` + `ToRotation(Pose)` (item capture/spawn
+    coord conversion, same OriginShift math as presence/cars).
+  - **Bot `--grab-items`** (+ `--drop-after <s>`, default 20): picks up world items as they appear
+    (proposing a pickup the server validates), holds each a beat, drops it at the `--at` anchor — the
+    one-PC driver for the loop (folded into RemoteActor beside claim/drive). Headless smoke path:
+    `client.Items.RequestPickup/RequestDrop`, the same calls M4.1's ItemSessionTests already fuzz.
+  - **Panel:** a `Items — N in the world, M carried` line while in a session.
+  - **Deliberately deferred (banked):** held-item avatar display (Option 2 — needs a small protocol
+    v7 `ItemHeld` message + avatar render); shop materialization (Option 3 — client Purchase already
+    mints in Core, needs Resources.Load-into-inventory + RespawnOnDrop/stock handling); joined-GAME-
+    client native item capture (only the HOST captures natively — a real second player grabbing a
+    replica is a friend-session concern, like several M3.5x items); item STATE blob (fuel/label —
+    registered as "" for now; most items have none); container contents (recon §7).
 - **M4.1 — game-free Items core: BUILT + PUSHED 2026-07-19 (late)** (`6064759` feat/`31d1f5c` docs).
   **155/155 ×3, full sln 0 warnings, payload staged to the game's Mods/ + dist/.** The M4 spine's
   authority layer, headless and fuzzed — no Shim yet (that's M4.2). What exists:
@@ -682,6 +740,13 @@ career" toggle or delete the .lmps to re-mint).
 6. **Repo residuals, whenever** (05 §7): branch protection, DCO app (optional), repo topics.
 
 ## Push state
+- **PUSHED 2026-07-20 (Cody's go): M4.2 (Shim ItemSync) as two commits** `64a3382` (feat: ItemSync
+  + PresenceShim helpers + SessionController wiring + bot `--grab-items` + CHANGELOG) → docs (STATE +
+  SESSION, this commit). Only two commits (not the usual three) because M4.2 has NO Core changes —
+  the game-free item core was M4.1. Both build clean; every seam is a public game event so there is
+  no Harmony/patch ordering to sequence. Pushed ahead of the live run under the new batched-testing
+  cadence (in-game verification joins the M4 milestone smoke pass). Remote was unchanged since the
+  M4.1 push (no canary movement expected).
 - **PUSHED 2026-07-19 (Cody's go): the debt/polish pass as three dependency-ordered commits**
   `bc3b62c` (Core/Transport: session-loss seam, 15 s timeout, Loopback UDP-parity dispose) →
   `b03a114` (mod/Shim/bot: session-lost prompt, chain-request execution + product adoption,
@@ -707,14 +772,65 @@ career" toggle or delete the .lmps to re-mint).
 - Staged payload in the game's `Mods/LocoMP/` = **2026-07-19 13:22 build** = the verified commit.
 
 ## Blockers
-- None. The 2026-07-19 debt/polish pass is built, tested, and **STAGED 22:38** (game was not
-  running; stale UMM .cache files cleared). **Push authorized same evening (Cody) without
-  waiting on the smoke run** — the smoke checklist (Where things stand, top bullet) rides the
-  next game session alongside whatever burst comes next: M3.2 (join phases — deferrable) or M4
-  proper (items/inventory — booklet materialization for remotes and real warehouse ops land
-  there). O11/O12 in 00 await Cody's decisions (guest progression; LMPS ratification).
+- None. **M4.2 (Shim ItemSync) BUILT + PUSHED 2026-07-20 (Cody's go)**; 155/155 ×3, 0 warnings,
+  staged to Mods/ + dist/. In-game verification is deferred to the **batched M4 milestone smoke
+  pass** (new cadence — see the run section above; the M4.2 Run-A checklist is banked there).
+  Follow-on slices when Cody wants them: M4.2 Option 2 (held-item avatar display, protocol v7),
+  Option 3 (shop materialization), then comms-radio actions (summon/rerail/delete + fees) round out
+  M4. Separately: M3.2 join phases (deferrable). D16 (M5 UI/UX) planned in `../10-M5-UIUX-PLAN.md`.
+
+## M4 milestone smoke pass (BATCHED — run all M4 slice checklists in one game session)
+
+Testing cadence changed 2026-07-20 (Cody): rather than a live run per burst, the M4 slices are
+verified together in one consolidated pass at the milestone boundary. This section accumulates each
+slice's checklist; run them back-to-back next time the game is up. So far:
+
+### M4.2 — world-item loop (staged, pushed)
+
+The one-PC rig proves the loop with the headless bot as the "other player" (no game world, so it
+picks up / drops via the wire — exactly how it drove trains and jobs).
+
+**Run A — host drops, bot carries, drops back:**
+1. Host per usual on your career save. NEW at load: `host item capture installed — offered N world
+   item(s) to the session` (N = whatever's already lying in your world; 0 is fine). Panel shows an
+   `Items —` line once any exist.
+2. **Drop a handheld item** (lantern, boombox, any grabbable) on the ground. Host log:
+   `world item <id> (<prefab>) left the world locally`? NO — that's the pickup line. On a DROP the
+   host is the source: no despawn; the item registers silently and the panel `Items — 1 in the
+   world` ticks up. (Watch for a `request refused` line — if you see `register: only the world
+   source…` the AcceptExternalItems wiring regressed.)
+3. `LocoMP.Bot --grab-items --at <your coords> --drop-after 15`. Expect: bot logs
+   `picking up world item <id>…` → `picked up item <id> (<prefab>)`; **the item VANISHES from your
+   world** (host despawned it — a remote is "holding" it); panel flips to `0 in the world, 1
+   carried`. After 15 s the bot logs `dropping item <id>…` → **the item REAPPEARS** near your --at
+   point (panel `1 in the world, 0 carried`). That round trip IS the win condition.
+4. Pick the reappeared item up YOURSELF (walk over, grab it natively). Host log: `world item <id>
+   … left the world locally — despawning from the session`; panel `0 in the world`. (You now hold
+   it natively; it's yours, in your SP save.)
+5. Leave → the bot's replicas (none on the host normally) are cleaned; your own native items are
+   UNTOUCHED (reload not required on the host). Re-host → the sweep re-offers whatever's still lying
+   around.
+6. Watch for: zero LocoMP exceptions; items that DON'T disappear when the bot grabs them (capture/
+   despawn gap); items that reappear FROZEN or get stream-disabled when you walk away (the
+   BelongsToPlayer keep-alive failing); a dropped item teleporting "home" instead of staying put
+   (RespawnOnDrop fighting the placement — a recon-flagged risk to confirm).
+
+**Deferred to a friend session (banked):** a real joined GAME client grabbing a replica natively
+(only the HOST captures native grabs this slice — the bot drives the client side over the wire).
 
 ## Session log
+- **2026-07-20** — **M4.2 (Shim ItemSync — world-item loop) BUILT, uncommitted.** Cody picked
+  Option 1 of the M4.2 cut (world drops only; held-display + shops deferred). Recon-first over the
+  ~30 decomp dumps confirmed every seam: `itemPrefabName` is the only identity (LocoMP mints netIds,
+  done in M4.1), capture = public `StorageBase.ItemAdded/ItemRemoved` + `ItemBase.AboutToBeDestroyed`
+  (NO Harmony), spawn = `Resources.Load` + `AddItemToWorldStorage`, and — the clincher — the
+  `ItemDisabler` exempts `BelongsToPlayer` items on a non-paint-station parent, so keep-alive is FREE
+  (no proximity band, no patch). Built `ItemSync` (host capture + reconcile-materialization +
+  `_applying` guard + `_spawnedIds` so Dispose spares host natives), PresenceShim item-pose helpers,
+  host `ItemConfig{AcceptExternalItems=true}` (the D13 `AcceptExternalJobs` analog — default gates
+  the host's own registrations OFF), bot `--grab-items`. Defining-assembly check: everything is in
+  already-referenced Assembly-CSharp + DV.Inventory — NO new game ref, NO protocol bump. 155/155 ×3,
+  full sln 0 warnings, STAGED. Run checklist above rides the next game session.
 - **2026-07-19** — **DEBT/POLISH PASS built (Cody's pick for the burst; M4/M3.2 deferred).**
   Swept every banked debt across STATE/SESSION/08-RISKS into a ledger, then closed the
   solo-closable ones: session-lost prompt (NetClient.Disconnected + 3 s recovery window, no
