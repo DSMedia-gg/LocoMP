@@ -79,6 +79,12 @@ public sealed class NetClient : IDisposable
     public event Action<int>? PlayerLeft;
     public event Action<int, Pose>? PlayerMoved;    // args: id, new pose
 
+    /// <summary>The server hid a remote player who left our spatial relevance set (D10). Unlike
+    /// <see cref="PlayerLeft"/> the player is still in the session — the Shim should hide the avatar
+    /// but keep its state; the next <see cref="PlayerMoved"/> for that id (when we near them again)
+    /// re-shows it. Arg: the hidden player's id.</summary>
+    public event Action<int>? PlayerHidden;
+
     /// <summary>The transport link to the server dropped AFTER we had been admitted (host died,
     /// eviction, network loss). Not raised for failed joins — those surface via timeout/Rejected.
     /// The mirrors are already reset when this fires; the frontend decides what "session lost"
@@ -149,6 +155,7 @@ public sealed class NetClient : IDisposable
                 case MessageType.PlayerLeft: HandlePlayerLeft(r); break;
                 case MessageType.PlayerPose: HandlePlayerPose(r); break;
                 case MessageType.TimeSync: HandleTimeSync(r); break;
+                case MessageType.InterestHide: HandleInterestHide(r); break;
                 default:
                     if (!Trains.TryHandle(type, r) && !Career.TryHandle(type, r)) Items.TryHandle(type, r);
                     break;
@@ -218,6 +225,16 @@ public sealed class NetClient : IDisposable
     {
         long serverTime = r.ReadInt64();
         ServerTimeOffsetMs = serverTime - _clock.NowMs;
+    }
+
+    /// <summary>Hide a replica that left our relevance scope (D10). Burst 1 gates only players — an
+    /// Item/Trainset hide is reserved for Burst 2 (routed to Items/Trains then), so its id is read past
+    /// and ignored here for now. The roster entry is kept: a later pose re-shows the avatar.</summary>
+    private void HandleInterestHide(PacketReader r)
+    {
+        var kind = (EntityKind)r.ReadByte();
+        int id = (int)r.ReadVarUInt();
+        if (kind == EntityKind.Player && _players.ContainsKey(id)) PlayerHidden?.Invoke(id);
     }
 
     public void Dispose()

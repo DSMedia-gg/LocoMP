@@ -264,4 +264,16 @@ public enum MessageType : byte
     /// returns to the server (it resumes driving); a self-registered consist parks (owner 0). The
     /// counterpart to <see cref="OwnershipRequest"/>; only the current owner may release.</summary>
     OwnershipRelease = 63,
+
+    // ── D10: spatial interest management. The server relays a spatial entity's stream only to clients
+    // whose player is near it; when an entity leaves a client's relevance set the server tells that one
+    // client to HIDE the replica — a presence hint, NOT an authoritative removal (the entity still
+    // exists; TrainsetRemove/ItemDespawned/PlayerLeft remain the "it's gone everywhere" messages, the
+    // same distinction as CarDeleteNotice vs a distance stream-out). ──
+
+    /// <summary>server → ONE client: hide a replica that left your relevance set. Wire:
+    /// [kind:byte (<see cref="Session.EntityKind"/>)][id:varuint]. The client hides but keeps the
+    /// object (cheap re-show on re-enter); a re-enter re-sends the entity's full state (a pose for a
+    /// player, TrainsetCreate/ItemSpawned for a world object).</summary>
+    InterestHide = 64,
 }

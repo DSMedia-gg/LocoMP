@@ -258,6 +258,92 @@ public sealed class BudgetBench
                        (worstKbps > BandwidthBudgetKbps ? "OVER at scale → interest management (D10) is the real gap, as audit §6 says" : "within budget"));
     }
 
+    /// <summary>D10 Burst 1 proof, MEASURED (not modelled): with spatial interest on, a client only
+    /// receives the pose stream of players near it. Two equal clusters ~2 km apart, all streaming; we
+    /// weigh the bytes the server actually sends to a probe in one cluster, interest OFF vs ON.</summary>
+    [Fact]
+    public void Interest_management_cuts_a_distant_clients_pose_bandwidth()
+    {
+        const int perCluster = 8;
+        long off = MeasureProbePoseBytes(interestEnabled: false, perCluster);
+        long on = MeasureProbePoseBytes(interestEnabled: true, perCluster);
+
+        _out.WriteLine("-- Pose interest management (D10 Burst 1), MEASURED over a steady interval --");
+        _out.WriteLine($"{perCluster} players near the probe + {perCluster} players ~2 km away, all streaming poses at 30 Hz");
+        _out.WriteLine($"interest OFF (broadcast-all): {off:N0} B to the probe");
+        _out.WriteLine($"interest ON  (spatial)      : {on:N0} B to the probe   ({(off == 0 ? 0 : 100.0 * on / off):F0}% of broadcast-all)");
+        _out.WriteLine("");
+
+        Assert.True(off > 0, "the probe must receive poses when filtering is off");
+        Assert.True(on > 0, "the probe must still receive its NEAR cluster when filtering is on");
+        // The far cluster (half the traffic) is gated out — on should be well under broadcast-all.
+        Assert.True(on < off * 0.6, $"interest ON ({on:N0} B) should be well under broadcast-all ({off:N0} B)");
+    }
+
+    /// <summary>Run the two-cluster scenario once and return the bytes the server sent to the probe
+    /// over a fixed streaming interval, after relevance has settled.</summary>
+    private long MeasureProbePoseBytes(bool interestEnabled, int perCluster)
+    {
+        var hub = new LoopbackNetwork();
+        var counted = new CountingTransport(hub.Server);
+        var clock = new ManualClock();
+        var interest = new InterestConfig
+        {
+            Enabled = interestEnabled,
+            FilterPlayers = true,
+            EnterRadiusM = 200f,
+            LeaveRadiusM = 300f,
+            RecomputeIntervalMs = 1,
+        };
+        var server = new NetServer(counted, new ServerConfig(Identity, interest: interest), clock);
+
+        var probe = new NetClient(hub.Connect(out int probeId), Identity, "Probe", clock, playerKey: "key-probe");
+        var near = new List<NetClient>();
+        var far = new List<NetClient>();
+        for (int i = 0; i < perCluster; i++)
+            near.Add(new NetClient(hub.Connect(out _), Identity, $"N{i}", clock, playerKey: $"key-n{i}"));
+        for (int i = 0; i < perCluster; i++)
+            far.Add(new NetClient(hub.Connect(out _), Identity, $"F{i}", clock, playerKey: $"key-f{i}"));
+        var all = new List<NetClient> { probe };
+        all.AddRange(near);
+        all.AddRange(far);
+        PumpClocked(clock, server, all, 8);
+
+        // Establish positions and let relevance settle: near cluster around the origin, far cluster ~2 km east.
+        for (int r = 0; r < 12; r++)
+        {
+            probe.SendPose(PoseAt(10f, 0f));
+            for (int i = 0; i < near.Count; i++) near[i].SendPose(PoseAt(i * 5f, 0f));
+            for (int i = 0; i < far.Count; i++) far[i].SendPose(PoseAt(2000f + i * 5f, 0f));
+            PumpClocked(clock, server, all, 2);
+        }
+
+        // Weigh a steady streaming interval: everyone moves a touch each tick; count bytes to the probe.
+        counted.Reset();
+        const int ticks = 20;
+        for (int k = 0; k < ticks; k++)
+        {
+            probe.SendPose(PoseAt(10f, k * 0.1f));
+            for (int i = 0; i < near.Count; i++) near[i].SendPose(PoseAt(i * 5f, k * 0.1f));
+            for (int i = 0; i < far.Count; i++) far[i].SendPose(PoseAt(2000f + i * 5f, k * 0.1f));
+            PumpClocked(clock, server, all, 1);
+        }
+
+        long bytes = counted.BytesTo(probeId);
+        server.Dispose();
+        return bytes;
+    }
+
+    private static void PumpClocked(ManualClock clock, NetServer server, IEnumerable<NetClient> clients, int rounds)
+    {
+        for (int i = 0; i < rounds; i++)
+        {
+            clock.Advance(50);
+            server.Poll();
+            foreach (NetClient c in clients) c.Poll();
+        }
+    }
+
     private static IEnumerable<NetClient> AllOf(NetClient host, List<NetClient> extras, NetClient? joiner = null)
     {
         yield return host;
