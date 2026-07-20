@@ -40,5 +40,8 @@ public static class ProtocolVersion
     /// <remarks>v10 (M6-B.3): drivable server trains — a player may claim an ambient server-owned
     /// consist and drive it, then hand it back via the new OwnershipRelease message (MessageType 63);
     /// a v9 peer wouldn't know the new message, so this is a deliberate incompatible bump.</remarks>
-    public const int Current = 10;
+    /// <remarks>v11 (D10, interest management): the server may send InterestHide (MessageType 64) to
+    /// tell one client to hide a replica that left its spatial relevance set; a v10 peer wouldn't know
+    /// the message, so it is a deliberate incompatible bump (the filtering itself is off by default).</remarks>
+    public const int Current = 11;
 }

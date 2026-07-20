@@ -13,7 +13,7 @@ namespace LocoMP.Core.Session;
 public sealed class ServerConfig
 {
     public ServerConfig(HandshakeRequest expected, string? password = null, int maxPlayers = 32,
-        CareerConfig? career = null, ItemConfig? items = null)
+        CareerConfig? career = null, ItemConfig? items = null, InterestConfig? interest = null)
     {
         Expected = expected ?? throw new ArgumentNullException(nameof(expected));
         Password = password;
@@ -21,6 +21,7 @@ public sealed class ServerConfig
         MaxPlayers = maxPlayers;
         Career = career ?? new CareerConfig();
         Items = items ?? new ItemConfig();
+        Interest = interest ?? new InterestConfig();
     }
 
     /// <summary>Career knobs (M3): preset, starting grant, claim rules, generator data. The default
@@ -31,6 +32,11 @@ public sealed class ServerConfig
     /// default sells nothing and gates external items, so an unconfigured host has an inert item
     /// layer until purchases or world drops appear.</summary>
     public ItemConfig Items { get; }
+
+    /// <summary>Spatial interest-management knobs (D10): per-client relevance radii + which entity
+    /// kinds to gate. The default is disabled, so an unconfigured server broadcasts to everyone exactly
+    /// as before; a host/dedicated server opts in.</summary>
+    public InterestConfig Interest { get; }
 
     /// <summary>The protocol/build/mod fingerprint a joining client must match exactly.</summary>
     public HandshakeRequest Expected { get; }

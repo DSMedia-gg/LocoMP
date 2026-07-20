@@ -21,6 +21,13 @@ public sealed class NetServer : IDisposable
     private readonly IClock _clock;
     private readonly Dictionary<int, PlayerState> _players = new();
 
+    // Peers that have sent at least one real pose. Until a peer is here its position is unknown, so
+    // interest treats it fail-open (an unposed observer sees everything; an unposed player-entity is
+    // never hidden). Cleared on disconnect.
+    private readonly HashSet<int> _posed = new();
+    private readonly InterestManager _interest;
+    private long _lastInterestMs;
+
     public NetServer(ITransport transport, ServerConfig config, IClock clock, ServerSaveData? restore = null)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
@@ -32,6 +39,18 @@ public sealed class NetServer : IDisposable
         Career = new ServerCareer(_transport, _clock, _config.Career, () => _players.Keys, restore?.Career, poseOf);
         Items = new ServerItems(_transport, () => _players.Keys, _config.Items, poseOf, Career, restore?.Items);
         if (restore != null) Trains.Restore(restore.Trains);
+
+        // Interest management (D10). Its observer position is pose-gated (fail-open until a peer moves),
+        // separate from the career/item proximity poseOf above; enter/leave turn into pose gating +
+        // hide packets here (Burst 1: players only).
+        _interest = new InterestManager(
+            _config.Interest,
+            () => _players.Keys,
+            id => (_posed.Contains(id) && _players.TryGetValue(id, out PlayerState? p))
+                ? (p.Pose.Px, p.Pose.Pz)
+                : ((float, float)?)null,
+            OnInterestEnter,
+            OnInterestLeave);
 
         _transport.Received += OnReceived;
         _transport.PeerDisconnected += OnPeerDisconnected;
@@ -49,6 +68,10 @@ public sealed class NetServer : IDisposable
     /// <summary>The item subsystem (M4): world items, per-player inventory, shop purchases.</summary>
     public ServerItems Items { get; }
 
+    /// <summary>The interest-management subsystem (D10): per-client spatial relevance. Exposed for the
+    /// host UI, admin, and tests. Inert unless <see cref="ServerConfig.Interest"/> is enabled.</summary>
+    public InterestManager Interest => _interest;
+
     public int PlayerCount => _players.Count;
 
     /// <summary>Raised when a player passes the handshake and is added to the roster.</summary>
@@ -63,6 +86,18 @@ public sealed class NetServer : IDisposable
     {
         _transport.Poll();
         Career.Tick();
+
+        // Re-evaluate spatial relevance as players move (D10) — throttled, and a no-op while disabled.
+        // The hot relay reads the cached relevance set, so recomputing a few times a second is ample.
+        if (_config.Interest.Enabled)
+        {
+            long now = _clock.NowMs;
+            if (now - _lastInterestMs >= _config.Interest.RecomputeIntervalMs)
+            {
+                _lastInterestMs = now;
+                _interest.Recompute();
+            }
+        }
     }
 
     /// <summary>Snapshot everything persistence v1 stores (03 §7): career + world. Serialize with
@@ -150,6 +185,7 @@ public sealed class NetServer : IDisposable
 
         var state = new PlayerState(peerId, name, Pose.Identity);
         _players[peerId] = state;
+        _interest.AddClient(peerId);                       // relevance tracking (fail-open until it moves)
 
         SendAccepted(peerId, state);                       // newcomer learns id + time + roster
         BroadcastPlayerJoined(state, exceptPeer: peerId);  // everyone else learns the newcomer
@@ -202,14 +238,19 @@ public sealed class NetServer : IDisposable
         _ = r.ReadVarUInt();               // client-supplied id — ignored; server stamps its own (authority)
         Pose pose = PresenceCodec.ReadPose(r);
         state.Pose = pose;
+        _posed.Add(peerId);                // this peer now has a real position (enables interest trimming)
 
         var w = new PacketWriter(40)
             .WriteByte((byte)MessageType.PlayerPose)
             .WriteVarUInt((uint)peerId);   // authoritative id
         PresenceCodec.WritePose(w, pose);
         byte[] payload = w.ToArray();
+        // Relay only to clients for whom this player is in relevance scope (D10). Off by default and
+        // fail-open, so this is the plain all-except-sender broadcast until interest is enabled.
+        var senderKey = new EntityKey(EntityKind.Player, peerId);
         foreach (int id in _players.Keys)
-            if (id != peerId) _transport.Send(id, payload, DeliveryMethod.SequencedUnreliable);
+            if (id != peerId && _interest.IsRelevant(id, senderKey))
+                _transport.Send(id, payload, DeliveryMethod.SequencedUnreliable);
     }
 
     private void OnPeerDisconnected(int peerId) => Remove(peerId);
@@ -228,7 +269,32 @@ public sealed class NetServer : IDisposable
         Trains.OnPlayerRemoved(peerId);                    // park their consists, free their grants
         Items.OnPlayerRemoved(peerId);                     // mark their held items offline — BEFORE
         Career.OnPlayerRemoved(peerId);                    // career drops the peer↔key map it reads
+
+        _posed.Remove(peerId);
+        _interest.RemoveClient(peerId);                    // stop tracking them as an observer
+        _interest.ForgetEntity(new EntityKey(EntityKind.Player, peerId)); // and drop them from others'
+                                                           // scopes (PlayerLeft above already hid them)
         PlayerRemoved?.Invoke(peerId);
+    }
+
+    /// <summary>An entity newly in a client's relevance scope (D10). Burst 1: a player needs no
+    /// packet — its identity is already global (PlayerJoined) and the next relayed pose, now permitted
+    /// by <see cref="InterestManager.IsRelevant"/>, re-shows the avatar. Item/trainset full-state
+    /// replay on enter is Burst 2.</summary>
+    private void OnInterestEnter(int peerId, EntityKey key)
+    {
+    }
+
+    /// <summary>An entity left a client's relevance scope: tell just that client to hide the replica
+    /// (a presence hint — the entity still exists). Reliable-ordered: a hide must not be dropped.</summary>
+    private void OnInterestLeave(int peerId, EntityKey key)
+    {
+        byte[] payload = new PacketWriter(8)
+            .WriteByte((byte)MessageType.InterestHide)
+            .WriteByte((byte)key.Kind)
+            .WriteVarUInt((uint)key.Id)
+            .ToArray();
+        _transport.Send(peerId, payload, DeliveryMethod.ReliableOrdered);
     }
 
     public void Dispose()
@@ -236,5 +302,6 @@ public sealed class NetServer : IDisposable
         _transport.Received -= OnReceived;
         _transport.PeerDisconnected -= OnPeerDisconnected;
         _players.Clear();
+        _posed.Clear();
     }
 }
