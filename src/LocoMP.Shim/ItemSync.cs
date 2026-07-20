@@ -49,6 +49,7 @@ public sealed class ItemSync : IDisposable
     private readonly Dictionary<int, ItemBase> _itemByServerId = new();
     private readonly Dictionary<ItemBase, int> _serverIdByItem = new();
     private readonly HashSet<int> _spawnedIds = new();           // ids WE materialized (vs host natives)
+    private readonly Dictionary<int, ItemBase> _hiddenNatives = new(); // host natives a remote carried off — hidden, not destroyed
     private readonly Dictionary<uint, ItemBase> _pendingRegistration = new(); // token → awaiting id echo
     private readonly Dictionary<ItemBase, Action<ItemBase>> _destroyHooks = new();
     private readonly HashSet<string> _missingPrefabWarned = new(StringComparer.Ordinal);
@@ -123,9 +124,15 @@ public sealed class ItemSync : IDisposable
     {
         string? prefab = PrefabNameOf(item);
         if (prefab == null) return false;
+        // A DV personal essential (Map, CommsRadio, wallet, Compass, DVGuide) syncs as LOCKED — visible
+        // to everyone, but only its owner can pick it up ("look, but don't touch"). Job paperwork is ALSO
+        // flagged essential by DV, but it's shared crew state (both read the brief; anyone can validate a
+        // leaflet, the claim following via the career sync — not the paper), so it registers as a normal
+        // shareable item. Everything else is shareable too.
+        bool locked = IsEssential(item) && !IsJobItem(item);
         uint token = _nextToken++;
         _pendingRegistration[token] = item;
-        _client.Items.RegisterWorldItem(prefab, PresenceShim.ToAbsolutePose(item.transform), string.Empty, token);
+        _client.Items.RegisterWorldItem(prefab, PresenceShim.ToAbsolutePose(item.transform), string.Empty, token, locked);
         return true;
     }
 
@@ -185,7 +192,9 @@ public sealed class ItemSync : IDisposable
             bool haveLocal = _itemByServerId.ContainsKey(item.Def.Id);
             if (item.Location == ItemLocationKind.World)
             {
-                if (!haveLocal) SpawnReplica(item);
+                if (haveLocal) continue;                                  // already present
+                if (_hiddenNatives.ContainsKey(item.Def.Id)) ReShowNative(item); // our native, dropped back
+                else SpawnReplica(item);                                  // a genuinely-remote item
             }
             else if (haveLocal)
             {
@@ -238,7 +247,10 @@ public sealed class ItemSync : IDisposable
             Map(spawned, item.Def.Id);
             _spawnedIds.Add(item.Def.Id);
             HookDestroy(spawned);
-            _log($"[items] world item {item.Def.Id} ({item.Def.PrefabName}) materialized");
+            // A locked personal essential replicates as VISIBLE; the SERVER refuses any pickup of it, so
+            // a non-owner can never take it. Making the replica physically non-grabbable in-hand (VR) is a
+            // friend-session follow-on (needs the VRTK/interaction ref) — server enforcement stands alone.
+            _log($"[items] world item {item.Def.Id} ({item.Def.PrefabName}) materialized{(item.WorldLocked ? " (locked — owner only)" : "")}");
         }
         catch (Exception e)
         {
@@ -250,11 +262,17 @@ public sealed class ItemSync : IDisposable
         }
     }
 
-    /// <summary>Remove an item's local GameObject. On the host this can be a native item (carried off
-    /// by a remote) or a replica; either way the physical object goes. Guarded so the storage/destroy
-    /// events it fires don't loop back as a despawn-to-the-server.</summary>
+    /// <summary>An item left the shared world (a remote carried it off, or it was removed). A REPLICA we
+    /// spawned is destroyed outright. A host NATIVE is only HIDDEN — <c>SetActive(false)</c> + pulled from
+    /// world storage — never destroyed: destroying a real DV item fights its lifecycle (RespawnOnDrop
+    /// re-parents it mid-destroy → "Cannot set parent while being destroyed", and essential items like
+    /// the map respawn), and the recon confirmed DV's own way to make an item vanish is to deactivate it.
+    /// A hidden native is re-shown at its new pose if the remote drops it back (<see cref="ReShowNative"/>)
+    /// and reactivated on Dispose, so the host's real item is never lost or duplicated. Guarded so the
+    /// storage events it fires don't loop back as a despawn-to-the-server.</summary>
     private void DespawnLocal(int id)
     {
+        bool ours = _spawnedIds.Contains(id);
         if (!_itemByServerId.TryGetValue(id, out ItemBase item)) return;
         UnmapById(id);
         if (item == null) return;
@@ -263,11 +281,51 @@ public sealed class ItemSync : IDisposable
         {
             UnhookDestroy(item);
             if (StorageController.Instance != null) StorageController.Instance.RemoveItemFromStorageItemList(item);
-            Object.Destroy(item.gameObject);
+            if (ours)
+            {
+                Object.Destroy(item.gameObject);        // our replica — safe to destroy
+                _log($"[items] replica item {id} removed (carried off / gone)");
+            }
+            else
+            {
+                item.gameObject.SetActive(false);       // the host's real item — hide, never destroy
+                _hiddenNatives[id] = item;
+                _log($"[items] native item {id} hidden (a remote carried it off)");
+            }
         }
         catch (Exception e)
         {
-            _log($"[items] despawn of item {id} failed (world teardown?): {e.Message}");
+            _log($"[items] removing item {id} failed (world teardown?): {e.Message}");
+        }
+        finally
+        {
+            _applying = false;
+        }
+    }
+
+    /// <summary>A host native we hid (a remote carried it off) is a world item again — the remote dropped
+    /// it back. Re-show the SAME GameObject at the new pose instead of spawning a replica, so the item is
+    /// never duplicated. If DV destroyed it while hidden, fall through so the next reconcile spawns a
+    /// replica.</summary>
+    private void ReShowNative(ClientItem item)
+    {
+        if (!_hiddenNatives.TryGetValue(item.Def.Id, out ItemBase native)) return;
+        _hiddenNatives.Remove(item.Def.Id);
+        if (native == null) return; // gone while hidden — reconcile will SpawnReplica next pass
+        _applying = true;
+        try
+        {
+            native.transform.SetPositionAndRotation(
+                PresenceShim.ToLocalPosition(item.WorldPose), PresenceShim.ToRotation(item.WorldPose));
+            native.gameObject.SetActive(true);
+            if (StorageController.Instance != null) StorageController.Instance.AddItemToWorldStorage(native);
+            Map(native, item.Def.Id);   // native (NOT added to _spawnedIds) — Dispose leaves it be
+            HookDestroy(native);
+            _log($"[items] native item {item.Def.Id} shown again (a remote dropped it back)");
+        }
+        catch (Exception e)
+        {
+            _log($"[items] re-show of item {item.Def.Id} failed: {e.Message}");
         }
         finally
         {
@@ -320,6 +378,31 @@ public sealed class ItemSync : IDisposable
         catch { return null; }
     }
 
+    /// <summary>DV's own per-player flag — Map/CommsRadio/wallet/Compass/DVGuide and dynamically-marked
+    /// items (job booklets) set it. Essentials sync LOCKED (look-but-don't-touch), EXCEPT job paperwork
+    /// (see <see cref="IsJobItem"/>), which is shared.</summary>
+    private static bool IsEssential(ItemBase item)
+    {
+        try { return item.InventorySpecs != null && item.InventorySpecs.IsEssential; }
+        catch { return false; }
+    }
+
+    /// <summary>Job paperwork (booklet / leaflet-overview / report). DV flags it essential, but it's
+    /// shared crew state — both crew read the brief, and anyone can insert a leaflet at a validator (the
+    /// claim then follows via the career sync, not the paper) — so it syncs like a normal shareable item,
+    /// not a locked personal essential.</summary>
+    private static bool IsJobItem(ItemBase item)
+    {
+        try
+        {
+            return item.GetComponent<JobBooklet>() != null
+                || item.GetComponent<JobOverview>() != null
+                || item.GetComponent<JobReport>() != null;
+        }
+        catch { return false; }
+    }
+
+
     public void Dispose()
     {
         _client.Items.ItemAdded -= OnServerItemChanged;
@@ -333,6 +416,20 @@ public sealed class ItemSync : IDisposable
             _worldStorage.ItemAdded -= OnNativeWorldAdded;
             _worldStorage.ItemRemoved -= OnNativeWorldRemoved;
         }
+
+        // Restore any host natives we hid (a remote was holding them at leave) — reactivate + re-add to
+        // world storage so the host's real world is whole again (they belong to its SP save).
+        foreach (ItemBase native in _hiddenNatives.Values.ToList())
+        {
+            if (native == null) continue;
+            try
+            {
+                native.gameObject.SetActive(true);
+                if (StorageController.Instance != null) StorageController.Instance.AddItemToWorldStorage(native);
+            }
+            catch { /* world teardown — the SP save still owns the item */ }
+        }
+        _hiddenNatives.Clear();
 
         // Clean up only the replicas WE created — the host's real native items stay in its world
         // (they belong to its SP save; deleting them on leave would be data loss).

@@ -82,12 +82,13 @@ public sealed class TrainsSaveData
 /// 02 §5). World items store their pose; possessed items store the owning scope.</summary>
 public sealed class ItemSave
 {
-    public ItemSave(ItemDef def, ItemLocationKind location, Pose worldPose, string ownerScope)
+    public ItemSave(ItemDef def, ItemLocationKind location, Pose worldPose, string ownerScope, bool worldLocked = false)
     {
         Def = def;
         Location = location;
         WorldPose = worldPose;
         OwnerScope = ownerScope;
+        WorldLocked = worldLocked;
     }
 
     public ItemDef Def { get; }
@@ -96,6 +97,9 @@ public sealed class ItemSave
 
     /// <summary>Empty string in the world; the policy scope (player key or shared account) when held.</summary>
     public string OwnerScope { get; }
+
+    /// <summary>A set-down personal essential (map/radio/wallet) — restored as look-but-don't-touch.</summary>
+    public bool WorldLocked { get; }
 }
 
 /// <summary>The items half of a server save (M4): world-dropped items + per-player inventory + the

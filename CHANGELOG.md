@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Personal items stay yours (M4.6): a personal essential you set down in the world — your map, comms
+  radio, wallet, compass or the DV guide — is now "look, but don't touch". Everyone in the session can
+  SEE it lying where you left it, but only you can pick it back up; another player's attempt is refused
+  ("that's someone's personal item"). Job paperwork is deliberately exempt — a booklet is shared crew
+  work, so anyone can still grab one. Under the hood, when another player carries off one of the host's
+  real items it's now hidden and restored rather than destroyed and re-spawned, so it can't fight the
+  game's own item lifecycle. Network protocol is now v9. Also fixes a host-side frame-rate hitch: the
+  comms-radio hook no longer scans the whole scene every frame while you hold the radio.
 - Comms-radio actions in multiplayer (M4): the rerail, clear (delete), and summon tools now work in a
   session and cost money through the shared economy. Rerailing a derailed car, deleting a car, or
   summoning a work train charges the player who did it — previously these were silently FREE in a

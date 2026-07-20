@@ -45,12 +45,13 @@ public sealed class ItemDef
 /// re-poses without re-minting), mirroring how a trainset's owner changes without a new car id.</summary>
 public sealed class ItemRecord
 {
-    internal ItemRecord(ItemDef def, ItemLocationKind location, Pose worldPose, string ownerScope)
+    internal ItemRecord(ItemDef def, ItemLocationKind location, Pose worldPose, string ownerScope, bool worldLocked = false)
     {
         Def = def;
         Location = location;
         WorldPose = worldPose;
         OwnerScope = ownerScope;
+        WorldLocked = worldLocked;
     }
 
     public ItemDef Def { get; internal set; }
@@ -58,6 +59,12 @@ public sealed class ItemRecord
 
     /// <summary>Valid when <see cref="Location"/> is World; Pose.Identity otherwise.</summary>
     public Pose WorldPose { get; internal set; }
+
+    /// <summary>A "look, but don't touch" world item — a DV personal essential (map, radio, wallet…)
+    /// its owner set down. Visible to everyone, but only its owner interacts, so it can never be picked
+    /// up over the wire (the owner reclaims it natively, not via a request). Meaningful only in the
+    /// World; a picked-up item is never locked because a locked item is never picked up.</summary>
+    public bool WorldLocked { get; internal set; }
 
     /// <summary>Valid when <see cref="Location"/> is Possessed: the policy scope holding it (a player
     /// key, or the shared account in shared-career). NEVER leaves the server as-is — the wire carries

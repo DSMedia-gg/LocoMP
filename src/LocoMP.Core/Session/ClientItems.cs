@@ -19,6 +19,10 @@ public sealed class ClientItem
     public Pose WorldPose { get; internal set; }
     public int OwnerPeerId { get; internal set; }
     public string OwnerName { get; internal set; } = string.Empty;
+
+    /// <summary>A world item that is a personal essential (map/radio/wallet) set down by its owner:
+    /// visible to all, but only its owner may pick it up. The Shim renders its replica non-grabbable.</summary>
+    public bool WorldLocked { get; internal set; }
 }
 
 /// <summary>
@@ -85,7 +89,7 @@ public sealed class ClientItems
 
     /// <summary>World source only: register a world item the host owns. The <paramref name="token"/>
     /// comes back on the <see cref="RegisterAccepted"/> echo so the Shim maps its GameObject.</summary>
-    public void RegisterWorldItem(string prefabName, Pose pose, string state, uint token)
+    public void RegisterWorldItem(string prefabName, Pose pose, string state, uint token, bool locked = false)
     {
         if (!_joined()) return;
         var w = new PacketWriter(64)
@@ -93,6 +97,7 @@ public sealed class ClientItems
             .WriteVarUInt(token);
         ItemCodec.WriteItemDef(w, new ItemDef(0, prefabName, state)); // id ignored — server assigns
         PresenceCodec.WritePose(w, pose);
+        w.WriteByte(locked ? (byte)1 : (byte)0); // a personal essential (look-but-don't-touch)
         _transport.Send(NetProtocol.ServerPeer, w.ToArray(), DeliveryMethod.ReliableOrdered);
     }
 
@@ -174,12 +179,14 @@ public sealed class ClientItems
         if (kind == ItemLocationKind.World)
         {
             item.WorldPose = PresenceCodec.ReadPose(r);
+            item.WorldLocked = r.ReadByte() != 0;
             item.OwnerPeerId = 0;
             item.OwnerName = string.Empty;
         }
         else
         {
             item.WorldPose = Pose.Identity;
+            item.WorldLocked = false;
             item.OwnerPeerId = (int)r.ReadVarUInt();
             item.OwnerName = r.ReadString();
         }
