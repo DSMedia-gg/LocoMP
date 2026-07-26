@@ -1,3 +1,4 @@
+using System.Linq;
 using LocoMP.Core.Net;
 using LocoMP.Core.Protocol;
 using LocoMP.Core.Session;
@@ -122,6 +123,20 @@ public sealed class BotClient : IDisposable
         };
         _client.PlayerJoined += p => _log($"[{_name}] sees player join: {p.Name} (id {p.Id})");
         _client.PlayerLeft += id => _log($"[{_name}] sees player leave: id {id}");
+        // Subscribed unconditionally, for every mode: "the replica vanishes on the OTHER peer" is the entire
+        // assertion of the comms-radio delete check (RUNBOOK A3 Run B), and without this line the bot has no
+        // way to report it — a lingering ghost replica and a correctly-removed one look identical from a
+        // silent console. Registration is already logged; removal was not.
+        _client.Trains.View.TrainsetRemoved += setId =>
+            _log($"[{_name}] trainset {setId} removed by the host — replica gone");
+        // Report each registered car's PLATE as the wire actually carries it. --rerail/--clear address cars by
+        // plate (FindCarByPlate matches CarDef.GameId), and both the host's TrainSync.SafeId and the wire
+        // default an unreadable plate to "" — so an empty GameId makes every plate lookup fail while looking
+        // like "car not found". Printing `<no-plate>` explicitly turns that into a visible fact instead of a
+        // silent dead end (needed 2026-07-27, when host fee labels fell back to Unity object names).
+        _client.Trains.TrainsetRegistered += (_, def) =>
+            _log($"[{_name}] set {def.Id}: " + string.Join(" ", def.Cars.Select(c =>
+                $"{c.Id}:{c.Kind}/{(c.GameId.Length > 0 ? c.GameId : "<no-plate>")}")));
     }
 
     private void Teardown()

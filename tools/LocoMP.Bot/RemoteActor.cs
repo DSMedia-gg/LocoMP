@@ -39,11 +39,15 @@ public sealed class RemoteActor
     private int _heldItemId = -1;       // the world item we currently hold (-1 = none)
     private int _pendingPickupId = -1;  // a pickup request is in flight
     private double _holdElapsed;
+    private Pose? _grabbedPose;         // the item's world pose captured at pickup — re-drop faithfully (real rotation + resting height) instead of a synthetic ground/identity guess
     private double _grabScanAccum;
     private readonly HashSet<int> _refusedItems = new();
     private bool _buyRequested;         // --buy: the purchase has been sent
     private bool _commsSent;            // --rerail/--clear: the comms action has been sent
     private double _commsWaitAccum;
+    private double _commsSearchAccum;   // how long a --rerail/--clear plate has gone unresolved
+    private double _plateDumpAccum;     // settle delay before the one-shot plate inventory
+    private bool _platesDumped;         // the joined-world car/plate inventory has been printed once
 
     public RemoteActor(BotOptions opts, string name, Action<string> log)
     {
@@ -60,6 +64,33 @@ public sealed class RemoteActor
         TickDrive(client, dt);
         TickItems(client, dt);
         TickComms(client, dt);
+        TickPlateDump(client, dt);
+    }
+
+    /// <summary>Print the joined world's cars and their plates, once. The sets that existed BEFORE we joined
+    /// arrive as bulk state rather than through <c>TrainsetRegistered</c>, so an event subscription never sees
+    /// them — this reads the view directly. Exists because <c>--rerail</c>/<c>--clear</c> address cars by
+    /// plate, so "which plates are actually on the wire?" has to be answerable without guessing.</summary>
+    private void TickPlateDump(NetClient client, double dt)
+    {
+        if (_platesDumped || !client.Joined) return;
+        _plateDumpAccum += dt;
+        if (_plateDumpAccum < 1.5) return; // let the join burst land
+        _platesDumped = true;
+
+        // The career snapshot belongs HERE rather than only on CareerStateReceived: that state arrives in the
+        // join burst, before Bind() subscribes, so the event never replays and the subscription alone prints
+        // nothing. Without this line "did the joiner inherit the host's licenses?" (RUNBOOK B1 · D15
+        // auto-grant) has no observable at all on the bot side.
+        _log($"[{_name}] career: ${client.Career.BalanceCents / 100.0:F2}, licenses: {LicenseList(client)}");
+
+        var sets = client.Trains.View.Sets.Values.OrderBy(s => s.Id).ToList();
+        int plated = sets.Sum(s => s.Cars.Count(c => c.GameId.Length > 0));
+        int total = sets.Sum(s => s.Cars.Count);
+        _log($"[{_name}] world: {sets.Count} set(s), {total} car(s), {plated} with a plate");
+        foreach (TrainsetDef set in sets)
+            _log($"[{_name}]   set {set.Id}: " + string.Join(" ", set.Cars.Select(c =>
+                $"{c.Id}:{c.Kind}/{(c.GameId.Length > 0 ? c.GameId : "<no-plate>")}")));
     }
 
     /// <summary>M4 comms radio: as the "remote player", ask the host to rerail/delete one of its cars
@@ -75,7 +106,20 @@ public sealed class RemoteActor
 
         string plate = _opts.RerailCar.Length > 0 ? _opts.RerailCar : _opts.ClearCar;
         int carId = FindCarByPlate(client, plate);
-        if (carId < 0) return; // not on the wire yet — try again next second
+        if (carId < 0)
+        {
+            // Retry — the car may not be on the wire yet — but say so after a while instead of retrying
+            // mutely forever. A plate that will NEVER resolve (host sent it empty, or a typo) is otherwise
+            // indistinguishable from a slow join, and the run just appears to hang having done nothing.
+            _commsSearchAccum += 1.0;
+            if (_commsSearchAccum >= 10.0)
+            {
+                _commsSearchAccum = 0;
+                _log($"[{_name}] still cannot find a car with plate '{plate}' — see the plate list above; " +
+                     "an empty GameId on the host side means no plate lookup can ever match");
+            }
+            return;
+        }
 
         _commsSent = true;
         if (_opts.RerailCar.Length > 0)
@@ -125,7 +169,14 @@ public sealed class RemoteActor
         client.Career.CareerStateReceived += () =>
             _log($"[{_name}] career: ${client.Career.BalanceCents / 100.0:F2}, licenses: {LicenseList(client)}");
         client.Career.JobAdded += _ => _noneClaimableLogged = false; // fresh board entry — re-scan
-        client.Career.LicenseGranted += _ => _noneClaimableLogged = false;
+        client.Career.LicenseGranted += id =>
+        {
+            // Logged, not just consumed: a license reaching a joined player MID-SESSION is exactly what
+            // RUNBOOK B1 step 3 asserts (the host buys one natively, it propagates live), and the join-time
+            // career snapshot cannot show it because it already ran.
+            _log($"[{_name}] license granted mid-session: {id}");
+            _noneClaimableLogged = false; // may unlock a board entry we already skipped
+        };
         client.Career.JobChanged += job =>
         {
             if (job.ClaimantPeerId == client.LocalId && job.State == JobLifecycle.Claimed && _claimedJobId < 0)
@@ -178,6 +229,19 @@ public sealed class RemoteActor
             };
         }
 
+        // A server refusal matters to EVERY item mode, not just --grab-items, so this subscription is
+        // deliberately NOT nested in the grab block: a --buy the server refuses (not for sale /
+        // insufficient funds) would otherwise be indistinguishable from a silent no-op, making a headless
+        // refusal check unverifiable. Mirrors the Tick guard's condition.
+        if (_opts.GrabItems || _opts.BuyPrefab.Length > 0)
+        {
+            client.Items.RequestRejected += (reason, itemId) =>
+            {
+                _log($"[{_name}] item refused{(itemId != 0 ? $" (item {itemId})" : "")}: {reason}");
+                if (itemId != 0 && itemId == _pendingPickupId) { _refusedItems.Add(itemId); _pendingPickupId = -1; }
+            };
+        }
+
         if (_opts.GrabItems)
         {
             client.Items.ItemMoved += item =>
@@ -194,11 +258,6 @@ public sealed class RemoteActor
                 }
             };
             client.Items.ItemRemoved += id => { if (id == _heldItemId) _heldItemId = -1; };
-            client.Items.RequestRejected += (reason, itemId) =>
-            {
-                _log($"[{_name}] item refused{(itemId != 0 ? $" (item {itemId})" : "")}: {reason}");
-                if (itemId != 0 && itemId == _pendingPickupId) { _refusedItems.Add(itemId); _pendingPickupId = -1; }
-            };
         }
 
         if (_opts.Drive)
@@ -356,8 +415,12 @@ public sealed class RemoteActor
             _holdElapsed += dt;
             if (_holdElapsed >= _opts.DropAfterSeconds)
             {
-                // A couple of metres off the --at anchor so a re-spawn near the host is visible.
-                var pose = new Pose(_opts.Center.Px + 2, _opts.Center.Py, _opts.Center.Pz + 2, 0f, 0f, 0f, 1f);
+                // Re-drop at the item's OWN captured world pose — real rotation + the resting height it
+                // had when the host dropped it, so the host sees a faithful re-materialization the way a
+                // friend setting it back down would produce. A synthetic ground-Y/identity pose (the old
+                // path) sinks the pivot below the surface and mis-orients the item. Fall back to the --at
+                // anchor only if we somehow never captured a pose.
+                Pose pose = _grabbedPose ?? new Pose(_opts.Center.Px + 2, _opts.Center.Py, _opts.Center.Pz + 2, 0f, 0f, 0f, 1f);
                 _log($"[{_name}] dropping item {_heldItemId} at the drop point — watch it reappear in the host's world");
                 client.Items.RequestDrop(_heldItemId, pose);
                 _heldItemId = -1;
@@ -375,6 +438,7 @@ public sealed class RemoteActor
         {
             if (item.Location != ItemLocationKind.World || _refusedItems.Contains(item.Def.Id)) continue;
             _pendingPickupId = item.Def.Id;
+            _grabbedPose = item.WorldPose;   // stash the real drop pose now, while it's still a world item, so the re-drop is faithful
             _log($"[{_name}] picking up world item {item.Def.Id} ({item.Def.PrefabName})…");
             client.Items.RequestPickup(item.Def.Id);
             return;
