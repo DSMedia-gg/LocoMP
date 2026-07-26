@@ -37,6 +37,10 @@ public sealed class ServerOptions
     public double TrainSpeed = 10;          // m/s ≈ 36 km/h
     public string[] TrainLiveries = System.Array.Empty<string>(); // real livery ids (else generic kinds)
 
+    // Soak / unattended-run controls (M6-B soak exit).
+    public double SoakReportSeconds = 0;    // 0 = off; else emit a health/leak line every N seconds
+    public double DurationSeconds = 0;      // 0 = run until Ctrl+C/stop; else self-terminate after N s
+
     public HandshakeRequest ToIdentity() => new(ProtocolVersion.Current, GameBuild, ModVersion, ModListHash);
 
     /// <summary>The server ships in the same tree as the mod, so the single version source
@@ -79,6 +83,8 @@ public sealed class ServerOptions
                     case "--train-cars": o.TrainCars = Math.Max(1, int.Parse(Next(), CultureInfo.InvariantCulture)); break;
                     case "--train-speed": o.TrainSpeed = double.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--train-livery": o.TrainLiveries = Next().Split(',', StringSplitOptions.RemoveEmptyEntries); break;
+                    case "--soak-report": o.SoakReportSeconds = Math.Max(0, double.Parse(Next(), CultureInfo.InvariantCulture)); break;
+                    case "--duration": o.DurationSeconds = Math.Max(0, double.Parse(Next(), CultureInfo.InvariantCulture)); break;
                     case "--preset":
                     {
                         string p = Next().ToLowerInvariant();
@@ -150,9 +156,17 @@ Usage: LocoMP.Server [options]
   --train-cars <n>       cars per server train       (default 3)
   --train-speed <m/s>    server train speed          (default 10)
   --train-livery <a,b,c> real livery ids for server trains (else generic kinds)
+  --soak-report <s>      emit a health/leak line every s seconds (players/sets/jobs/items/heap +
+                         the money & item conservation oracles). 0 = off. Unhealthy → non-zero exit
+  --duration <s>         self-terminate after s seconds (0 = run until Ctrl+C/stop). Use for an
+                         unattended soak — a bounded run stops + saves cleanly on its own
   --help                 this text
 
 Console commands (type at the prompt while running): status | save | stop | help
+
+Unattended soak (M6-B): the server + a bot swarm run for hours, leaks surface in the health line:
+  LocoMP.Server --spawn-trains 4 --soak-report 30 --duration 86400   (24 h; exit code 2 if unhealthy)
+  LocoMP.Bot --count 8 --behavior wander --churn 15 --duration 86400  (join/leave storm + movement)
 
 Solo-test recipe (no second player needed):
   1) LocoMP.Server --port {NetDefaults.Port} --spawn-trains 3

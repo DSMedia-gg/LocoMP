@@ -29,7 +29,8 @@ dotnet run --project src/LocoMP.Server -- --port 8877
 `--port` (8877) · `--key` · `--save <path>` · `--password` · `--max-players` (32) · `--build`
 (99-build2702) · `--mod-version` · `--modlist-hash` · `--name` · `--autosave-seconds` (60) · `--preset`
 (perplayer|shared) · `--tick-hz` (30) · `--world` (reserved — see below) · `--config <file.lmpc>` /
-`--dump-config <file.lmpc>` (real career — see below). `--help` for details.
+`--dump-config <file.lmpc>` (real career — see below) · `--soak-report <s>` / `--duration <s>` (unattended
+soak — see below). `--help` for details.
 
 ### Career config (`--config`)
 
@@ -73,6 +74,26 @@ It claims an ambient server train, drives it along the topology for 20 s (its tr
 the server's route — visible from your game), then releases it and the server resumes. Ctrl+C also hands
 it back (reclaim-on-disconnect). A structured in-game smoke checklist is in `../../RUNBOOK-M6B-SERVER.md`.
 
+## Endurance soak (unattended, M6-B soak exit)
+
+For a long hands-off run, the server watches its own health and can stop itself:
+
+```
+LocoMP.Server --port 8877 --spawn-trains 4 --soak-report 30 --duration 86400
+LocoMP.Bot --host 127.0.0.1 --count 8 --behavior wander --churn 15 --duration 86400
+```
+
+`--soak-report <s>` prints a health line every `s` seconds — players, trains, jobs, items, managed heap,
+and the internal accounting oracles (money conservation = the ledger balances mint − burn exactly; item
+conservation = live items == spawned − despawned). It **latches** to `⚠ UNHEALTHY` the instant an oracle
+breaks or the managed heap passes 4× its baseline, so a leak can't slip by unwatched. `--duration <s>`
+self-terminates the server after `s` seconds (0 = run until Ctrl+C/`stop`), which also **avoids the env
+trap** where a detached server exe outlives its shell and locks `LocoMP.Core.dll` against later builds.
+
+At shutdown the server prints `[soak] PASS …` (exit code 0) or `[soak] FAIL …` (exit code **2**) — so an
+overnight run's exit code alone tells you whether the world stayed sound. The step-by-step recipe + a
+results row live in `../../RUNBOOK-M6B-SERVER.md` §B.4.
+
 ## Known limitations (this alpha, M6-B.1/B.2/B.3)
 
 - **Player takeover of a server train is wire-level + bot-only so far (M6-B.3).** A client can claim one
@@ -92,7 +113,10 @@ it back (reclaim-on-disconnect). A structured in-game smoke checklist is in `../
 - **Joining from the real game** requires the client's handshake to match exactly: protocol version, game
   build (`--build`), mod version, and mod-list hash. If DV sends a non-empty mod-list hash, pass it with
   `--modlist-hash`. A mismatch is a clean reject (logged), not a crash.
-- No container/deploy, interest management, or rate-limiting yet — friend-scale + local testing.
+- **Container packaging is here (`../../docker/`)** — a game-free two-stage image + compose for SVHost
+  (raw UDP, not behind Traefik/CF; graceful SIGTERM save). The image build + the actual deploy are your
+  call (not automated). Interest management and rate-limiting are still later slices — friend-scale +
+  local testing for now.
 
 ## How it's verified
 
@@ -102,4 +126,8 @@ survives a cold restart through the save file. `ServerOwnedTrainTests.cs` covers
 ride the join burst and move under the server's snapshots, a player can **claim and drive** one (the
 server stops driving it, the driver's snapshots reach a watching client, and a release hands it back), a
 second player can't steal a train someone's already driving, and a disconnecting borrower's train returns
-to the server rather than stranding.
+to the server rather than stranding. `SoakTests.cs` is the endurance proof — an accelerated in-process
+soak (hundreds of join/leave + claim/drive/release + item spawn/despawn waves over a `ManualClock`, in
+milliseconds) asserting after every wave that money + item conservation hold, trainsets never leak under
+churn, the consist epoch invariant never trips, and a late joiner still converges to the full world; and
+`SoakReporterTests.cs` covers the `--soak-report` throttle + the unhealthy-latch/exit-code logic.

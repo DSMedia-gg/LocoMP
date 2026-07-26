@@ -1,0 +1,17 @@
+# Keep the Docker build context small and game-free. The Dockerfile COPYs only what the server needs
+# (Core + Transport + Server + the build props + tests/data's default world); everything below is either
+# build output, VCS metadata, or game-facing files a server image must never contain.
+**/bin/
+**/obj/
+.git/
+.github/
+.vs/
+dist/
+Mods/
+scratch/
+*.user
+# Machine-specific Derail Valley assembly resolution — game-free builds never need it (also gitignored).
+Directory.Build.targets
+# Game-facing projects (the mod + the Shim) — not part of a headless server image (hard rule 3).
+src/LocoMP/
+src/LocoMP.Shim/

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using LocoMP.Core.Career;
 using LocoMP.Core.Persistence;
 using LocoMP.Core.Protocol;
@@ -128,8 +129,25 @@ string Status() =>
     $"[status] up {stopwatch.Elapsed:hh\\:mm\\:ss} | {server.PlayerCount}/{opts.MaxPlayers} player(s) | " +
     $"{server.Career.Registry.Jobs.Count} job(s) on board | {autosaver.SavesWritten} save(s) written";
 
+// Soak/health watch (M6-B soak exit): a periodic leak + conservation line for an unattended run, and
+// an optional self-terminating duration so a bounded soak stops + saves cleanly on its own (which also
+// dodges the env trap where a detached server exe outlives its shell and locks LocoMP.Core.dll).
+SoakReporter? soak = opts.SoakReportSeconds > 0
+    ? new SoakReporter(clock, (long)(opts.SoakReportSeconds * 1000))
+    : null;
+long durationMs = (long)(opts.DurationSeconds * 1000);
+if (soak is not null)
+    Console.WriteLine($"[server] soak health report every {opts.SoakReportSeconds:F0}s" +
+                      (durationMs > 0 ? $"; self-terminating after {opts.DurationSeconds:F0}s." : "."));
+
 bool stopping = false;
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; stopping = true; };
+// docker stop / systemd stop send SIGTERM, not Ctrl+C — handle it too so a containerized server saves
+// the world on the way down instead of being hard-killed after the grace timer (losing up to one
+// autosave interval). Cancel the default terminate so the loop below can drain + SaveNow. No-op on
+// platforms without POSIX signals.
+using PosixSignalRegistration? sigterm =
+    PosixSignalRegistration.Create(PosixSignal.SIGTERM, ctx => { ctx.Cancel = true; stopping = true; });
 
 long tickMs = (long)(1000 / opts.Hz);
 long lastTimeSync = 0, lastTick = 0;
@@ -149,6 +167,20 @@ while (!stopping)
     autosaver.Tick();
     if (admin.Drain(Status, autosaver.SaveNow)) stopping = true;
 
+    // Only gather the sample (it queries process memory) when a report is actually due.
+    if (soak is not null && soak.Due())
+    {
+        long workingSet; using (var proc = Process.GetCurrentProcess()) workingSet = proc.WorkingSet64;
+        string? line = soak.Poll(new SoakSample(
+            server.PlayerCount, server.Trains.Registry.Sets.Count, server.Career.Registry.Jobs.Count,
+            server.Items.Registry.Items.Count, server.Trains.StaleSnapshotsDropped,
+            GC.GetTotalMemory(false), workingSet,
+            server.Career.Registry.Ledger.ConservationHolds, server.Items.Registry.ItemConservationHolds));
+        if (line is not null) Console.WriteLine(line);
+    }
+
+    if (durationMs > 0 && stopwatch.ElapsedMilliseconds >= durationMs) stopping = true;
+
     long elapsed = stopwatch.ElapsedMilliseconds - now;
     if (elapsed < tickMs) Thread.Sleep((int)(tickMs - elapsed));
 }
@@ -158,5 +190,6 @@ autosaver.SaveNow();               // capture reads the live registries, so save
 server.Dispose();
 udp.Dispose();
 Thread.Sleep(150);                 // let LiteNetLib flush the disconnects
+if (soak is not null) Console.WriteLine(soak.Summary());
 Console.WriteLine($"[server] saved to {opts.SavePath}. Bye.");
-return 0;
+return soak?.EverUnhealthy == true ? 2 : 0; // non-zero so an unattended soak's exit code flags a failure
