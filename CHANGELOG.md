@@ -9,7 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Your money is no longer at risk when a session ends.** Two separate faults, both found by playing:
+  leaving a session could quietly turn the session's spending money into your *real* career balance (a
+  $10,000 career came back holding $2,000, permanently, at the next autosave); and if you left while a cash
+  register still held money you'd put in, that money was handed back **on top** of your restored balance,
+  minting money out of nothing every time you did it. Your real balance is now put back before anything can
+  save over it, and if a machine is still holding your cash the mod waits and tells you so, restoring the
+  moment you take your wallet back out.
+- **A crash no longer follows you out of a session.** Quitting to the menu while hosting could throw an
+  error during teardown, because a routine "does this exist yet?" check on one of the game's systems would
+  *create* the thing it was checking for, on a world that was already gone.
+- **Comms-radio fees now name the car they charged for.** Rerail and clear fees were logged as `rerail ?` /
+  `clear ?`, which made a charge impossible to match up with what was charged; they now carry the car's
+  plate (e.g. `clear CFF059`).
+- The mod now prints a per-build identifier when it loads, so you can confirm the build you installed is the
+  one actually running. Worth knowing if you use Vortex: it re-deploys the mods folder from its own copy, so
+  a manually-copied build can be silently replaced.
+
 ### Added
+- Container packaging for the dedicated server (M6-B): a game-free two-stage `docker/Dockerfile` +
+  `docker/compose.yml` that build and run the headless server on the .NET runtime image — no Unity, no
+  game install. Out of the box it's a bare server (presence + job board + persistence) on UDP 25701 with
+  a periodic health line; mount a real world/career to add server-owned trains and a real board. The
+  server now also shuts down gracefully on SIGTERM (`docker stop`), saving the world on the way out
+  instead of being hard-killed. (Building the image and deploying it are manual, deliberate steps.)
+- Soak / unattended-run tooling (M6-B): the dedicated server can now run a long, hands-off endurance test
+  and watch its own health. `--soak-report <seconds>` prints a periodic line (players, trains, jobs, items,
+  memory) that calls out the instant an internal accounting invariant breaks or memory runs away, and
+  `--duration <seconds>` makes the server stop and save cleanly on its own after a set time — so you can
+  point a swarm of bots at it overnight and tell from the exit code and final summary whether the world
+  stayed sound. Backed by an accelerated in-process soak test (hundreds of join/leave + claim/drive/item
+  waves in milliseconds) proving the money and item ledgers stay balanced, trains never leak or multiply
+  under churn, and a fresh joiner still sees the whole world after all of it.
 - Spatial interest management — the mechanism (D10, Burst 1): the server can now relay a player's
   movement only to the OTHER players near them, instead of broadcasting everyone's position to everyone.
   A player who walks out of range has their avatar hidden for you (and re-shown when you meet again),
