@@ -49,7 +49,8 @@ public sealed class ItemSync : IDisposable
     private readonly Dictionary<int, ItemBase> _itemByServerId = new();
     private readonly Dictionary<ItemBase, int> _serverIdByItem = new();
     private readonly HashSet<int> _spawnedIds = new();           // ids WE materialized (vs host natives)
-    private readonly Dictionary<int, ItemBase> _hiddenNatives = new(); // host natives a remote carried off — hidden, not destroyed
+    private readonly HashSet<int> _pinnedIds = new();            // world items we hold as server-pinned kinematic ghosts (re-asserted per frame; DV re-enables physics on un-held items otherwise)
+    private readonly Dictionary<int, (ItemBase Item, Pose AbsPose)> _hiddenNatives = new(); // host natives a remote carried off — hidden (not destroyed) + the absolute pose to restore them to (an inactive item misses OriginShift, so its raw local transform goes stale)
     private readonly Dictionary<uint, ItemBase> _pendingRegistration = new(); // token → awaiting id echo
     private readonly Dictionary<ItemBase, Action<ItemBase>> _destroyHooks = new();
     private readonly HashSet<string> _missingPrefabWarned = new(StringComparer.Ordinal);
@@ -79,7 +80,10 @@ public sealed class ItemSync : IDisposable
     /// world to the server board.</summary>
     public void Tick(double dt)
     {
-        if (!_client.Joined || StorageController.Instance == null) return;
+        // WorldAlive comes FIRST and is not merely an optimization: StorageController allows auto-creation,
+        // so on a world that has just unloaded the `Instance == null` probe below would itself construct one
+        // and throw out of Initialize(). Order matters — see PresenceShim.WorldAlive.
+        if (!_client.Joined || !PresenceShim.WorldAlive || StorageController.Instance == null) return;
         if (_isHost && !_captureInstalled) InstallCapture();
 
         _reconcileAccum += dt;
@@ -88,6 +92,30 @@ public sealed class ItemSync : IDisposable
             _dirty = false;
             _reconcileAccum = 0;
             Reconcile();
+        }
+
+        PinWorldGhosts();
+    }
+
+    /// <summary>Hold each materialized world item at its server pose, kinematic, every frame — DV's
+    /// <c>CabItemRigidbody</c> re-enables physics on an un-held item, so a one-time freeze doesn't stick and
+    /// the item free-falls through the floor. A synced world item nobody is holding is a server-authoritative
+    /// kinematic ghost (the M2 train model). Drops out the moment the item stops being a World item (a local
+    /// grab / despawn), which unpins it so native physics resumes.</summary>
+    private void PinWorldGhosts()
+    {
+        if (_pinnedIds.Count == 0) return;
+        foreach (int id in _pinnedIds.ToList())
+        {
+            if (!_itemByServerId.TryGetValue(id, out ItemBase item) || item == null
+                || !_client.Items.Items.TryGetValue(id, out ClientItem? live) || live.Location != ItemLocationKind.World)
+            {
+                _pinnedIds.Remove(id);
+                continue;
+            }
+            item.transform.SetPositionAndRotation(
+                PresenceShim.ToLocalPosition(live.WorldPose), PresenceShim.ToRotation(live.WorldPose));
+            SettleAtRest(item);
         }
     }
 
@@ -169,6 +197,9 @@ public sealed class ItemSync : IDisposable
         if (native == null) return;
         Map(native, item.Def.Id);      // a host native — NOT added to _spawnedIds; Reconcile won't respawn it
         HookDestroy(native);
+        // Position + distance are kept (cheap, one short string): "where did this item go?" is the question
+        // that recurs every time the item loop misbehaves in-game.
+        _log($"[items] registered native item {item.Def.Id} ({PrefabNameOf(native) ?? "?"}) at {PosInfo(PresenceShim.ToAbsolutePose(native.transform))}");
     }
 
     // ── server board → local world ──
@@ -244,13 +275,16 @@ public sealed class ItemSync : IDisposable
             }
             spec.BelongsToPlayer = true; // world-storage acceptance + ItemDisabler keep-alive exemption
             StorageController.Instance.AddItemToWorldStorage(spawned);
+            spawned.RefreshLayersExternal(); // force the World_Item layer — else it's stranded on Grabbed_Item (invisible in world + ungrabbable)
+            SettleAtRest(spawned);       // server-authoritative rest pose — don't let it free-fall / tunnel
             Map(spawned, item.Def.Id);
             _spawnedIds.Add(item.Def.Id);
+            _pinnedIds.Add(item.Def.Id); // hold it at the server pose every frame (PinWorldGhosts)
             HookDestroy(spawned);
             // A locked personal essential replicates as VISIBLE; the SERVER refuses any pickup of it, so
             // a non-owner can never take it. Making the replica physically non-grabbable in-hand (VR) is a
             // friend-session follow-on (needs the VRTK/interaction ref) — server enforcement stands alone.
-            _log($"[items] world item {item.Def.Id} ({item.Def.PrefabName}) materialized{(item.WorldLocked ? " (locked — owner only)" : "")}");
+            _log($"[items] world item {item.Def.Id} ({item.Def.PrefabName}) materialized{(item.WorldLocked ? " (locked — owner only)" : "")} at {PosInfo(item.WorldPose)}");
         }
         catch (Exception e)
         {
@@ -275,6 +309,7 @@ public sealed class ItemSync : IDisposable
         bool ours = _spawnedIds.Contains(id);
         if (!_itemByServerId.TryGetValue(id, out ItemBase item)) return;
         UnmapById(id);
+        _pinnedIds.Remove(id);   // no longer a live world ghost we position
         if (item == null) return;
         _applying = true;
         try
@@ -288,9 +323,10 @@ public sealed class ItemSync : IDisposable
             }
             else
             {
+                Pose absPose = PresenceShim.ToAbsolutePose(item.transform); // snapshot BEFORE hiding — an inactive item misses OriginShift, so we must restore from an absolute pose, not the stale local transform
                 item.gameObject.SetActive(false);       // the host's real item — hide, never destroy
-                _hiddenNatives[id] = item;
-                _log($"[items] native item {id} hidden (a remote carried it off)");
+                _hiddenNatives[id] = (item, absPose);
+                _log($"[items] native item {id} hidden (a remote carried it off) — was at {PosInfo(absPose)}");
             }
         }
         catch (Exception e)
@@ -309,8 +345,9 @@ public sealed class ItemSync : IDisposable
     /// replica.</summary>
     private void ReShowNative(ClientItem item)
     {
-        if (!_hiddenNatives.TryGetValue(item.Def.Id, out ItemBase native)) return;
+        if (!_hiddenNatives.TryGetValue(item.Def.Id, out (ItemBase Item, Pose AbsPose) hidden)) return;
         _hiddenNatives.Remove(item.Def.Id);
+        ItemBase native = hidden.Item;
         if (native == null) return; // gone while hidden — reconcile will SpawnReplica next pass
         _applying = true;
         try
@@ -319,9 +356,12 @@ public sealed class ItemSync : IDisposable
                 PresenceShim.ToLocalPosition(item.WorldPose), PresenceShim.ToRotation(item.WorldPose));
             native.gameObject.SetActive(true);
             if (StorageController.Instance != null) StorageController.Instance.AddItemToWorldStorage(native);
+            native.RefreshLayersExternal(); // World_Item layer — a reused native can be stuck on Grabbed_Item (invisible + ungrabbable)
+            SettleAtRest(native);       // rest at the drop pose — don't free-fall / tunnel / trip RespawnOnDrop
             Map(native, item.Def.Id);   // native (NOT added to _spawnedIds) — Dispose leaves it be
+            _pinnedIds.Add(item.Def.Id); // hold it at the server pose every frame (PinWorldGhosts)
             HookDestroy(native);
-            _log($"[items] native item {item.Def.Id} shown again (a remote dropped it back)");
+            _log($"[items] native item {item.Def.Id} shown again (a remote dropped it back) — at {PosInfo(item.WorldPose)}");
         }
         catch (Exception e)
         {
@@ -347,6 +387,7 @@ public sealed class ItemSync : IDisposable
         _serverIdByItem.Remove(item);
         _itemByServerId.Remove(id);
         _spawnedIds.Remove(id);
+        _pinnedIds.Remove(id);
     }
 
     private void UnmapById(int id)
@@ -354,6 +395,7 @@ public sealed class ItemSync : IDisposable
         if (!_itemByServerId.TryGetValue(id, out ItemBase item)) return;
         _itemByServerId.Remove(id);
         _spawnedIds.Remove(id);
+        _pinnedIds.Remove(id);
         if (item != null) _serverIdByItem.Remove(item);
     }
 
@@ -376,6 +418,39 @@ public sealed class ItemSync : IDisposable
     {
         try { return item.InventorySpecs != null ? item.InventorySpecs.ItemPrefabName : null; }
         catch { return null; }
+    }
+
+    /// <summary>Diagnostic: an absolute item position plus its distance from the local player, so a live
+    /// session can tell whether an item event happened right next to the player or streamed-out far away.</summary>
+    private static string PosInfo(Pose abs)
+    {
+        string at = $"({abs.Px:F0},{abs.Py:F0},{abs.Pz:F0})";
+        if (!PresenceShim.TryCaptureLocalPose(out Pose me)) return at;
+        float dx = abs.Px - me.Px, dy = abs.Py - me.Py, dz = abs.Pz - me.Pz;
+        return $"{at}, {System.Math.Sqrt(dx * dx + dy * dy + dz * dz):F0} m from you";
+    }
+
+    /// <summary>Settle a just-placed item at rest: zero its velocity and make the Rigidbody kinematic so it
+    /// stays exactly where the server said instead of free-falling (a freshly-<c>SetActive</c>'d item wakes
+    /// non-kinematic with gravity — recon §1 — and tunnels through the floor before its collider engages,
+    /// which also trips <c>RespawnOnDrop</c> into a duplicate). A synced world item is server-authoritative,
+    /// so local physics simulation would only desync it; a native grab re-enables physics normally.</summary>
+    private static void SettleAtRest(ItemBase item)
+    {
+        try
+        {
+            // ItemRigidbody is null when CabItem isn't assembled — go straight to the components. Freeze ALL
+            // bodies so DV's per-frame physics (CabItemRigidbody re-enables it on an un-held item) can't drop
+            // the item; PinWorldGhosts re-asserts this every frame until the local player takes it.
+            foreach (Rigidbody rb in item.GetComponentsInChildren<Rigidbody>(includeInactive: true))
+            {
+                if (rb == null) continue;
+                rb.velocity = Vector3.zero;
+                rb.angularVelocity = Vector3.zero;
+                rb.isKinematic = true;
+            }
+        }
+        catch { /* no rigidbody / not yet assembled — nothing to settle */ }
     }
 
     /// <summary>DV's own per-player flag — Map/CommsRadio/wallet/Compass/DVGuide and dynamically-marked
@@ -417,17 +492,45 @@ public sealed class ItemSync : IDisposable
             _worldStorage.ItemRemoved -= OnNativeWorldRemoved;
         }
 
-        // Restore any host natives we hid (a remote was holding them at leave) — reactivate + re-add to
-        // world storage so the host's real world is whole again (they belong to its SP save).
-        foreach (ItemBase native in _hiddenNatives.Values.ToList())
+        // Restore any host natives we hid (a remote was holding them at leave) — reposition to the pose we
+        // snapshotted when hiding (an inactive item misses OriginShift, so its raw local transform is stale;
+        // this mirrors ReShowNative), reactivate, and re-add to world storage so the host's real world is
+        // whole again (they belong to its SP save). Logged per item so a failed restore is never silent.
+        //
+        // Skipped entirely when the world has already unloaded (quit to menu rather than Leave): there is no
+        // world left to restore INTO, the items were destroyed with the scene, and touching StorageController
+        // here would resurrect the singleton on a dead world (PresenceShim.WorldAlive). Nothing is lost —
+        // these are the host's own natives, which come back from its SP save.
+        if (!PresenceShim.WorldAlive && _hiddenNatives.Count > 0)
         {
-            if (native == null) continue;
+            _log($"[items] world already unloaded — skipping restore of {_hiddenNatives.Count} hidden native " +
+                 "item(s); they return with your save, not with the session");
+            _hiddenNatives.Clear();
+        }
+
+        foreach (KeyValuePair<int, (ItemBase Item, Pose AbsPose)> hidden in _hiddenNatives.ToList())
+        {
+            int id = hidden.Key;
+            ItemBase native = hidden.Value.Item;
+            if (native == null)
+            {
+                _log($"[items] native item {id} was destroyed while hidden — cannot restore it on leave");
+                continue;
+            }
             try
             {
+                native.transform.SetPositionAndRotation(
+                    PresenceShim.ToLocalPosition(hidden.Value.AbsPose), PresenceShim.ToRotation(hidden.Value.AbsPose));
                 native.gameObject.SetActive(true);
                 if (StorageController.Instance != null) StorageController.Instance.AddItemToWorldStorage(native);
+                native.RefreshLayersExternal(); // World_Item layer (see ReShowNative)
+                SettleAtRest(native);   // rest at the restore pose — don't free-fall / tunnel
+                _log($"[items] native item {id} restored to your world on leave — at {PosInfo(hidden.Value.AbsPose)}");
             }
-            catch { /* world teardown — the SP save still owns the item */ }
+            catch (Exception e)
+            {
+                _log($"[items] restore of native item {id} on leave failed: {e.Message}");
+            }
         }
         _hiddenNatives.Clear();
 

@@ -97,6 +97,11 @@ public sealed class SessionController
     /// <summary>Pump everything. Called from UMM OnUpdate while the mod is enabled.</summary>
     public void Update(double dt)
     {
+        // Deliberately OUTSIDE every session branch and before the early returns: a real balance deferred
+        // because a cash register still held the player's deposited money must be written once that cash comes
+        // back, and that can happen long after the session ended. See WalletMirror.PumpPendingRestore.
+        WalletMirror.PumpPendingRestore();
+
         _server?.Poll();
         _client?.Poll();
 
@@ -155,6 +160,21 @@ public sealed class SessionController
             }
         }
         _avatars.Tick((float)dt);
+    }
+
+    /// <summary>The game world is going away (quit to menu, load another save, exit). Teardown itself is
+    /// deferred to <see cref="Tick"/> so we never dispose mid-callback.
+    ///
+    /// The money restore is attempted here as well as from Dispose, but note it is BEST-EFFORT on this path,
+    /// not the fix: this event is raised from a poll that notices the world registry has already died, so
+    /// <c>Inventory</c> is gone by now and the restore no-ops (harmlessly — DV writes no save during that
+    /// teardown). It stays because the call is idempotent and a future DV build could tear the two down in
+    /// the other order. The restore that actually matters runs from Dispose on the Leave path, where the
+    /// world is still alive and a later autosave would otherwise persist the session wallet.</summary>
+    private void OnWorldUnloaded()
+    {
+        _walletMirror?.RestoreNativeMoney();
+        _worldUnloaded = true;
     }
 
     /// <summary>The session panel, drawn inside UMM's mod options (Ctrl+F10 → LocoMP).</summary>
@@ -477,7 +497,7 @@ public sealed class SessionController
 
             _client = MakeClient(_hub.Connect(out _)); // the host is just client #1, zero latency
             _trains = new TrainSync(_client, isHost: true, _log);
-            _trains.WorldUnloaded += () => _worldUnloaded = true;
+            _trains.WorldUnloaded += OnWorldUnloaded;
             _cabControls = new CabControlSync(_client, _trains, _log);
             // D13: the HOST keeps DV's native generation running — JobCapture mirrors every
             // generated job onto the server board. Only joining CLIENTS suppress.
@@ -520,7 +540,7 @@ public sealed class SessionController
             _clientTransport = LiteNetLibTransport.ConnectClient(_address, ParsePort(), NetDefaults.ConnectKey);
             _client = MakeClient(_clientTransport);
             _trains = new TrainSync(_client, isHost: false, _log);
-            _trains.WorldUnloaded += () => _worldUnloaded = true;
+            _trains.WorldUnloaded += OnWorldUnloaded;
             _cabControls = new CabControlSync(_client, _trains, _log);
             JobGenSuppressor.Active = true;            // clients never generate either (02 §4)
             JobGenSuppressor.StopAll(_log);

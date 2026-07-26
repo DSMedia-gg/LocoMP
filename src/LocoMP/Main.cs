@@ -64,8 +64,28 @@ public static class Main
             OnToolsGUI(entry, log);
         };
 
-        log($"LocoMP loaded — protocol v{ProtocolVersion.Current}. Open the UMM options (Ctrl+F10) to host or join.");
+        log($"LocoMP loaded — protocol v{ProtocolVersion.Current}, build {BuildStamp()}. " +
+            "Open the UMM options (Ctrl+F10) to host or join.");
         return true;
+    }
+
+    /// <summary>
+    /// A per-build identity for the two assemblies that carry game behaviour, logged at load so the log
+    /// alone answers "is the build I just staged the one actually running?". Every compile mints a fresh
+    /// MVID, so these change on every build and can never accidentally match a stale copy — which is the
+    /// whole point: staged files can be reverted after the fact (a Vortex re-deploy replaced a hand-staged
+    /// Shim on 2026-07-25, and a whole test round was run and analysed against the OLD build before the
+    /// substitution was noticed). File sizes and timestamps on disk prove nothing about what the CLR loaded.
+    /// Both are stamped because LocoMP.dll and LocoMP.Shim.dll can go stale independently.
+    /// </summary>
+    private static string BuildStamp()
+    {
+        static string Mvid(Type t)
+        {
+            try { return t.Assembly.ManifestModule.ModuleVersionId.ToString("N").Substring(0, 8); }
+            catch { return "????????"; }
+        }
+        return $"{Mvid(typeof(Main))}/{Mvid(typeof(PresenceShim))}";
     }
 
     /// <summary>Dev tools under the session panel — currently just the M2.2 world extractor.</summary>

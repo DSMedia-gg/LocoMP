@@ -129,8 +129,10 @@ public sealed class TrainSync : IDisposable
 
     /// <summary>The world our maps and bindings refer to still exists (the registry singleton dies
     /// with the world scene). Every proposal path checks this — teardown fires real game events
-    /// (74 couplers uncoupling at once) that must not become protocol traffic.</summary>
-    private static bool WorldAlive => RailTrackRegistryBase.Instance != null;
+    /// (74 couplers uncoupling at once) that must not become protocol traffic. Delegates to the one
+    /// canonical probe: see <see cref="PresenceShim.WorldAlive"/> for why the choice of singleton
+    /// matters and why this must not be re-derived per shim.</summary>
+    private static bool WorldAlive => PresenceShim.WorldAlive;
 
     /// <summary>Pump everything. Called from the session controller's Update.</summary>
     public void Tick(double dt)

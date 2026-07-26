@@ -45,6 +45,12 @@ public sealed class CommsRadioSync : IDisposable
     private float _pendingDeletePrice;
     private float _pendingSummonPrice;
     private int _pendingDeleteCarId; // captured before the destroy unbinds the car
+    // Fee labels are captured at CONFIRM time for the same reason as the car id above: DV's CarRerailed /
+    // CarDeleted events do not hand us a usable car (observed in-game 2026-07-27 — both fees logged
+    // "rerail ?" / "clear ?"), and by then a deleted car is mid-teardown anyway. At confirm time the
+    // controller still holds a live carToRerail/carToDelete, so read the plate there or never.
+    private string _pendingRerailLabel = "";
+    private string _pendingDeleteLabel = "";
 
     private bool _eventsHooked;
     private double _discoverAccum; // throttles the radio discovery scan (never per-frame — see Tick)
@@ -110,6 +116,7 @@ public sealed class CommsRadioSync : IDisposable
         if (_isHost)
         {
             _pendingRerailPrice = ctrl.rerailPrice; // read before the deduction clears it
+            _pendingRerailLabel = PlateOf(ctrl.carToRerail);
             return true;
         }
         // Client: the car is a host-owned replica — route the rerail to its owner, suppress locally.
@@ -129,6 +136,7 @@ public sealed class CommsRadioSync : IDisposable
         {
             _pendingDeletePrice = ctrl.removePrice;
             _pendingDeleteCarId = _trains.TryResolveCarId(ctrl.carToDelete, out int id) ? id : 0;
+            _pendingDeleteLabel = PlateOf(ctrl.carToDelete);
             return true;
         }
         TrainCar car = ctrl.carToDelete;
@@ -147,12 +155,14 @@ public sealed class CommsRadioSync : IDisposable
 
     // ── host success events → fee (own scope) + delete removal ──
 
+    // The event's `car` is preferred when it is actually usable and ignored when it is not — DV supplies
+    // nothing dependable here, so the confirm-time snapshot is what normally names the fee.
     private void OnHostRerailed(TrainCar car) =>
-        ChargeSelf(_pendingRerailPrice, $"rerail {SafeId(car)}");
+        ChargeSelf(_pendingRerailPrice, $"rerail {Label(car, _pendingRerailLabel)}");
 
     private void OnHostDeleted(TrainCar car)
     {
-        ChargeSelf(_pendingDeletePrice, $"clear {SafeId(car)}");
+        ChargeSelf(_pendingDeletePrice, $"clear {Label(car, _pendingDeleteLabel)}");
         if (_pendingDeleteCarId != 0)
         {
             _client.Trains.NotifyCarDeleted(_pendingDeleteCarId);
@@ -162,7 +172,7 @@ public sealed class CommsRadioSync : IDisposable
     }
 
     private void OnHostSummoned(TrainCar car) =>
-        ChargeSelf(_pendingSummonPrice, $"summon {SafeId(car)}");
+        ChargeSelf(_pendingSummonPrice, $"summon {Label(car, "")}");
 
     /// <summary>Burn a comms-radio fee from the host's OWN wallet (target 0). Skips free actions
     /// (handcar rerail, player-spawned delete, non-garage summon are all priced 0 by the game).</summary>
@@ -210,7 +220,7 @@ public sealed class CommsRadioSync : IDisposable
         try { car.Rerail(track, point, pointFwd); }
         catch (Exception e) { _log($"[comms] remote rerail of car {carId} failed: {e.Message}"); return; }
         // The car's derailed flag clears → TrainSync's poll files the set rerail. We just bill it.
-        ChargeInitiator(RerailPrice(car, dist), $"rerail {SafeId(car)}", initiator);
+        ChargeInitiator(RerailPrice(car, dist), $"rerail {Label(car, "")}", initiator);
         _log($"[comms] rerailed car {carId} for player {initiator}");
     }
 
@@ -275,10 +285,38 @@ public sealed class CommsRadioSync : IDisposable
         return false;
     }
 
-    private static string SafeId(TrainCar car)
+    /// <summary>The car's plate (e.g. <c>L-013</c>), or "" when it cannot be read. <c>ID</c> reads through to
+    /// the logic car, which is already unregistered by the time <c>CarDeleted</c> fires — so this throws
+    /// precisely when we most want the name, which is why the plate is also snapshotted at confirm time.</summary>
+    private static string PlateOf(TrainCar car)
     {
-        try { return car != null ? car.ID : "?"; }
-        catch { return "?"; }
+        if (car == null) return "";
+        try { return car.ID ?? ""; }
+        catch { return ""; }
+    }
+
+    /// <summary>The Unity object name (e.g. <c>LocoDE6(Clone)</c>) — readable while the object lives, but a
+    /// prefab name shared by every car of that type, so it identifies a MODEL and not a car.</summary>
+    private static string NameOf(TrainCar car)
+    {
+        if (car == null) return "";
+        try { return car.name ?? ""; }
+        catch { return ""; }
+    }
+
+    /// <summary>Name a car for a fee label. Precedence matters and is the whole point: **any** real plate beats
+    /// the object name, so the confirm-time snapshot is consulted BEFORE falling back to a prefab name. Getting
+    /// this backwards silently defeats the snapshot — the first cut preferred the live car and fell straight to
+    /// its object name, so fees read `clear LocoDE6(Clone)` while the correct plate sat unused in
+    /// <paramref name="capturedPlate"/> (2026-07-27). A fee line that names a model rather than a car cannot be
+    /// reconciled against what was actually charged.</summary>
+    private static string Label(TrainCar car, string capturedPlate)
+    {
+        string live = PlateOf(car);
+        if (live.Length > 0) return live;
+        if (capturedPlate.Length > 0) return capturedPlate;
+        string name = NameOf(car);
+        return name.Length > 0 ? name : "?";
     }
 
     public void Dispose()

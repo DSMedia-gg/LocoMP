@@ -83,4 +83,19 @@ public static class PresenceShim
 
     /// <summary>The camera remote name tags should face; null on loading screens.</summary>
     public static Camera? ActiveCamera => PlayerManager.ActiveCamera;
+
+    /// <summary>
+    /// The game world our bindings refer to still exists. Every per-frame shim MUST gate on this before
+    /// touching a DV singleton, because <c>SingletonBehaviour&lt;T&gt;.Instance</c> is NOT a safe existence
+    /// probe: when T allows auto-creation the getter RESURRECTS the singleton via AddComponent, so the very
+    /// act of writing <c>T.Instance == null</c> constructs one. On a world that has just unloaded, that
+    /// construction runs Initialize() against a dead world and throws — observed in-game 2026-07-26, where
+    /// ItemSync's own <c>StorageController.Instance == null</c> guard spawned a StorageController whose
+    /// SetupListeners NRE'd on the already-gone Inventory.
+    ///
+    /// <c>RailTrackRegistryBase</c> is the chosen probe precisely because it does NOT auto-create: it dies
+    /// with the world scene and stays dead. Keep this the single definition — the bug above came from two
+    /// call sites each answering "is the world alive?" their own way.
+    /// </summary>
+    public static bool WorldAlive => RailTrackRegistryBase.Instance != null;
 }
