@@ -55,7 +55,8 @@ public sealed class SoakReporter
     private readonly long _intervalMs;
     private long _nextDueMs;
     private long _startMs;
-    private long _baselineManaged;   // the first report's managed heap — the leak yardstick
+    private long _baselineManaged;   // the leak yardstick — see RebaseOnGrowingLoad
+    private int _peakPlayers;
     private bool _started;
 
     // The managed heap may legitimately grow to this multiple of the baseline before we call it a
@@ -92,6 +93,7 @@ public sealed class SoakReporter
         _nextDueMs = _clock.NowMs + _intervalMs;
         ReportsWritten++;
         if (s.ManagedBytes > PeakManagedBytes) PeakManagedBytes = s.ManagedBytes;
+        RebaseOnGrowingLoad(s);
 
         bool memoryLeak = _baselineManaged > 0 && s.ManagedBytes > _baselineManaged * MemoryLeakFactor;
         bool healthy = s.MoneyConservationHolds && s.ItemConservationHolds && !memoryLeak;
@@ -110,6 +112,34 @@ public sealed class SoakReporter
             if (memoryLeak) line += $" | HEAP-RUNAWAY (>{MemoryLeakFactor:F0}× baseline {Mb(_baselineManaged)} MB)";
         }
         return line;
+    }
+
+    /// <summary>
+    /// Move the leak yardstick up while the session is still GROWING — heap that arrives with new
+    /// players is load, not a leak.
+    ///
+    /// <para><b>Why this exists.</b> The baseline used to be simply the first report's heap, and the
+    /// first report fires immediately, on an <i>empty</i> server. Load always arrives afterwards, so a
+    /// perfectly healthy run blew 4× purely from working set: the first real-exe soak (90 s, 4 trains, an
+    /// 8-bot swarm, 24 joins) latched HEAP-RUNAWAY at 13.0 MB against a 3.0 MB no-players baseline and
+    /// exited FAIL, while every exact oracle — money, items, trainset count, stale snapshots — held. An
+    /// endurance harness that cries wolf on every successful overnight run is worse than none, because
+    /// the exit code is the whole product.</para>
+    ///
+    /// <para><b>Why peak player count is the right trigger.</b> A soak's swarm reaches its size and then
+    /// churns within it, so the peak stops climbing early and the baseline FREEZES — from that moment any
+    /// further growth is unexplained by load, which is exactly the property an overnight verdict needs.
+    /// The trade is deliberate and worth naming: a leak occurring <i>while</i> the session is still
+    /// ramping up is absorbed into the baseline. That is the correct bias here — a missed leak costs one
+    /// more soak run, a false FAIL costs trust in every run.</para>
+    /// </summary>
+    private void RebaseOnGrowingLoad(in SoakSample s)
+    {
+        if (s.Players <= _peakPlayers) return;
+        _peakPlayers = s.Players;
+        // Never ratchet DOWN: a quiet moment mid-run must not tighten the yardstick and manufacture a
+        // leak out of the next legitimate reload.
+        if (s.ManagedBytes > _baselineManaged) _baselineManaged = s.ManagedBytes;
     }
 
     /// <summary>A one-line end-of-run verdict for the shutdown banner + automation logs.</summary>
