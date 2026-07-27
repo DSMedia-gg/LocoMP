@@ -50,7 +50,42 @@ if (opts.ConfigPath is not null)
         Console.WriteLine($"[server] career config unreadable ({e.Message}) — using the built-in default career.");
     }
 }
-var config = new ServerConfig(opts.ToIdentity(), opts.Password, opts.MaxPlayers, career);
+var interest = new InterestConfig
+{
+    Enabled = opts.Interest,
+    FilterPlayers = opts.InterestPlayers,
+    EnterRadiusM = (float)opts.InterestRadius,
+    LeaveRadiusM = (float)(opts.InterestRadius * 1.5), // hysteresis band — must exceed the enter radius
+};
+var config = new ServerConfig(opts.ToIdentity(), opts.Password, opts.MaxPlayers, career, interest: interest);
+
+// The extracted rail network. Loaded up front (not just for --spawn-trains) because interest
+// management needs it too: without per-edge world geometry the server cannot place a spline-space
+// bogie, so it can't distance-test a railed train and fails open (D10 Burst 2).
+WorldTopology? topology = null;
+string? worldFile = opts.ResolveWorldFile();
+if (worldFile is not null)
+{
+    try
+    {
+        topology = TopologyCodec.Read(File.ReadAllBytes(worldFile));
+        Console.WriteLine($"[server] topology {Path.GetFileName(worldFile)}: {topology.Edges.Count} edge(s), " +
+                          $"build {topology.GameBuild}, world geometry {(topology.HasGeometry ? "present" : "ABSENT (v1 file)")}.");
+    }
+    catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
+    {
+        Console.WriteLine($"[server] topology unreadable ({e.Message}) — running without one.");
+    }
+}
+
+// A topology from a DIFFERENT game build has different edge ids, so its geometry would place trains
+// at arbitrary wrong places — worse than having none. Refuse it for interest (the walker's own build
+// check is separate and unchanged).
+if (topology is not null && topology.GameBuild != opts.GameBuild)
+{
+    Console.WriteLine($"[server] topology build '{topology.GameBuild}' != session build '{opts.GameBuild}' — " +
+                      "edge ids are only stable within a build, so it will NOT be used for interest management.");
+}
 
 // Restore a saved world if one exists. A corrupt/foreign/older save is refused cleanly — start fresh,
 // the rotated backups keep the old bytes.
@@ -89,7 +124,8 @@ catch (Exception e)
     return 1;
 }
 
-using var server = new NetServer(udp, config, clock, restore);
+WorldTopology? interestTopology = topology is not null && topology.GameBuild == opts.GameBuild ? topology : null;
+using var server = new NetServer(udp, config, clock, restore, interestTopology);
 server.PlayerAdmitted += p => Console.WriteLine($"[server] admitted {p.Name} (id {p.Id}) — {server.PlayerCount} player(s)");
 server.PlayerRemoved += id => Console.WriteLine($"[server] removed id {id} — {server.PlayerCount} player(s)");
 
@@ -107,21 +143,30 @@ Console.WriteLine($"[server] world save: {opts.SavePath} (autosave every {opts.A
 var kinematicTrains = new List<ServerKinematicTrain>();
 if (opts.SpawnTrains > 0)
 {
-    string? worldPath = opts.ResolveWorldFile();
-    if (worldPath is null)
+    if (topology is null)
     {
         Console.Error.WriteLine("[server] --spawn-trains needs an extracted topology (.lmpw): pass --world <path>, " +
                                 "set LOCOMP_WORLD_FILE, or run from the repo. No server trains spawned.");
     }
     else
     {
-        WorldTopology topo = TopologyCodec.Read(File.ReadAllBytes(worldPath));
         for (int i = 0; i < opts.SpawnTrains; i++)
-            kinematicTrains.Add(new ServerKinematicTrain(server.Trains, topo, opts.TrainCars, opts.TrainSpeed,
+            kinematicTrains.Add(new ServerKinematicTrain(server.Trains, topology, opts.TrainCars, opts.TrainSpeed,
                                                          seed: 1000 + i, liveries: opts.TrainLiveries));
         Console.WriteLine($"[server] driving {kinematicTrains.Count} server-owned train(s) of {opts.TrainCars} car(s) " +
-                          $"at {opts.TrainSpeed:F0} m/s along {Path.GetFileName(worldPath)} ({topo.Edges.Count} edges).");
+                          $"at {opts.TrainSpeed:F0} m/s along {Path.GetFileName(worldFile)} ({topology.Edges.Count} edges).");
     }
+}
+
+// Say plainly what interest management will actually do — an operator who passes --interest and sees
+// no bandwidth change deserves to know the train filter fell back to broadcast, and why.
+if (opts.Interest)
+{
+    var suppressed = new List<string>();
+    foreach (EntityKind k in server.Interest.Suppressed) suppressed.Add(k.ToString());
+    Console.WriteLine($"[server] interest management ON — enter {interest.EnterRadiusM:F0} m / leave {interest.LeaveRadiusM:F0} m, " +
+                      $"players {(interest.FilterPlayers ? "filtered" : "broadcast")}, " +
+                      $"trains {(suppressed.Contains("Trainset") ? "BROADCAST (no world geometry — extract a fresh .lmpw)" : "filtered")}.");
 }
 
 var stopwatch = Stopwatch.StartNew();

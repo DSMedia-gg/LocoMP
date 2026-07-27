@@ -37,6 +37,14 @@ public sealed class ServerOptions
     public double TrainSpeed = 10;          // m/s ≈ 36 km/h
     public string[] TrainLiveries = System.Array.Empty<string>(); // real livery ids (else generic kinds)
 
+    // Interest management (D10). Off by default — a friend-scale session is comfortably inside the
+    // bandwidth budget, and filtering is only worth its complexity as player/train counts climb
+    // (docs/PERF-BASELINE.md §3). Gating railed trains is the big win and needs a geometry-carrying
+    // (codec v2) .lmpw via --world; without one the server says so and fails open.
+    public bool Interest = false;
+    public double InterestRadius = 500;     // metres; the leave radius is 1.5× this (hysteresis band)
+    public bool InterestPlayers = false;    // poses are only ~4% of the bandwidth — opt in separately
+
     // Soak / unattended-run controls (M6-B soak exit).
     public double SoakReportSeconds = 0;    // 0 = off; else emit a health/leak line every N seconds
     public double DurationSeconds = 0;      // 0 = run until Ctrl+C/stop; else self-terminate after N s
@@ -79,6 +87,9 @@ public sealed class ServerOptions
                     case "--name": o.Name = Next(); break;
                     case "--autosave-seconds": o.AutosaveSeconds = Math.Max(1, long.Parse(Next(), CultureInfo.InvariantCulture)); break;
                     case "--tick-hz": o.Hz = Math.Clamp(double.Parse(Next(), CultureInfo.InvariantCulture), 1, 60); break;
+                    case "--interest": o.Interest = true; break;
+                    case "--interest-players": o.InterestPlayers = true; break;
+                    case "--interest-radius": o.InterestRadius = Math.Max(1, double.Parse(Next(), CultureInfo.InvariantCulture)); break;
                     case "--spawn-trains": o.SpawnTrains = Math.Max(0, int.Parse(Next(), CultureInfo.InvariantCulture)); break;
                     case "--train-cars": o.TrainCars = Math.Max(1, int.Parse(Next(), CultureInfo.InvariantCulture)); break;
                     case "--train-speed": o.TrainSpeed = double.Parse(Next(), CultureInfo.InvariantCulture); break;
@@ -152,6 +163,9 @@ Usage: LocoMP.Server [options]
   --autosave-seconds <n> autosave interval           (default 60)
   --preset <p>           perplayer | shared          (default perplayer)
   --tick-hz <n>          server tick rate            (default 30)
+  --interest             filter streams by spatial relevance (needs a v2 --world for trains)
+  --interest-radius <m>  interest enter radius        (default 500; leave radius is 1.5x)
+  --interest-players     also filter player poses     (default off — poses are ~4% of bandwidth)
   --spawn-trains <n>     server drives n kinematic trains itself (needs a topology; no bot needed)
   --train-cars <n>       cars per server train       (default 3)
   --train-speed <m/s>    server train speed          (default 10)

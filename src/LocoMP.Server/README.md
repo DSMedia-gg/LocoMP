@@ -115,8 +115,34 @@ results row live in `../../RUNBOOK-M6B-SERVER.md` §B.4.
   `--modlist-hash`. A mismatch is a clean reject (logged), not a crash.
 - **Container packaging is here (`../../docker/`)** — a game-free two-stage image + compose for SVHost
   (raw UDP, not behind Traefik/CF; graceful SIGTERM save). The image build + the actual deploy are your
-  call (not automated). Interest management and rate-limiting are still later slices — friend-scale +
-  local testing for now.
+  call (not automated). Rate-limiting is still a later slice — friend-scale + local testing for now.
+
+## Interest management (`--interest`)
+
+Off by default. With `--interest` the server only sends a client the trains (and, with
+`--interest-players`, the players) near it, instead of broadcasting everything to everyone. Measured
+effect on train traffic — the dominant channel, ~96% of what a session sends — is an **83% reduction**
+for a client whose neighbourhood holds 4 of 24 consists (`docs/PERF-BASELINE.md` §3c).
+
+```
+LocoMP.Server --world world-99-build2702.lmpw --spawn-trains 8 --interest
+```
+
+- `--interest-radius <m>` — enter radius (default 500). The leave radius is 1.5× it; the gap is a
+  hysteresis band so a train hovering at the boundary doesn't flicker in and out.
+- `--interest-players` — also filter player poses. Separate because poses are only ~4% of the traffic.
+
+**Filtering trains needs a `.lmpw` with world geometry** (codec v2 — re-extract from inside the game).
+Without one — no `--world`, a v1 file, or a topology whose build doesn't match `--build` — the server
+keeps broadcasting trains and **says so in the startup banner**:
+
+```
+[server] interest management ON — enter 500 m / leave 750 m, players broadcast,
+         trains BROADCAST (no world geometry — extract a fresh .lmpw)
+```
+
+That fallback is deliberate: a train the server can't place must be sent to everyone, never hidden
+from everyone. World **items** are not filtered — they don't stream, so they cost ~0 bandwidth.
 
 ## How it's verified
 
