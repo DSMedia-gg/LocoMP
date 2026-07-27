@@ -4,6 +4,8 @@ using LocoMP.Core.Net;
 using LocoMP.Core.Persistence;
 using LocoMP.Core.Presence;
 using LocoMP.Core.Protocol;
+using LocoMP.Core.Trains;
+using LocoMP.Core.World;
 
 namespace LocoMP.Core.Session;
 
@@ -26,13 +28,20 @@ public sealed class NetServer : IDisposable
     // never hidden). Cleared on disconnect.
     private readonly HashSet<int> _posed = new();
     private readonly InterestManager _interest;
+    private readonly WorldTopology? _topology;
     private long _lastInterestMs;
 
-    public NetServer(ITransport transport, ServerConfig config, IClock clock, ServerSaveData? restore = null)
+    /// <param name="topology">The extracted rail network (D10 Burst 2). Supplied, and carrying world
+    /// geometry (a codec-v2 <c>.lmpw</c>), it lets the server place railed trains in the world and gate
+    /// their snapshot streams by relevance — the ~96% of steady-state bandwidth the perf baseline
+    /// measured. Null or geometry-free ⇒ train interest is suppressed and behaviour is unchanged.</param>
+    public NetServer(ITransport transport, ServerConfig config, IClock clock, ServerSaveData? restore = null,
+                     WorldTopology? topology = null)
     {
         _transport = transport ?? throw new ArgumentNullException(nameof(transport));
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
+        _topology = topology;
 
         Func<int, Pose?> poseOf = id => _players.TryGetValue(id, out PlayerState? p) ? p.Pose : (Pose?)null;
         Trains = new ServerTrains(_transport, _clock, () => _players.Keys);
@@ -42,7 +51,7 @@ public sealed class NetServer : IDisposable
 
         // Interest management (D10). Its observer position is pose-gated (fail-open until a peer moves),
         // separate from the career/item proximity poseOf above; enter/leave turn into pose gating +
-        // hide packets here (Burst 1: players only).
+        // hide packets here. Burst 1 gated players; Burst 2 adds railed trains via TrainEntities.
         _interest = new InterestManager(
             _config.Interest,
             () => _players.Keys,
@@ -50,7 +59,13 @@ public sealed class NetServer : IDisposable
                 ? (p.Pose.Px, p.Pose.Pz)
                 : ((float, float)?)null,
             OnInterestEnter,
-            OnInterestLeave);
+            OnInterestLeave,
+            TrainEntities);
+
+        // Without placeable geometry a train has no anchor, so the filter would hide every consist
+        // rather than the distant ones. Fail open loudly instead (D10 Burst 2).
+        if (_topology is null || !_topology.HasGeometry) _interest.SuppressKind(EntityKind.Trainset);
+        Trains.BindInterest(_interest);
 
         _transport.Received += OnReceived;
         _transport.PeerDisconnected += OnPeerDisconnected;
@@ -277,18 +292,61 @@ public sealed class NetServer : IDisposable
         PlayerRemoved?.Invoke(peerId);
     }
 
-    /// <summary>An entity newly in a client's relevance scope (D10). Burst 1: a player needs no
-    /// packet — its identity is already global (PlayerJoined) and the next relayed pose, now permitted
-    /// by <see cref="InterestManager.IsRelevant"/>, re-shows the avatar. Item/trainset full-state
-    /// replay on enter is Burst 2.</summary>
+    /// <summary>
+    /// Where each railed trainset is, in the absolute world frame — the anchors interest management
+    /// distance-tests (D10 Burst 2). Yields nothing when there is no usable geometry, which combined
+    /// with the constructor's <c>SuppressKind</c> means the train filter is fully inert on a v1
+    /// topology.
+    ///
+    /// <para>A consist is anchored by its FIRST car: the whole set shares one relevance decision, so
+    /// a 30-car train is never half-streamed. The head can be up to a train-length from the tail, but
+    /// that is metres against a radius of hundreds — and the hysteresis band absorbs it.</para>
+    /// </summary>
+    private IEnumerable<SpatialEntity> TrainEntities()
+    {
+        if (_topology is null || !_topology.HasGeometry) yield break;
+
+        foreach (KeyValuePair<int, TrainsetSnapshot> kv in Trains.LatestSnapshots)
+        {
+            CarSnapshot head = kv.Value.Cars[0]; // a snapshot always carries >= 1 car (ctor-enforced)
+            if (head.Derailed)
+            {
+                // A derailed car left the rails, so its spline state is meaningless — but it carries a
+                // real 6-DOF pose, which is already the frame we want.
+                yield return new SpatialEntity(new EntityKey(EntityKind.Trainset, kv.Key), head.Pose.Px, head.Pose.Pz);
+                continue;
+            }
+            if (_topology.TryEdgeWorldPoint(head.Front.EdgeId, head.Front.S, out WorldPoint p))
+                yield return new SpatialEntity(new EntityKey(EntityKind.Trainset, kv.Key), p.X, p.Z);
+            // Unknown edge (a topology from a different extraction than the snapshots): yield nothing,
+            // so the set is never in anyone's scope set and IsRelevant... would refuse it. That is the
+            // one place this could wrongly hide a train, so it is guarded at the source — the server
+            // only enables train interest for a topology whose build matches the session's.
+        }
+    }
+
+    /// <summary>An entity newly in a client's relevance scope (D10). A player needs no packet — its
+    /// identity is already global (PlayerJoined) and the next relayed pose, now permitted by
+    /// <see cref="InterestManager.IsRelevant"/>, re-shows the avatar. A TRAINSET does need one: the
+    /// client tore its replica down on the hide, so replay the def + last position + controls before
+    /// its stream resumes (Burst 2).</summary>
     private void OnInterestEnter(int peerId, EntityKey key)
     {
+        if (key.Kind == EntityKind.Trainset) Trains.ReplayTrainset(peerId, key.Id);
     }
 
     /// <summary>An entity left a client's relevance scope: tell just that client to hide the replica
     /// (a presence hint — the entity still exists). Reliable-ordered: a hide must not be dropped.</summary>
     private void OnInterestLeave(int peerId, EntityKey key)
     {
+        // Never tell a player to hide a consist THEY simulate. Their cars are real, local and
+        // physical — a host's own native trainsets most of all — and a hide would have the Shim tear
+        // down the very objects it is authoritative for. Distance is irrelevant to ownership.
+        if (key.Kind == EntityKind.Trainset
+            && Trains.Registry.Sets.TryGetValue(key.Id, out TrainsetDef? owned)
+            && owned.OwnerId == peerId)
+            return;
+
         byte[] payload = new PacketWriter(8)
             .WriteByte((byte)MessageType.InterestHide)
             .WriteByte((byte)key.Kind)

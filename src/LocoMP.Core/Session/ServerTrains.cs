@@ -38,12 +38,35 @@ public sealed class ServerTrains
     // on loan, so a release or a disconnect hands it back to the server rather than parking it dead.
     private readonly HashSet<int> _serverOwnedSets = new();
 
+    // Per-client spatial relevance (D10 Burst 2). Null until NetServer binds it — and the gate below
+    // fails open while it is, so construction order can never accidentally hide a train.
+    private InterestManager? _interest;
+
     internal ServerTrains(ITransport transport, IClock clock, Func<IEnumerable<int>> connectedIds)
     {
         _transport = transport;
         _connectedIds = connectedIds;
         Registry = new TrainsetRegistry(clock);
     }
+
+    /// <summary>Hand this subsystem the session's interest manager so snapshot relays can be gated by
+    /// spatial relevance (D10 Burst 2). Called by <see cref="NetServer"/> once the manager exists —
+    /// it is constructed after this subsystem, and it needs this subsystem's snapshots for anchors.</summary>
+    internal void BindInterest(InterestManager interest) => _interest = interest;
+
+    /// <summary>Last admitted snapshot per trainset — the position the join burst replays and, since
+    /// D10 Burst 2, the spatial ANCHOR interest management distance-tests a railed consist by.</summary>
+    internal IReadOnlyDictionary<int, TrainsetSnapshot> LatestSnapshots => _latest;
+
+    /// <summary>May this trainset's snapshot stream go to this peer right now? Fails open whenever
+    /// interest is unbound, disabled, or trains aren't gated.</summary>
+    private bool Relevant(int peerId, int trainsetId) =>
+        _interest is null || _interest.IsRelevant(peerId, new EntityKey(EntityKind.Trainset, trainsetId));
+
+    /// <summary>Drop a retired trainset from every client's relevance set (no hide is sent — the
+    /// authoritative removal already went out globally).</summary>
+    private void ForgetInterest(int trainsetId) =>
+        _interest?.ForgetEntity(new EntityKey(EntityKind.Trainset, trainsetId));
 
     /// <summary>The authoritative consist record. Exposed for the host UI, admin, and tests.</summary>
     public TrainsetRegistry Registry { get; }
@@ -149,6 +172,30 @@ public sealed class ServerTrains
         }
     }
 
+    /// <summary>
+    /// A trainset just came back into a client's relevance scope (D10 Burst 2): re-send everything
+    /// needed to rebuild the replica from nothing — def, last known position, cab-control values.
+    /// This is the join burst narrowed to one consist, and for the same reason: the client may have
+    /// torn the replica down on the hide, and its next snapshot alone would be a position with no
+    /// train to put it on.
+    ///
+    /// <para>Reliable-ordered so the def lands before the snapshot. Re-sending a def the client never
+    /// dropped is harmless — <c>TrainsetView.ApplyCreate</c> overwrites by id, exactly as the join
+    /// burst and a ResyncRequest already do.</para>
+    /// </summary>
+    internal void ReplayTrainset(int peerId, int trainsetId)
+    {
+        if (!Registry.Sets.TryGetValue(trainsetId, out TrainsetDef? def)) return;
+
+        _transport.Send(peerId, BuildCreate(0, def), DeliveryMethod.ReliableOrdered);
+        if (_latest.TryGetValue(trainsetId, out TrainsetSnapshot? snap))
+            _transport.Send(peerId, BuildSnapshot(snap), DeliveryMethod.ReliableOrdered);
+        foreach (CarDef car in def.Cars)
+            if (_controls.TryGetValue(car.Id, out Dictionary<byte, float>? perCar))
+                foreach (KeyValuePair<byte, float> ctrl in perCar)
+                    _transport.Send(peerId, BuildControlState(car.Id, ctrl.Key, ctrl.Value), DeliveryMethod.ReliableOrdered);
+    }
+
     // ── server-owned trains (M6-B.2): the dedicated server as a sim owner ──
 
     /// <summary>Spawn a consist the SERVER owns and drives (no client needed). Registered under
@@ -186,7 +233,8 @@ public sealed class ServerTrains
         _latest[snap.TrainsetId] = snap;
         byte[] payload = BuildSnapshot(snap);
         foreach (int id in _connectedIds())
-            _transport.Send(id, payload, DeliveryMethod.SequencedUnreliable);
+            if (Relevant(id, snap.TrainsetId))
+                _transport.Send(id, payload, DeliveryMethod.SequencedUnreliable);
     }
 
     // ── handlers ──
@@ -225,9 +273,12 @@ public sealed class ServerTrains
         }
         _latest[snap.TrainsetId] = snap; // join-burst baseline + persisted world position
         // Valid and current: relay the original bytes untouched (the sender is implicit — the
-        // trainset's owner is authoritative, so recipients don't need a sender id).
+        // trainset's owner is authoritative, so recipients don't need a sender id). This is THE hot
+        // path the perf baseline measured at ~96% of steady-state bandwidth, so the relevance test
+        // (an O(1) hashset read) is the single highest-leverage gate in the server.
         foreach (int id in _connectedIds())
-            if (id != peerId) _transport.Send(id, payload, DeliveryMethod.SequencedUnreliable);
+            if (id != peerId && Relevant(id, snap.TrainsetId))
+                _transport.Send(id, payload, DeliveryMethod.SequencedUnreliable);
     }
 
     private void HandleCouple(int peerId, PacketReader r)
@@ -516,8 +567,16 @@ public sealed class ServerTrains
         }
         if (Registry.TryDeleteCar(carId, out TrainsetTransaction? txn, out int removedSetId, out string? reason))
         {
-            if (txn != null) BroadcastTransaction(txn);
-            else Broadcast(BuildRemove(removedSetId), DeliveryMethod.ReliableOrdered);
+            if (txn != null)
+            {
+                BroadcastTransaction(txn);
+            }
+            else
+            {
+                _latest.Remove(removedSetId);
+                ForgetInterest(removedSetId);
+                Broadcast(BuildRemove(removedSetId), DeliveryMethod.ReliableOrdered);
+            }
         }
         else
         {
@@ -546,7 +605,12 @@ public sealed class ServerTrains
     {
         // Every transaction makes the stored baselines stale by construction (retired ids are gone;
         // products carry a bumped epoch) — prune so the join burst never replays a dead position.
-        foreach (int id in txn.RetiredIds) _latest.Remove(id);
+        foreach (int id in txn.RetiredIds)
+        {
+            _latest.Remove(id);
+            ForgetInterest(id); // a retired id must not linger in a scope set (it would suppress a
+                                // future re-enter if the counter ever wrapped onto it)
+        }
         foreach (TrainsetDef def in txn.Products) _latest.Remove(def.Id);
 
         var w = new PacketWriter(128).WriteByte((byte)MessageType.TrainsetTransaction);

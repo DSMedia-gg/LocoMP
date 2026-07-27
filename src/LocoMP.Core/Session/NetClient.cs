@@ -85,6 +85,13 @@ public sealed class NetClient : IDisposable
     /// re-shows it. Arg: the hidden player's id.</summary>
     public event Action<int>? PlayerHidden;
 
+    /// <summary>The server hid a trainset that left our spatial relevance set (D10 Burst 2) — it has
+    /// stopped streaming that consist's snapshots to us. Unlike a TrainsetRemove the set still exists:
+    /// the Shim should despawn the replica GameObjects (they would otherwise sit frozen forever) but
+    /// must NOT treat it as deleted. On re-approach the server replays the def, the last snapshot and
+    /// the cab controls, so the replica rebuilds from that burst. Arg: the trainset id.</summary>
+    public event Action<int>? TrainsetHidden;
+
     /// <summary>The transport link to the server dropped AFTER we had been admitted (host died,
     /// eviction, network loss). Not raised for failed joins — those surface via timeout/Rejected.
     /// The mirrors are already reset when this fires; the frontend decides what "session lost"
@@ -227,14 +234,19 @@ public sealed class NetClient : IDisposable
         ServerTimeOffsetMs = serverTime - _clock.NowMs;
     }
 
-    /// <summary>Hide a replica that left our relevance scope (D10). Burst 1 gates only players — an
-    /// Item/Trainset hide is reserved for Burst 2 (routed to Items/Trains then), so its id is read past
-    /// and ignored here for now. The roster entry is kept: a later pose re-shows the avatar.</summary>
+    /// <summary>Hide a replica that left our relevance scope (D10). A hide is a presence HINT, never an
+    /// authoritative removal — the entity still exists on the server, so mirrors keep their state and a
+    /// re-approach re-shows it (a player via the next pose; a trainset via the server's replay burst).
+    /// Item hides are reserved for a later burst.</summary>
     private void HandleInterestHide(PacketReader r)
     {
         var kind = (EntityKind)r.ReadByte();
         int id = (int)r.ReadVarUInt();
-        if (kind == EntityKind.Player && _players.ContainsKey(id)) PlayerHidden?.Invoke(id);
+        switch (kind)
+        {
+            case EntityKind.Player when _players.ContainsKey(id): PlayerHidden?.Invoke(id); break;
+            case EntityKind.Trainset when Trains.View.Sets.ContainsKey(id): TrainsetHidden?.Invoke(id); break;
+        }
     }
 
     public void Dispose()

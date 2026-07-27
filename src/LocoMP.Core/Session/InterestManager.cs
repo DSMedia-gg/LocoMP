@@ -70,6 +70,14 @@ public sealed class InterestManager
     private readonly Action<int, EntityKey> _onEnter;
     private readonly Action<int, EntityKey> _onLeave;
     private readonly Dictionary<int, ClientRelevance> _clients = new();
+    private readonly HashSet<EntityKind> _suppressed = new();
+
+    // Entities the last Recompute could actually place. An entity NOT in here has no known position
+    // — an unposed player, or a trainset whose edge is missing from the topology — and is therefore
+    // relevant to everyone. Same fail-open principle as an observer without an anchor, applied to the
+    // other side of the distance test; without it an unplaceable entity would sit in nobody's scope
+    // set and be silently hidden from everyone, which is the one failure this system must not have.
+    private readonly HashSet<EntityKey> _placed = new();
 
     /// <param name="observerPos">A client's horizontal position, or null until it has sent a real pose
     /// (the fail-open signal). Doubles as the position of that peer AS an entity for other clients.</param>
@@ -92,6 +100,24 @@ public sealed class InterestManager
 
     /// <summary>The knobs, read by the owning subsystems to decide whether a given kind is gated.</summary>
     public InterestConfig Config => _config;
+
+    /// <summary>
+    /// Permanently fail open for one entity kind at RUNTIME, regardless of config — for when the data
+    /// the filter needs turns out not to exist. The motivating case (D10 Burst 2): gating railed trains
+    /// requires world geometry in the topology, and a v1 <c>.lmpw</c> (or no topology at all) has none,
+    /// so every train would anchor nowhere. Suppressing is strictly safer than guessing a position:
+    /// the session degrades to the old broadcast-everything behaviour for that kind instead of hiding
+    /// trains that are actually next to you.
+    ///
+    /// <para>Deliberately NOT a mutation of the caller's <see cref="InterestConfig"/> — the config
+    /// records what the operator ASKED for, this records what the server can actually deliver, and the
+    /// difference is exactly what an operator needs told (hence <see cref="Suppressed"/>).</para>
+    /// </summary>
+    public void SuppressKind(EntityKind kind) => _suppressed.Add(kind);
+
+    /// <summary>Kinds that <see cref="SuppressKind"/> has forced open. Surfaced so the server can say
+    /// so in its banner rather than leaving an operator wondering why nothing is being filtered.</summary>
+    public IReadOnlyCollection<EntityKind> Suppressed => _suppressed;
 
     /// <summary>Start tracking a newly-admitted client (empty scope, no anchor yet → fail-open until
     /// its first pose). The full join burst still runs; Recompute trims it once it moves.</summary>
@@ -121,6 +147,7 @@ public sealed class InterestManager
         if (!FilterEnabledFor(key.Kind)) return true;
         if (!_clients.TryGetValue(peerId, out ClientRelevance? cr)) return true;
         if (!cr.HasAnchor) return true;
+        if (!_placed.Contains(key)) return true; // no known position for it → can't judge, so don't hide
         return cr.InScope.Contains(key);
     }
 
@@ -136,6 +163,8 @@ public sealed class InterestManager
 
         // Collect the entity set once so every observer is evaluated against the same frame.
         List<SpatialEntity> entities = CollectEntities();
+        _placed.Clear();
+        foreach (SpatialEntity e in entities) _placed.Add(e.Key);
 
         foreach (int obs in _observers())
         {
@@ -171,7 +200,7 @@ public sealed class InterestManager
     private List<SpatialEntity> CollectEntities()
     {
         var list = new List<SpatialEntity>();
-        if (_config.FilterPlayers)
+        if (FilterEnabledFor(EntityKind.Player))
         {
             foreach (int p in _observers())
             {
@@ -181,17 +210,27 @@ public sealed class InterestManager
             }
         }
         if (_worldEntities != null)
-            foreach (SpatialEntity e in _worldEntities()) list.Add(e);
+            foreach (SpatialEntity e in _worldEntities())
+            {
+                // Only track kinds actually being filtered. Without this an ungated kind would still
+                // accumulate scope and fire LEAVE callbacks — sending a hide for a stream IsRelevant
+                // happily keeps relaying, i.e. an invisible train that is still eating bandwidth.
+                if (FilterEnabledFor(e.Key.Kind)) list.Add(e);
+            }
         return list;
     }
 
-    private bool FilterEnabledFor(EntityKind kind) => kind switch
+    private bool FilterEnabledFor(EntityKind kind)
     {
-        EntityKind.Player => _config.FilterPlayers,
-        EntityKind.Item => _config.FilterItems,
-        EntityKind.Trainset => _config.FilterTrains,
-        _ => false,
-    };
+        if (_suppressed.Contains(kind)) return false; // the data this filter needs isn't available
+        return kind switch
+        {
+            EntityKind.Player => _config.FilterPlayers,
+            EntityKind.Item => _config.FilterItems,
+            EntityKind.Trainset => _config.FilterTrains,
+            _ => false,
+        };
+    }
 
     private sealed class ClientRelevance
     {

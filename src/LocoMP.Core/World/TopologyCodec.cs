@@ -16,8 +16,21 @@ public static class TopologyCodec
     /// <summary>Literal "LMPW" bytes — refuses arbitrary files early with a clear error.</summary>
     private static readonly byte[] Magic = { (byte)'L', (byte)'M', (byte)'P', (byte)'W' };
 
-    /// <summary>Bump when the topology layout changes; old files are refused, re-extract per build.</summary>
-    public const byte FormatVersion = 1;
+    /// <summary>
+    /// Current layout. <b>v2</b> (D10 Burst 2) appends a per-file geometry flag and, when set, two
+    /// absolute world endpoints per edge — what the server needs to distance-test a railed train.
+    ///
+    /// <para><b>v1 files still load.</b> Unlike a wire protocol (where both ends upgrade together), a
+    /// <c>.lmpw</c> is an expensive artifact: re-extracting one requires the game, a loaded world, and
+    /// a human. Refusing v1 would brick every existing extraction to gain nothing — a v1 topology is
+    /// still perfectly valid for everything it always did (the walker, spline validation). It simply
+    /// reads back with <see cref="WorldTopology.HasGeometry"/> false, and the server fails open on
+    /// train interest. So <see cref="Read"/> accepts v1..v2 and <see cref="Write"/> always emits v2.</para>
+    /// </summary>
+    public const byte FormatVersion = 2;
+
+    /// <summary>Oldest layout <see cref="Read"/> still accepts.</summary>
+    public const byte MinReadableVersion = 1;
 
     public const int MaxEdges = 500_000;
     public const int MaxJunctions = 50_000;
@@ -27,10 +40,15 @@ public static class TopologyCodec
     {
         if (topology is null) throw new ArgumentNullException(nameof(topology));
 
-        var w = new PacketWriter(topology.Edges.Count * 16 + 64);
+        bool geometry = topology.HasGeometry;
+        var w = new PacketWriter(topology.Edges.Count * (geometry ? 40 : 16) + 64);
         foreach (byte m in Magic) w.WriteByte(m);
         w.WriteByte(FormatVersion);
         w.WriteString(topology.GameBuild);
+
+        // One flag for the whole file, not per edge: geometry is all-or-nothing (WorldTopology
+        // enforces it), so a per-edge flag would cost a byte an edge to encode an impossible state.
+        w.WriteByte(geometry ? (byte)1 : (byte)0);
 
         w.WriteVarUInt((uint)topology.Edges.Count);
         foreach (TrackEdge e in topology.Edges)
@@ -39,6 +57,9 @@ public static class TopologyCodec
             w.WriteSingle(e.LengthM);
             w.WriteVarUInt(e.NodeA);
             w.WriteVarUInt(e.NodeB);
+            if (!geometry) continue;
+            w.WriteSingle(e.A.X); w.WriteSingle(e.A.Y); w.WriteSingle(e.A.Z);
+            w.WriteSingle(e.B.X); w.WriteSingle(e.B.Y); w.WriteSingle(e.B.Z);
         }
 
         w.WriteVarUInt((uint)topology.Junctions.Count);
@@ -61,14 +82,31 @@ public static class TopologyCodec
         foreach (byte m in Magic)
             if (r.ReadByte() != m) throw new InvalidDataException("not a LocoMP topology file");
         byte version = r.ReadByte();
-        if (version != FormatVersion) throw new InvalidDataException($"topology format v{version}, this build reads v{FormatVersion}");
+        if (version < MinReadableVersion || version > FormatVersion)
+            throw new InvalidDataException($"topology format v{version}, this build reads v{MinReadableVersion}–v{FormatVersion}");
         string gameBuild = r.ReadString();
+
+        // v1 predates geometry entirely — no flag byte in the stream to read.
+        bool geometry = version >= 2 && r.ReadByte() != 0;
 
         int edgeCount = (int)r.ReadVarUInt();
         if (edgeCount > MaxEdges) throw new InvalidDataException($"edge count {edgeCount} out of range");
         var edges = new TrackEdge[edgeCount];
         for (int i = 0; i < edgeCount; i++)
-            edges[i] = new TrackEdge(r.ReadVarUInt(), r.ReadSingle(), r.ReadVarUInt(), r.ReadVarUInt());
+        {
+            uint id = r.ReadVarUInt();
+            float length = r.ReadSingle();
+            uint nodeA = r.ReadVarUInt();
+            uint nodeB = r.ReadVarUInt();
+            if (!geometry)
+            {
+                edges[i] = new TrackEdge(id, length, nodeA, nodeB);
+                continue;
+            }
+            var a = new WorldPoint(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
+            var b = new WorldPoint(r.ReadSingle(), r.ReadSingle(), r.ReadSingle());
+            edges[i] = new TrackEdge(id, length, nodeA, nodeB, a, b);
+        }
 
         int junctionCount = (int)r.ReadVarUInt();
         if (junctionCount > MaxJunctions) throw new InvalidDataException($"junction count {junctionCount} out of range");

@@ -9,6 +9,7 @@ using LocoMP.Core.Presence;
 using LocoMP.Core.Protocol;
 using LocoMP.Core.Session;
 using LocoMP.Core.Trains;
+using LocoMP.Core.World;
 using LocoMP.Transport;
 using Xunit;
 using Xunit.Abstractions;
@@ -278,6 +279,107 @@ public sealed class BudgetBench
         Assert.True(on > 0, "the probe must still receive its NEAR cluster when filtering is on");
         // The far cluster (half the traffic) is gated out — on should be well under broadcast-all.
         Assert.True(on < off * 0.6, $"interest ON ({on:N0} B) should be well under broadcast-all ({off:N0} B)");
+    }
+
+    /// <summary>
+    /// D10 Burst 2 proof, MEASURED: the payoff slice. Railed-train snapshots are ~96% of steady-state
+    /// bandwidth (§3 below), so gating THEM is where the budget is actually won. A probe sits at the
+    /// origin with a handful of trains beside it while the rest of the fleet works a yard ~3 km away;
+    /// we weigh the bytes the server actually sends the probe, interest OFF vs ON.
+    /// </summary>
+    [Fact]
+    public void Interest_management_cuts_a_distant_clients_train_bandwidth()
+    {
+        const int nearTrains = 4, farTrains = 20;
+        long off = MeasureProbeTrainBytes(interestEnabled: false, nearTrains, farTrains);
+        long on = MeasureProbeTrainBytes(interestEnabled: true, nearTrains, farTrains);
+
+        _out.WriteLine("-- Railed-train interest management (D10 Burst 2), MEASURED over a steady interval --");
+        _out.WriteLine($"{nearTrains} trains near the probe + {farTrains} trains ~3 km away, all streaming snapshots");
+        _out.WriteLine($"interest OFF (broadcast-all): {off:N0} B to the probe");
+        _out.WriteLine($"interest ON  (spatial)      : {on:N0} B to the probe   ({(off == 0 ? 0 : 100.0 * on / off):F0}% of broadcast-all)");
+        _out.WriteLine($"reduction                   : {(off == 0 ? 0 : 100.0 * (off - on) / off):F0}% of train bytes eliminated");
+        _out.WriteLine("");
+
+        Assert.True(off > 0, "the probe must receive train snapshots when filtering is off");
+        Assert.True(on > 0, "the probe must still receive its NEAR trains when filtering is on");
+        // 20 of 24 trains are out of range, so the probe should end up near the 4/24 ≈ 17% share.
+        Assert.True(on < off * 0.35, $"interest ON ({on:N0} B) should be well under broadcast-all ({off:N0} B)");
+    }
+
+    /// <summary>Run the near/far train scenario once and return the bytes the server sent to the probe
+    /// over a fixed streaming interval, after relevance has settled. The world is one long straight
+    /// edge so spline s maps directly to world X — the geometry is honest, just trivially shaped.</summary>
+    private long MeasureProbeTrainBytes(bool interestEnabled, int nearTrains, int farTrains)
+    {
+        var topology = new WorldTopology("B99.7",
+            new[] { new TrackEdge(0, 8000f, 1, 2, new WorldPoint(0, 0, 0), new WorldPoint(8000, 0, 0)) },
+            new JunctionDef[0]);
+
+        var hub = new LoopbackNetwork();
+        var counted = new CountingTransport(hub.Server);
+        var clock = new ManualClock();
+        var interest = new InterestConfig
+        {
+            Enabled = interestEnabled,
+            FilterPlayers = false, // isolate the train effect from Burst 1's pose gating
+            FilterTrains = true,
+            EnterRadiusM = 500f,
+            LeaveRadiusM = 750f,
+            RecomputeIntervalMs = 1,
+        };
+        var server = new NetServer(counted, new ServerConfig(Identity, interest: interest), clock,
+                                   restore: null, topology: topology);
+
+        var probe = new NetClient(hub.Connect(out int probeId), Identity, "Probe", clock, playerKey: "key-probe");
+        var all = new List<NetClient> { probe };
+        PumpClocked(clock, server, all, 8);
+
+        // Server-owned consists: the server is the sim owner, so it pushes every snapshot itself and
+        // the probe is a pure receiver — exactly the shape a dedicated server's fleet has.
+        var sets = new List<TrainsetDef>();
+        for (int i = 0; i < nearTrains + farTrains; i++) sets.Add(server.Trains.SpawnServerOwned(BenchCars(5)));
+
+        // Near trains within ~200 m of the origin; far trains clustered around 3 km.
+        float PositionOf(int i, int step) => i < nearTrains
+            ? 50f + i * 40f + step * 0.5f
+            : 3000f + (i - nearTrains) * 30f + step * 0.5f;
+
+        probe.SendPose(PoseAt(0f, 0f));
+        for (int r = 0; r < 12; r++)
+        {
+            for (int i = 0; i < sets.Count; i++) server.Trains.PushServerSnapshot(BenchSnapshot(sets[i], PositionOf(i, r)));
+            probe.SendPose(PoseAt(0f, 0f));
+            PumpClocked(clock, server, all, 2);
+        }
+
+        counted.Reset();
+        const int ticks = 20;
+        for (int k = 0; k < ticks; k++)
+        {
+            for (int i = 0; i < sets.Count; i++) server.Trains.PushServerSnapshot(BenchSnapshot(sets[i], PositionOf(i, 12 + k)));
+            probe.SendPose(PoseAt(0f, 0f));
+            PumpClocked(clock, server, all, 1);
+        }
+
+        long bytes = counted.BytesTo(probeId);
+        server.Dispose();
+        return bytes;
+    }
+
+    private static CarDef[] BenchCars(int n)
+    {
+        var cars = new CarDef[n];
+        for (int i = 0; i < n; i++) cars[i] = new CarDef(0, i == 0 ? "LocoDiesel" : "BoxcarBrown");
+        return cars;
+    }
+
+    private static TrainsetSnapshot BenchSnapshot(TrainsetDef def, float headS)
+    {
+        var cars = new CarSnapshot[def.Cars.Count];
+        for (int i = 0; i < cars.Length; i++)
+            cars[i] = CarSnapshot.Railed(new BogieState(0, headS - i * 16f, 8f), new BogieState(0, headS - i * 16f - 9f, 8f));
+        return new TrainsetSnapshot(def.Id, def.Epoch, 0L, cars);
     }
 
     /// <summary>Run the two-cluster scenario once and return the bytes the server sent to the probe

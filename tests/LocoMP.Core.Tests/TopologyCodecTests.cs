@@ -1,4 +1,5 @@
 using System.IO;
+using LocoMP.Core.Protocol;
 using LocoMP.Core.World;
 using Xunit;
 
@@ -40,6 +41,147 @@ public class TopologyCodecTests
         Assert.Equal(7u, j.Id);
         Assert.Equal(0u, j.EntryEdgeId);
         Assert.Equal(new uint[] { 1, 2 }, j.BranchEdgeIds);
+    }
+
+    /// <summary>The v2 shape: every edge carries absolute world endpoints (D10 Burst 2).</summary>
+    private static WorldTopology WithGeometry() => new(
+        "99-build2702",
+        new[]
+        {
+            // A 100 m edge running due east from the origin, then one continuing north.
+            new TrackEdge(0, 100f, nodeA: 1, nodeB: 2, new WorldPoint(0, 10, 0), new WorldPoint(100, 10, 0)),
+            new TrackEdge(1, 200f, nodeA: 2, nodeB: 3, new WorldPoint(100, 10, 0), new WorldPoint(100, 30, 200)),
+        },
+        new JunctionDef[0]);
+
+    [Fact]
+    public void Edge_geometry_survives_the_round_trip_and_reads_back_as_v2()
+    {
+        WorldTopology read = TopologyCodec.Read(TopologyCodec.Write(WithGeometry()));
+
+        Assert.True(read.HasGeometry);
+        Assert.Equal(100f, read.Edges[0].B.X);
+        Assert.Equal(200f, read.Edges[1].B.Z);
+        Assert.Equal(30f, read.Edges[1].B.Y);
+    }
+
+    /// <summary>
+    /// The back-compat contract that makes the v2 bump safe: a <c>.lmpw</c> costs a running game and a
+    /// human to produce, so an existing v1 extraction must keep working. It loads, it is still a valid
+    /// graph, and it simply reports no geometry — which is the server's signal to fail open on train
+    /// interest rather than to refuse the file.
+    /// </summary>
+    [Fact]
+    public void A_v1_file_still_loads_and_reports_no_geometry()
+    {
+        byte[] v1 = WriteV1(Synthetic());
+        WorldTopology read = TopologyCodec.Read(v1);
+
+        Assert.False(read.HasGeometry);
+        Assert.Equal(3, read.Edges.Count);
+        Assert.Equal(250.5f, read.Edges[0].LengthM);
+        Assert.Equal(2u, read.Edges[2].NodeA);              // the graph is fully intact
+        Assert.Single(read.Junctions);
+        Assert.False(read.TryEdgeWorldPoint(0, 10f, out _)); // ...it just can't place anything
+    }
+
+    /// <summary>A geometry-free topology written by THIS build is v2-with-the-flag-clear, and still
+    /// round-trips as geometry-free — the flag is not a proxy for the version.</summary>
+    [Fact]
+    public void A_geometry_free_topology_round_trips_without_inventing_positions()
+    {
+        WorldTopology read = TopologyCodec.Read(TopologyCodec.Write(Synthetic()));
+
+        Assert.False(read.HasGeometry);
+        Assert.False(read.Edges[0].HasGeometry);
+    }
+
+    /// <summary>Geometry is all-or-nothing: one edge without it disables placement for the whole
+    /// network, because a partly-placeable world would filter some trains and silently fail open on
+    /// others — harder to diagnose than not filtering at all.</summary>
+    [Fact]
+    public void One_geometry_free_edge_disables_geometry_for_the_whole_topology()
+    {
+        var mixed = new WorldTopology("99-build2702",
+            new[]
+            {
+                new TrackEdge(0, 100f, 1, 2, new WorldPoint(0, 0, 0), new WorldPoint(100, 0, 0)),
+                new TrackEdge(1, 100f, 2, 3), // no geometry
+            },
+            new JunctionDef[0]);
+
+        Assert.False(mixed.HasGeometry);
+        Assert.False(TopologyCodec.Read(TopologyCodec.Write(mixed)).HasGeometry);
+    }
+
+    /// <summary>The spline→world bridge: s metres along an edge lands proportionally along its chord.
+    /// This is what lets the server distance-test a railed train against a player pose.</summary>
+    [Fact]
+    public void A_spline_position_resolves_to_a_world_point_along_the_edge()
+    {
+        WorldTopology t = WithGeometry();
+
+        Assert.True(t.TryEdgeWorldPoint(0, 0f, out WorldPoint start));
+        Assert.Equal(0f, start.X);
+
+        Assert.True(t.TryEdgeWorldPoint(0, 25f, out WorldPoint quarter));
+        Assert.Equal(25f, quarter.X, 3);
+        Assert.Equal(0f, quarter.Z, 3);
+
+        Assert.True(t.TryEdgeWorldPoint(1, 100f, out WorldPoint mid)); // halfway along the 200 m edge
+        Assert.Equal(100f, mid.X, 3);
+        Assert.Equal(100f, mid.Z, 3);
+        Assert.Equal(20f, mid.Y, 3);
+    }
+
+    /// <summary>An out-of-range s is clamped to the edge, not rejected: a bogie a few centimetres past
+    /// an end (float drift, or a snapshot caught mid-transition) is a real train at a real place.</summary>
+    [Fact]
+    public void An_out_of_range_s_clamps_to_the_edge_ends()
+    {
+        WorldTopology t = WithGeometry();
+
+        Assert.True(t.TryEdgeWorldPoint(0, -5f, out WorldPoint before));
+        Assert.Equal(0f, before.X, 3);
+
+        Assert.True(t.TryEdgeWorldPoint(0, 100.4f, out WorldPoint after));
+        Assert.Equal(100f, after.X, 3);
+    }
+
+    /// <summary>An unknown edge id resolves to nothing — the caller must fail open rather than guess.</summary>
+    [Fact]
+    public void An_unknown_edge_cannot_be_placed()
+    {
+        Assert.False(WithGeometry().TryEdgeWorldPoint(999, 0f, out _));
+        Assert.Null(WithGeometry().Edge(999));
+    }
+
+    /// <summary>Hand-writes the pre-geometry layout (magic, version 1, build, then edges with no
+    /// geometry flag and no endpoints) so the back-compat test exercises real v1 bytes rather than
+    /// a v2 file with a doctored version byte.</summary>
+    private static byte[] WriteV1(WorldTopology t)
+    {
+        var w = new PacketWriter(256);
+        foreach (byte m in new[] { (byte)'L', (byte)'M', (byte)'P', (byte)'W' }) w.WriteByte(m);
+        w.WriteByte(1);
+        w.WriteString(t.GameBuild);
+        w.WriteVarUInt((uint)t.Edges.Count);
+        foreach (TrackEdge e in t.Edges)
+        {
+            w.WriteVarUInt(e.Id);
+            w.WriteSingle(e.LengthM);
+            w.WriteVarUInt(e.NodeA);
+            w.WriteVarUInt(e.NodeB);
+        }
+        w.WriteVarUInt((uint)t.Junctions.Count);
+        foreach (JunctionDef j in t.Junctions)
+        {
+            w.WriteVarUInt(j.Id);
+            w.WriteVarUInt(j.EntryEdgeId);
+            w.WriteVarUInt((uint)j.BranchEdgeIds.Length);
+            foreach (uint b in j.BranchEdgeIds) w.WriteVarUInt(b);
+        }
+        return w.ToArray();
     }
 
     [Fact]
