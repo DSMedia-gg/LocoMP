@@ -28,6 +28,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a manually-copied build can be silently replaced.
 
 ### Added
+- Spatial interest management — **trains** (D10, Burst 2): the payoff. The server now streams a moving
+  consist only to the players near it, instead of sending every train's position to everyone. Measured on
+  a test session where 4 of 24 consists were nearby, this cut the train traffic reaching that player by
+  **83%** — and trains are roughly 96% of everything a session sends, so this is the change that makes
+  bigger sessions and slower connections viable. A train that goes out of range disappears from your
+  world and is rebuilt, in the right place, when you approach again; a train you are driving is never
+  affected, however far you roam. Turn it on with the new **"Only stream nearby trains/players"** host
+  toggle, or `--interest` (plus `--interest-radius`, `--interest-players`) on the dedicated server —
+  **off by default**, so nothing changes unless you opt in.
+- World files (`.lmpw`) now record where each piece of track actually is, which is what lets the server
+  judge whether a train is near you. **Existing world files still work** — they simply don't carry the
+  new positions, and a server using one falls back to sending every train to everyone (as before) and
+  says so at startup. Re-extract your world from inside the game to get the benefit.
 - Container packaging for the dedicated server (M6-B): a game-free two-stage `docker/Dockerfile` +
   `docker/compose.yml` that build and run the headless server on the .NET runtime image — no Unity, no
   game install. Out of the box it's a bare server (presence + job board + persistence) on UDP 25701 with

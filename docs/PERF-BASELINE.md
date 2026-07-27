@@ -94,6 +94,35 @@ the *mechanism* end-to-end; the dominant channel — railed-train snapshots (~96
 Burst 2 (it needs coarse world geometry added to the extracted topology to place a spline-space train in
 the world). Off by default; a host/dedicated server opts in via `InterestConfig`.
 
+### 3c. Interest management on RAILED TRAINS — MEASURED (D10 Burst 2, protocol v11)
+
+The payoff. §3 identifies railed-train snapshots as **~96%** of steady-state bandwidth, and Burst 2 gates
+them — `BudgetBench.Interest_management_cuts_a_distant_clients_train_bandwidth`. A probe at the origin
+with 4 trains beside it while 20 more work a yard ~3 km away, every consist 5 cars, all streaming; the
+bytes the server actually sends the probe, filtering **off vs on**:
+
+| filtering | bytes to the probe (steady interval) | vs broadcast-all |
+|---|---:|---|
+| OFF (broadcast-all) | 51,360 B | — |
+| ON (spatial, 500 m enter / 750 m leave) | 8,560 B | **17%** |
+
+**83% of train bytes eliminated**, and 17% is exactly the 4-of-24 near share — the filter delivers the
+in-range consists and nothing else, with no leakage. Deterministic, so it is asserted, not just recorded.
+
+**What made trains possible (and why it needed a schema bump).** `BogieState` is spline-space (`EdgeId` +
+metres along), player poses are world-space, and `TrackEdge` was a pure graph — so the server literally
+could not tell how far a train was from a player. `TopologyCodec` **v2** adds coarse per-edge world
+endpoints (absolute coordinates, i.e. DV's floating-origin shift already removed), and
+`WorldTopology.TryEdgeWorldPoint` interpolates along the chord. A **v1 `.lmpw` still loads** and simply
+reports no geometry, in which case the server suppresses train filtering and behaves exactly as before —
+extracting a topology needs a running game, so refusing old files would cost more than it buys.
+
+**Implication for §3's table (an implication, not a measurement):** a reduction of this class applied to
+the 5,359 kbps worst case (32 players / 200 trains) puts a client with a normal-density neighbourhood
+back near or under the 128 kbps budget — the 6–42×→<1× headline. The exact figure depends on how
+clustered a real session is, which is why it is stated as an implication and left for a populated
+session to measure.
+
 ### 4. Host tick cost
 
 **~24.8 µs/tick** (`server.Poll` + relay, 8 players actively moving, over 2,000 ticks) — **~80× under**
@@ -116,10 +145,12 @@ fan-out.
    M5 private alpha (P0, ≤8) is not blocked**. But the **32-player ceiling (D10) is unviable** without
    relevance filtering. This is already scoped as **M6 Track B** ("interest-management tuning toward
    16+"); this data says it should **lead** the scaling work and precede any 16+ tester session.
-   **Status (2026-07-20): interest management Burst 1 (the mechanism, players only) is BUILT and
-   measured (§3b) — a distant client's pose stream is halved in the two-cluster test. The dominant
-   channel (railed-train snapshots, ~96%) is Burst 2, which needs coarse edge geometry in the topology;
-   only then does the 6–42×→<1× headline win land.**
+   **Status (2026-07-27): BOTH bursts are BUILT and measured. Burst 1 (players) halves a distant
+   client's pose stream (§3b); Burst 2 (railed trains — the ~96% channel) removes 83% of train bytes for
+   a client whose neighbourhood holds 4 of 24 consists (§3c). Interest management is OFF by default and
+   opt-in per server; the remaining work is a populated in-game session to measure a real clustering
+   pattern, and regrouping world ITEMS into the same filter (deferred — items are discrete and
+   contribute ~0 to steady state, so gating them is risk without bandwidth gain).**
 
 3. **Host tick: no concern** (80× headroom). Revisit only if the 32-player relay loops or future
    per-tick snapshot assembly change the picture.
