@@ -65,6 +65,11 @@ public static class PresenceShim
         return true;
     }
 
+    /// <summary>A live world position in absolute coordinates — the inverse of
+    /// <see cref="ToLocalPosition"/>. The one place the subtraction lives, so every subsystem that puts
+    /// a position on the wire (poses, item drops, extracted track geometry) agrees by construction.</summary>
+    public static Vector3 ToAbsolutePosition(Vector3 local) => local - OriginShift.currentMove;
+
     /// <summary>An absolute synced position, re-localized into THIS instance's shifted world space.</summary>
     public static Vector3 ToLocalPosition(Pose pose) =>
         new Vector3(pose.Px, pose.Py, pose.Pz) + OriginShift.currentMove;

@@ -85,6 +85,7 @@ public sealed class TrainSync : IDisposable
         client.Trains.View.TrainsetAdded += OnTrainsetAdded;
         client.Trains.View.TransactionApplied += OnTransaction;
         client.Trains.View.TrainsetRemoved += OnTrainsetRemoved;
+        client.TrainsetHidden += OnTrainsetHidden;
         client.Trains.View.SnapshotApplied += OnSnapshot;
         client.Trains.TrainsetRegistered += OnRegistered;
         client.Trains.JunctionChanged += OnRemoteJunction;
@@ -503,6 +504,23 @@ public sealed class TrainSync : IDisposable
     private void OnTrainsetRemoved(int trainsetId)
     {
         _bindings.Remove(trainsetId);
+        _remote.Remove(trainsetId);
+        RebuildCarSetIndex();
+    }
+
+    /// <summary>
+    /// The server stopped streaming a distant consist to us (D10 Burst 2 interest management). Tear
+    /// down its REPLICA so it doesn't stand frozen in the world forever, but leave the server-side
+    /// def alone — this is a "too far to care" hint, not a deletion. Walking back into range replays
+    /// the def + last snapshot + controls, which rebuilds the replica through the normal path.
+    ///
+    /// <para>A set WE simulate is never touched: those are our real cars, and their being far from us
+    /// is meaningless (they can't be — we're driving them). The server already declines to send this
+    /// for an owned set; the check here means a stray or stale hide still can't delete real trains.</para>
+    /// </summary>
+    private void OnTrainsetHidden(int trainsetId)
+    {
+        if (_bindings.ContainsKey(trainsetId)) return;
         _remote.Remove(trainsetId);
         RebuildCarSetIndex();
     }

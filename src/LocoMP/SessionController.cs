@@ -9,6 +9,7 @@ using LocoMP.Core.Net;
 using LocoMP.Core.Persistence;
 using LocoMP.Core.Protocol;
 using LocoMP.Core.Session;
+using LocoMP.Core.World;
 using LocoMP.Shim;
 using LocoMP.Transport;
 using UnityEngine;
@@ -68,6 +69,11 @@ public sealed class SessionController
     private bool _sharedCareer;
     private bool _freshCareer;
     private bool _autoGrant;
+
+    // Interest management (D10). OFF by default: a friend-scale session is well inside the bandwidth
+    // budget, so this is for bigger sessions and slow uplinks. Gating railed trains is the real win
+    // (~96% of steady-state traffic) and needs world geometry, which the host extracts live below.
+    private bool _interest;
     private bool _showShop;
     private bool _showItemShop;
     private bool _showGrant;
@@ -201,6 +207,7 @@ public sealed class SessionController
                 _freshCareer = GUILayout.Toggle(_freshCareer, "Fresh career (ignore saved)");
                 GUILayout.EndHorizontal();
                 _autoGrant = GUILayout.Toggle(_autoGrant, "Auto-grant my licenses to joining players");
+                _interest = GUILayout.Toggle(_interest, "Only stream nearby trains/players (saves bandwidth)");
 
                 if (GUILayout.Button("Host session", GUILayout.Width(160))) Host();
 
@@ -481,9 +488,36 @@ public sealed class SessionController
                 AcceptExternalItems = true,
                 ShopPrices = ShopCatalogBuilder.Build(_log),
             };
+            // D10 Burst 2: interest management needs the rail network's world geometry to place a
+            // railed train, and the host has the live world right here — so build the topology in
+            // memory rather than making the operator extract an .lmpw first. Only when the toggle is
+            // on: walking every track is real work, and a session that won't filter has no use for it.
+            // A failure here is never fatal — the server just runs unfiltered, as it always has.
+            WorldTopology? topology = null;
+            if (_interest)
+            {
+                try
+                {
+                    topology = TopologyExtractor.Build(_log);
+                }
+                catch (Exception e)
+                {
+                    _log($"[session] could not read the track network ({e.Message}) — hosting without interest filtering");
+                }
+            }
+            var interestConfig = new InterestConfig
+            {
+                Enabled = _interest,
+                FilterPlayers = _interest,
+            };
+
             _server = new NetServer(_serverTransport,
-                new ServerConfig(Identity(), _password.Length > 0 ? _password : null, career: careerConfig, items: itemConfig),
-                _clock, restore);
+                new ServerConfig(Identity(), _password.Length > 0 ? _password : null, career: careerConfig,
+                                 items: itemConfig, interest: interestConfig),
+                _clock, restore, topology);
+            if (_interest)
+                _log($"[session] interest management ON — trains " +
+                     $"{(topology is { HasGeometry: true } ? "filtered by distance" : "broadcast (no world geometry)")}, players filtered");
             _server.PlayerAdmitted += p => _log($"[session] admitted {p.Name} (id {p.Id}) — {_server!.PlayerCount} player(s)");
             _server.PlayerRemoved += id => _log($"[session] removed id {id} — {_server!.PlayerCount} player(s)");
             // Server-side refusals go to the requesting PEER; without these lines a remote

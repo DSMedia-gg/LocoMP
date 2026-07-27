@@ -27,6 +27,27 @@ public static class TopologyExtractor
         if (outputDir is null) throw new ArgumentNullException(nameof(outputDir));
         if (log is null) throw new ArgumentNullException(nameof(log));
 
+        WorldTopology topology = Build(log);
+        byte[] bytes = TopologyCodec.Write(topology);
+
+        Directory.CreateDirectory(outputDir);
+        string path = Path.Combine(outputDir, $"world-{Sanitize(topology.GameBuild)}.lmpw");
+        File.WriteAllBytes(path, bytes);
+
+        log($"[extract] wrote {bytes.Length:N0} bytes → {path}");
+        return path;
+    }
+
+    /// <summary>
+    /// Build the loaded world's topology IN MEMORY, without touching the filesystem — what a HOST uses
+    /// to hand its own <c>NetServer</c> the geometry interest management needs (D10 Burst 2). A
+    /// dedicated server gets the same object by reading an <c>.lmpw</c> that <see cref="Extract"/>
+    /// wrote. Throws with a clear message when no world is loaded.
+    /// </summary>
+    public static WorldTopology Build(Action<string> log)
+    {
+        if (log is null) throw new ArgumentNullException(nameof(log));
+
         RailTrackRegistryBase registry = RailTrackRegistryBase.Instance;
         if (registry == null) throw new InvalidOperationException("RailTrackRegistry is not alive — load a world first.");
 
@@ -50,13 +71,17 @@ public static class TopologyExtractor
 
         int EndpointOf(Junction.Branch b) => indexOf[b.track] * 2 + (b.first ? 0 : 1);
 
+        // ABSOLUTE coordinates, not raw Transform.position: DV's floating origin shifts the whole
+        // world as the player travels, so a baked shift-relative position would be wrong for every
+        // session but the one that extracted it. This is the same frame poses use on the wire, which
+        // is what makes a train and a player comparable at all (D10 Burst 2).
         Vector3? EndPosition(int endpoint)
         {
             RailTrack t = tracks[endpoint / 2];
             try
             {
                 Transform node = endpoint % 2 == 0 ? t.GetInNodeT() : t.GetOutNodeT();
-                return node != null ? node.position : (Vector3?)null;
+                return node != null ? PresenceShim.ToAbsolutePosition(node.position) : (Vector3?)null;
             }
             catch { return null; }
         }
@@ -119,7 +144,7 @@ public static class TopologyExtractor
         // Compact node numbering, deterministic because it scans endpoints in registry order.
         var nodeIds = new Dictionary<int, uint>();
         var edges = new TrackEdge[tracks.Length];
-        int zeroLength = 0;
+        int zeroLength = 0, missingGeometry = 0;
         double totalMetres = 0;
         for (int i = 0; i < tracks.Length; i++)
         {
@@ -127,7 +152,21 @@ public static class TopologyExtractor
             try { var curve = tracks[i].curve; if (curve != null) length = curve.length; } catch { }
             if (length <= 0f) zeroLength++;
             totalMetres += length;
-            edges[i] = new TrackEdge((uint)i, length, NodeId(i * 2), NodeId(i * 2 + 1));
+
+            // Endpoint geometry (codec v2): A at s = 0 is the IN node, B at s = LengthM the OUT node —
+            // the same convention NodeA/NodeB already encode, so s interpolates A→B directly.
+            Vector3? a = EndPosition(i * 2), b = EndPosition(i * 2 + 1);
+            if (a.HasValue && b.HasValue)
+            {
+                edges[i] = new TrackEdge((uint)i, length, NodeId(i * 2), NodeId(i * 2 + 1),
+                    new WorldPoint(a.Value.x, a.Value.y, a.Value.z),
+                    new WorldPoint(b.Value.x, b.Value.y, b.Value.z));
+            }
+            else
+            {
+                missingGeometry++;
+                edges[i] = new TrackEdge((uint)i, length, NodeId(i * 2), NodeId(i * 2 + 1));
+            }
         }
 
         uint NodeId(int endpoint)
@@ -139,13 +178,7 @@ public static class TopologyExtractor
 
         string build = Application.version;
         var topology = new WorldTopology(build, edges, junctionDefs);
-        byte[] bytes = TopologyCodec.Write(topology);
 
-        Directory.CreateDirectory(outputDir);
-        string path = Path.Combine(outputDir, $"world-{Sanitize(build)}.lmpw");
-        File.WriteAllBytes(path, bytes);
-
-        log($"[extract] wrote {bytes.Length:N0} bytes → {path}");
         log($"[extract] build '{build}': {edges.Length} edge(s) ({totalMetres / 1000:F1} km), {nodeIds.Count} node(s), " +
             $"{junctionDefs.Count} junction(s) ({skippedJunctions} skipped, {duplicateJunctionIds} duplicate id(s))");
         log($"[extract] health: {positionMismatches} position mismatch(es) > 1 m" +
@@ -153,8 +186,12 @@ public static class TopologyExtractor
             $", {zeroLength} zero-length edge(s), {missingTracks} branch(es) to unregistered tracks");
         if (positionMismatches > 0)
             log("[extract] WARNING: position mismatches mean the Branch.first convention or the graph is off — do NOT trust this file.");
+        log(topology.HasGeometry
+            ? "[extract] world geometry: present on every edge — interest management can filter railed trains."
+            : $"[extract] world geometry: MISSING on {missingGeometry} edge(s) — train interest will fail open " +
+              "(everything broadcast, as before). Extract again with the world fully loaded.");
 
-        return path;
+        return topology;
     }
 
     private static string SafeHash(Func<string> get)
