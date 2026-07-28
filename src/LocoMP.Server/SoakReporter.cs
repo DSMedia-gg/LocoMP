@@ -36,7 +36,26 @@ public readonly struct SoakSample
     /// Non-zero is not automatically a failure (a lagging owner can produce one), but it should stay
     /// bounded — a monotonically climbing count under steady load is a real regression signal.</summary>
     public long StaleSnapshotsDropped { get; }
+    /// <summary>
+    /// The managed heap's <b>RETAINED SET</b> — what survives a full collection, not whatever happens to
+    /// be allocated at this instant. Callers must read it with
+    /// <c>GC.GetTotalMemory(forceFullCollection: true)</c>.
+    ///
+    /// <para><b>Why the contract is this strict.</b> Measured on a real 5.5-minute soak, the instantaneous
+    /// heap <i>sawtooths</i>: it climbs ~3.3 MB per 20 s to 14–17 MB and collapses on gen2 GC roughly
+    /// every 100 s. That is a peak-to-floor ratio of ~4.3×, which on its own exceeds the leak factor —
+    /// so judging an instantaneous sample means the verdict depends on where in the sawtooth the reading
+    /// lands. The retained set has no sawtooth: across those same three GC cycles the post-collection
+    /// floor was flat at 3.6 / 3.9 / 3.9 MB. A leak is precisely a rising floor, so measuring the floor
+    /// directly is the only reading that answers the question being asked.</para>
+    ///
+    /// <para>The cost — a blocking gen2 collection — is paid only when a report is actually due (see
+    /// <see cref="SoakReporter.Due"/>), and only on a server that opted into <c>--soak-report</c>.</para>
+    /// </summary>
     public long ManagedBytes { get; }
+
+    /// <summary>Process working set. Recorded for context only, never judged: it includes the GC's
+    /// unreturned reservations, so it legitimately plateaus well above the retained set.</summary>
     public long WorkingSetBytes { get; }
     public bool MoneyConservationHolds { get; }
     public bool ItemConservationHolds { get; }
@@ -55,14 +74,26 @@ public sealed class SoakReporter
     private readonly long _intervalMs;
     private long _nextDueMs;
     private long _startMs;
-    private long _baselineManaged;   // the leak yardstick — see RebaseOnGrowingLoad
-    private int _peakPlayers;
+    private long _baselineManaged;   // the first report's RETAINED set — the leak yardstick
     private bool _started;
 
-    // The managed heap may legitimately grow to this multiple of the baseline before we call it a
-    // leak — GC timing, steady-state caches and the first-report warm-up all inflate it, so this is
-    // deliberately generous. The hard, exact signals are the conservation flags, not memory.
-    private const double MemoryLeakFactor = 4.0;
+    // How far the RETAINED set may drift above its baseline before we call it a leak.
+    //
+    // This was 4x when the sample was an instantaneous heap reading, where it had to absorb the whole
+    // GC sawtooth (measured peak/floor ~4.3x — the threshold was inside the noise, which is what made
+    // the oracle unusable). Post-collection there is no sawtooth to absorb: the signal is floor DRIFT,
+    // not magnitude, so the same 4x would need 15.6 MB against a 3.9 MB floor before firing — a precise
+    // instrument with a blunt threshold bolted on.
+    //
+    // Calibrated against a measured 5.5-minute soak (4 trains, 8 bots, 120 joins, 37k poses): retained
+    // went 2.0 -> 2.5 MB, i.e. 1.25x, flat from 2 minutes on. 2x leaves ~3x that drift as headroom while
+    // still catching a doubling.
+    //
+    // CAUTION: this is calibrated on workstation GC on a dev PC. A different GC mode or a container
+    // memory limit changes heap sizing, so re-baseline before trusting it elsewhere (see the csproj's
+    // pinned ServerGarbageCollection, and RUNBOOK-M6B-SERVER B.4). A slope test across reports would be
+    // the mode-independent successor to a fixed multiple.
+    private const double MemoryLeakFactor = 2.0;
 
     public SoakReporter(IClock clock, long intervalMs)
     {
@@ -93,7 +124,6 @@ public sealed class SoakReporter
         _nextDueMs = _clock.NowMs + _intervalMs;
         ReportsWritten++;
         if (s.ManagedBytes > PeakManagedBytes) PeakManagedBytes = s.ManagedBytes;
-        RebaseOnGrowingLoad(s);
 
         bool memoryLeak = _baselineManaged > 0 && s.ManagedBytes > _baselineManaged * MemoryLeakFactor;
         bool healthy = s.MoneyConservationHolds && s.ItemConservationHolds && !memoryLeak;
@@ -115,31 +145,27 @@ public sealed class SoakReporter
     }
 
     /// <summary>
-    /// Move the leak yardstick up while the session is still GROWING — heap that arrives with new
-    /// players is load, not a leak.
+    /// The managed heap's RETAINED set: what is still reachable after finalizers have run and the
+    /// resulting garbage has been collected. This is the reading <see cref="SoakSample.ManagedBytes"/>
+    /// requires.
     ///
-    /// <para><b>Why this exists.</b> The baseline used to be simply the first report's heap, and the
-    /// first report fires immediately, on an <i>empty</i> server. Load always arrives afterwards, so a
-    /// perfectly healthy run blew 4× purely from working set: the first real-exe soak (90 s, 4 trains, an
-    /// 8-bot swarm, 24 joins) latched HEAP-RUNAWAY at 13.0 MB against a 3.0 MB no-players baseline and
-    /// exited FAIL, while every exact oracle — money, items, trainset count, stale snapshots — held. An
-    /// endurance harness that cries wolf on every successful overnight run is worse than none, because
-    /// the exit code is the whole product.</para>
+    /// <para><b>Why three calls and not one.</b> A single collection is not enough: an object with a
+    /// finalizer SURVIVES the collection that finds it unreachable — it is promoted to the finalization
+    /// queue, its finalizer runs afterwards, and only the NEXT collection reclaims it. So a one-shot
+    /// <c>GC.GetTotalMemory(forceFullCollection: true)</c> still counts every finalizable object as
+    /// live, and a build-up of those looks exactly like the leak this harness exists to detect. The
+    /// canonical collect → drain finalizers → collect sequence removes that false signal.</para>
     ///
-    /// <para><b>Why peak player count is the right trigger.</b> A soak's swarm reaches its size and then
-    /// churns within it, so the peak stops climbing early and the baseline FREEZES — from that moment any
-    /// further growth is unexplained by load, which is exactly the property an overnight verdict needs.
-    /// The trade is deliberate and worth naming: a leak occurring <i>while</i> the session is still
-    /// ramping up is absorbed into the baseline. That is the correct bias here — a missed leak costs one
-    /// more soak run, a false FAIL costs trust in every run.</para>
+    /// <para><b>Blocking.</b> Call it on the report cadence only, and prefer an interval of 30 s or more
+    /// for a real soak — frequent stalls make the run stop being representative of unattended
+    /// behaviour.</para>
     /// </summary>
-    private void RebaseOnGrowingLoad(in SoakSample s)
+    public static long ReadRetainedBytes()
     {
-        if (s.Players <= _peakPlayers) return;
-        _peakPlayers = s.Players;
-        // Never ratchet DOWN: a quiet moment mid-run must not tighten the yardstick and manufacture a
-        // leak out of the next legitimate reload.
-        if (s.ManagedBytes > _baselineManaged) _baselineManaged = s.ManagedBytes;
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+        return GC.GetTotalMemory(forceFullCollection: false); // already collected — don't pay for a third
     }
 
     /// <summary>A one-line end-of-run verdict for the shutdown banner + automation logs.</summary>

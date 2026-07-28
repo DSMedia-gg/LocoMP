@@ -83,16 +83,41 @@ LocoMP.Server --port 8877 --spawn-trains 4 --soak-report 30 --duration 86400
 LocoMP.Bot --host 127.0.0.1 --count 8 --behavior wander --churn 15 --duration 86400
 ```
 
-`--soak-report <s>` prints a health line every `s` seconds — players, trains, jobs, items, managed heap,
-and the internal accounting oracles (money conservation = the ledger balances mint − burn exactly; item
+`--soak-report <s>` prints a health line every `s` seconds — players, trains, jobs, items, memory, and the
+internal accounting oracles (money conservation = the ledger balances mint − burn exactly; item
 conservation = live items == spawned − despawned). It **latches** to `⚠ UNHEALTHY` the instant an oracle
-breaks or the managed heap passes 4× its baseline, so a leak can't slip by unwatched. `--duration <s>`
+breaks or memory drifts past 2× its baseline, so a leak can't slip by unwatched. `--duration <s>`
 self-terminates the server after `s` seconds (0 = run until Ctrl+C/`stop`), which also **avoids the env
 trap** where a detached server exe outlives its shell and locks `LocoMP.Core.dll` against later builds.
 
 At shutdown the server prints `[soak] PASS …` (exit code 0) or `[soak] FAIL …` (exit code **2**) — so an
 overnight run's exit code alone tells you whether the world stayed sound. The step-by-step recipe + a
 results row live in `../../RUNBOOK-M6B-SERVER.md` §B.4.
+
+### What the `heap` column actually is
+
+The **retained set** — what survives a full collection — not whatever happens to be allocated at that
+instant. Each report does `GC.Collect()` → `WaitForPendingFinalizers()` → `GC.Collect()` before reading.
+Both halves matter:
+
+- **Collecting first**, because the instantaneous heap sawtooths. Measured here: it climbed ~3.3 MB per
+  20 s to 14–17 MB then collapsed on gen2 every ~100 s — a peak/floor ratio of ~4.3×, *larger than any
+  useful leak threshold*, so the verdict depended on where in the sawtooth the sample landed. A leak is a
+  rising floor; this measures the floor. Post-collection the same workload reads a flat 2.4–2.5 MB.
+- **Two collections with the finalizers drained between them**, because an object with a finalizer
+  survives the collection that finds it unreachable and is only reclaimed by the next one. A single
+  collect counts every finalizable object as live — and a build-up of those looks exactly like the leak
+  you are hunting.
+
+Two consequences worth knowing:
+
+- **Use `--soak-report 30` or higher for a real soak.** The forced collection blocks; it cannot cause a
+  false FAIL, but frequent stalls stop the run representing unattended behaviour. The server prints a
+  NOTE below 30 s.
+- **The 2× threshold is calibrated on workstation GC** (pinned in the csproj so a dev PC and the
+  container agree) against a measured 6.5-minute run: retained went 2.0 → 2.5 MB (1.25×) and then held
+  flat across 144 joins. **Under Docker with a memory limit the GC's heap hard limit becomes a percentage
+  of that limit**, so re-baseline in the container before trusting the number there.
 
 ## Known limitations (this alpha, M6-B.1/B.2/B.3)
 

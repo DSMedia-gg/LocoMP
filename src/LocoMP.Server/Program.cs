@@ -182,8 +182,16 @@ SoakReporter? soak = opts.SoakReportSeconds > 0
     : null;
 long durationMs = (long)(opts.DurationSeconds * 1000);
 if (soak is not null)
+{
     Console.WriteLine($"[server] soak health report every {opts.SoakReportSeconds:F0}s" +
                       (durationMs > 0 ? $"; self-terminating after {opts.DurationSeconds:F0}s." : "."));
+    // Each report forces a full collection to read the retained set, which briefly stalls the loop. That
+    // cannot produce a false FAIL (the verdict is the conservation flags plus the leak test), but at a
+    // short interval the stalls are frequent enough that the run stops representing unattended behaviour.
+    if (opts.SoakReportSeconds < 30)
+        Console.WriteLine($"[server] NOTE: a {opts.SoakReportSeconds:F0}s report interval stalls the loop often enough to " +
+                          "skew a long soak — 30s or more is the representative cadence.");
+}
 
 bool stopping = false;
 Console.CancelKeyPress += (_, e) => { e.Cancel = true; stopping = true; };
@@ -212,14 +220,15 @@ while (!stopping)
     autosaver.Tick();
     if (admin.Drain(Status, autosaver.SaveNow)) stopping = true;
 
-    // Only gather the sample (it queries process memory) when a report is actually due.
+    // Only gather the sample when a report is actually due — it queries process memory and forces a
+    // full collection, so Due() keeps that cost on the report cadence rather than on every tick.
     if (soak is not null && soak.Due())
     {
         long workingSet; using (var proc = Process.GetCurrentProcess()) workingSet = proc.WorkingSet64;
         string? line = soak.Poll(new SoakSample(
             server.PlayerCount, server.Trains.Registry.Sets.Count, server.Career.Registry.Jobs.Count,
             server.Items.Registry.Items.Count, server.Trains.StaleSnapshotsDropped,
-            GC.GetTotalMemory(false), workingSet,
+            SoakReporter.ReadRetainedBytes(), workingSet,
             server.Career.Registry.Ledger.ConservationHolds, server.Items.Registry.ItemConservationHolds));
         if (line is not null) Console.WriteLine(line);
     }

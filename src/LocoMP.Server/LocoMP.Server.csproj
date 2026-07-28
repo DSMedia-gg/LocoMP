@@ -8,6 +8,20 @@
     <AssemblyName>LocoMP.Server</AssemblyName>
     <RootNamespace>LocoMP.Server</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- GC mode is PINNED, not left to the runtime's defaults, so a dev PC and the SVHost container
+         behave identically. Without this the mode is environment-dependent, and under Docker with a
+         memory limit the GC's heap hard limit becomes a percentage of that limit — so heap sizing
+         differs and any leak threshold calibrated on a workstation would not transfer (the soak
+         watch's MemoryLeakFactor is exactly such a threshold).
+
+         Workstation, non-concurrent, is the deliberate choice for this workload: the server is a
+         single 30 Hz loop with a ~2.5 MB retained set, so Server GC's per-core heaps would buy no
+         throughput while inflating memory and making container sizing harder to reason about; and
+         background GC only matters for pause times this process does not have. Predictable beats
+         clever here. Re-baseline in the container regardless before B.4 counts (RUNBOOK-M6B-SERVER). -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
   </PropertyGroup>
 
   <ItemGroup>

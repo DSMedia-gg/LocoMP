@@ -10,7 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- **Your money is no longer at risk when a session ends.** Two separate faults, both found by playing:
+- **The dedicated server's overnight health check now reports the truth.** Its memory-leak watch compared
+  a snapshot taken on an *empty* server against later readings taken under load, so a perfectly healthy
+  run finished by reporting failure — useless for the one job it has, which is telling you unattended
+  whether something went wrong. It now measures what memory is actually still being held onto (after a
+  full clean-up, with object finalizers given the chance to run — otherwise objects merely *waiting* to be
+  cleaned up read as a leak), which is a steady, quiet number instead of a jagged one, so the threshold
+  could be tightened from 4× to 2×. Verified on a 6.5-minute run with 8 clients and 144 joins: memory sat
+  flat at 2.5 MB and the run correctly passed. Use `--soak-report 30` or higher — the check briefly pauses
+  the server each time it runs. The garbage collector's mode is now pinned so a dev machine and a
+  container behave the same way; re-check the numbers in the container before relying on them there. Two separate faults, both found by playing:
   leaving a session could quietly turn the session's spending money into your *real* career balance (a
   $10,000 career came back holding $2,000, permanently, at the next autosave); and if you left while a cash
   register still held money you'd put in, that money was handed back **on top** of your restored balance,
