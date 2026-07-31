@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Cars split off from a train no longer go missing for anyone who joins later.** When you uncoupled a
+  train and drove away with one half, the half you left behind stopped being sent to anybody — so a friend
+  joining afterwards simply never saw those cars, for the rest of the session. The abandoned half now keeps
+  the position its cars already had, so it shows up where you left it. The same fix means asking the game to
+  re-send a train you have lost track of now actually restores it (it used to send the train's description
+  without its position, which was not enough to put it back in the world), and a train left parked keeps its
+  position across a server restart even if nobody was driving it.
 - **The dedicated server's overnight health check now reports the truth.** Its memory-leak watch compared
   a snapshot taken on an *empty* server against later readings taken under load, so a perfectly healthy
   run finished by reporting failure — useless for the one job it has, which is telling you unattended
