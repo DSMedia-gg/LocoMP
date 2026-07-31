@@ -20,6 +20,7 @@ namespace LocoMP.Core.Session;
 public sealed class ServerTrains
 {
     private readonly ITransport _transport;
+    private readonly IClock _clock;
     private readonly Func<IEnumerable<int>> _connectedIds;
     private readonly Dictionary<uint, byte> _junctions = new();
     private readonly Dictionary<uint, float> _turntables = new();
@@ -34,6 +35,20 @@ public sealed class ServerTrains
     // the epoch and every transaction prunes). Feeds the join-burst baseline and the world save.
     private readonly Dictionary<int, TrainsetSnapshot> _latest = new();
 
+    // Last known kinematic state per CAR, carId → its slot from the most recent admitted snapshot.
+    //
+    // Kinematic state belongs to the car, not to the set: a set is a membership fact that transactions
+    // create and retire, while a car keeps rolling across every couple, split and derail. Holding it
+    // per-car is what lets a transaction PRODUCT inherit a position — a split doesn't move anything, so
+    // the cars are exactly where they were a moment ago, and without this a product nobody streams has
+    // no baseline at all and is invisible to every later joiner (03 §3 says a parked set is "static;
+    // positions frozen" — it can only be frozen if the position survives).
+    //
+    // A TrainsetTransaction carries retired IDs but not retired defs, so the index → carId mapping is
+    // gone by the time the transaction is broadcast. Recording it per-car as snapshots arrive is what
+    // makes the mapping available at all.
+    private readonly Dictionary<int, CarSnapshot> _latestByCar = new();
+
     // Trainsets the SERVER spawned as its own (M6-B.2/B.3). Stays a member even while a player has it
     // on loan, so a release or a disconnect hands it back to the server rather than parking it dead.
     private readonly HashSet<int> _serverOwnedSets = new();
@@ -46,6 +61,7 @@ public sealed class ServerTrains
     {
         _transport = transport;
         _connectedIds = connectedIds;
+        _clock = clock;
         Registry = new TrainsetRegistry(clock);
     }
 
@@ -67,6 +83,38 @@ public sealed class ServerTrains
     /// authoritative removal already went out globally).</summary>
     private void ForgetInterest(int trainsetId) =>
         _interest?.ForgetEntity(new EntityKey(EntityKind.Trainset, trainsetId));
+
+    /// <summary>File an admitted snapshot's slots against their car ids. The snapshot's car order IS the
+    /// set's car order at the stamped epoch (03 §4), and admission has already proven the epoch current,
+    /// so the two line up by index.</summary>
+    private void RememberCars(TrainsetDef def, TrainsetSnapshot snap)
+    {
+        int n = def.Cars.Count < snap.Cars.Length ? def.Cars.Count : snap.Cars.Length;
+        for (int i = 0; i < n; i++) _latestByCar[def.Cars[i].Id] = snap.Cars[i];
+    }
+
+    /// <summary>Assemble a baseline for a set from its cars' last known states. Fails (rather than
+    /// inventing a partial consist) unless EVERY car is known — a snapshot's slots are positional, so a
+    /// gap would silently mis-assign every car after it.</summary>
+    private bool TryBuildBaseline(TrainsetDef def, out TrainsetSnapshot? snapshot)
+    {
+        snapshot = null;
+        var cars = new CarSnapshot[def.Cars.Count];
+        for (int i = 0; i < cars.Length; i++)
+        {
+            if (!_latestByCar.TryGetValue(def.Cars[i].Id, out CarSnapshot car)) return false;
+            cars[i] = car;
+        }
+        snapshot = new TrainsetSnapshot(def.Id, def.Epoch, _clock.NowMs, cars);
+        return true;
+    }
+
+    /// <summary>Forget a car's kinematic state (it was deleted). Keeps the per-car store bounded to
+    /// cars that still exist.</summary>
+    private void ForgetCars(IEnumerable<int> carIds)
+    {
+        foreach (int id in carIds) _latestByCar.Remove(id);
+    }
 
     /// <summary>The authoritative consist record. Exposed for the host UI, admin, and tests.</summary>
     public TrainsetRegistry Registry { get; }
@@ -231,6 +279,7 @@ public sealed class ServerTrains
         if (!Registry.Sets.TryGetValue(snap.TrainsetId, out TrainsetDef? def)) return;
         if (def.OwnerId != ServerOwnerId || def.Epoch != snap.Epoch) return;
         _latest[snap.TrainsetId] = snap;
+        RememberCars(def, snap);
         byte[] payload = BuildSnapshot(snap);
         foreach (int id in _connectedIds())
             if (Relevant(id, snap.TrainsetId))
@@ -272,6 +321,7 @@ public sealed class ServerTrains
             return;
         }
         _latest[snap.TrainsetId] = snap; // join-burst baseline + persisted world position
+        if (Registry.Sets.TryGetValue(snap.TrainsetId, out TrainsetDef? snapSet)) RememberCars(snapSet, snap);
         // Valid and current: relay the original bytes untouched (the sender is implicit — the
         // trainset's owner is authoritative, so recipients don't need a sender id). This is THE hot
         // path the perf baseline measured at ~96% of steady-state bandwidth, so the relevance test
@@ -334,11 +384,14 @@ public sealed class ServerTrains
             ProposalRejected?.Invoke(peerId, $"rerail: {reason}");
     }
 
+    /// <summary>The client-side escape hatch of 03 §4 — "re-send me the truth about this set". It now
+    /// replays the POSITION as well as the def: a client materialises a consist on its first snapshot,
+    /// so a def alone left the requester exactly as stuck as before it asked, which made the documented
+    /// recovery path a no-op for the one case that needs it (a set nobody is streaming).</summary>
     private void HandleResync(int peerId, PacketReader r)
     {
         int trainsetId = (int)r.ReadVarUInt();
-        if (Registry.Sets.TryGetValue(trainsetId, out TrainsetDef? def))
-            _transport.Send(peerId, BuildCreate(0, def), DeliveryMethod.ReliableOrdered);
+        if (Registry.Sets.ContainsKey(trainsetId)) ReplayTrainset(peerId, trainsetId);
     }
 
     private void HandleOwnership(int peerId, PacketReader r)
@@ -567,6 +620,9 @@ public sealed class ServerTrains
         }
         if (Registry.TryDeleteCar(carId, out TrainsetTransaction? txn, out int removedSetId, out string? reason))
         {
+            // The car is gone for good, so its kinematic state must not linger and be inherited by a
+            // later set that happens to reuse the id.
+            ForgetCars(new[] { carId });
             if (txn != null)
             {
                 BroadcastTransaction(txn);
@@ -611,7 +667,18 @@ public sealed class ServerTrains
             ForgetInterest(id); // a retired id must not linger in a scope set (it would suppress a
                                 // future re-enter if the counter ever wrapped onto it)
         }
-        foreach (TrainsetDef def in txn.Products) _latest.Remove(def.Id);
+        // A product's baseline is REBUILT from its cars rather than dropped. The old code removed it and
+        // waited for the owner's next stream — but an orphaned product (a split half nobody adopts, or
+        // one whose owner leaves) is never streamed, so it never got a baseline at all, and since a
+        // client materialises a consist on its FIRST SNAPSHOT it stayed invisible to every later joiner
+        // for the rest of the session. A transaction doesn't move cars, so their last known positions
+        // are still correct; re-stamping them under the product's epoch is a faithful baseline, not a
+        // guess.
+        foreach (TrainsetDef def in txn.Products)
+        {
+            if (TryBuildBaseline(def, out TrainsetSnapshot? baseline)) _latest[def.Id] = baseline!;
+            else _latest.Remove(def.Id); // no per-car state yet (a set registered but never streamed)
+        }
 
         var w = new PacketWriter(128).WriteByte((byte)MessageType.TrainsetTransaction);
         TrainCodec.WriteTransaction(w, txn);
@@ -640,7 +707,14 @@ public sealed class ServerTrains
     {
         Registry.RestoreState(save.Sets, save.NextTrainsetId, save.NextCarId);
         _latest.Clear();
-        foreach (TrainsetSnapshot snap in save.LatestSnapshots) _latest[snap.TrainsetId] = snap;
+        _latestByCar.Clear();
+        foreach (TrainsetSnapshot snap in save.LatestSnapshots)
+        {
+            _latest[snap.TrainsetId] = snap;
+            // Re-file the per-car states too, so a set split AFTER a cold restart still inherits a
+            // baseline. A restored world is exactly the case with no owner streaming anything.
+            if (Registry.Sets.TryGetValue(snap.TrainsetId, out TrainsetDef? def)) RememberCars(def, snap);
+        }
         _junctions.Clear();
         foreach (KeyValuePair<uint, byte> j in save.Junctions) _junctions[j.Key] = j.Value;
         _turntables.Clear();
