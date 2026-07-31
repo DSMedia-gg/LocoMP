@@ -91,7 +91,7 @@ public sealed class SoakReporter
     //
     // CAUTION: this is calibrated on workstation GC on a dev PC. A different GC mode or a container
     // memory limit changes heap sizing, so re-baseline before trusting it elsewhere (see the csproj's
-    // pinned ServerGarbageCollection, and RUNBOOK-M6B-SERVER B.4). A slope test across reports would be
+    // pinned ServerGarbageCollection). A slope test across reports would be
     // the mode-independent successor to a fixed multiple.
     private const double MemoryLeakFactor = 2.0;
 

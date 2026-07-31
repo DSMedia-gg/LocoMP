@@ -41,6 +41,13 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
+## Internal planning/session docs — kept in the private parent corpus, never in the public repo
+SESSION.md
+STATE.md
+AGENTS.md
+A1-*-HANDOFF.md
+RUNBOOK-*.md
+
 ## NuGet
 *.nupkg
 packages/

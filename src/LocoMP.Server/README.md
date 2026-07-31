@@ -72,7 +72,7 @@ LocoMP.Bot --host 127.0.0.1 --claim-server-train --world <same .lmpw> --drive-se
 ```
 It claims an ambient server train, drives it along the topology for 20 s (its trajectory diverges from
 the server's route — visible from your game), then releases it and the server resumes. Ctrl+C also hands
-it back (reclaim-on-disconnect). A structured in-game smoke checklist is in `../../RUNBOOK-M6B-SERVER.md`.
+it back (reclaim-on-disconnect).
 
 ## Endurance soak (unattended, M6-B soak exit)
 
@@ -91,8 +91,7 @@ self-terminates the server after `s` seconds (0 = run until Ctrl+C/`stop`), whic
 trap** where a detached server exe outlives its shell and locks `LocoMP.Core.dll` against later builds.
 
 At shutdown the server prints `[soak] PASS …` (exit code 0) or `[soak] FAIL …` (exit code **2**) — so an
-overnight run's exit code alone tells you whether the world stayed sound. The step-by-step recipe + a
-results row live in `../../RUNBOOK-M6B-SERVER.md` §B.4.
+overnight run's exit code alone tells you whether the world stayed sound.
 
 ### What the `heap` column actually is
 

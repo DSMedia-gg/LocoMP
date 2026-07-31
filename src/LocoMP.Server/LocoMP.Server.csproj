@@ -19,7 +19,7 @@
          single 30 Hz loop with a ~2.5 MB retained set, so Server GC's per-core heaps would buy no
          throughput while inflating memory and making container sizing harder to reason about; and
          background GC only matters for pause times this process does not have. Predictable beats
-         clever here. Re-baseline in the container regardless before B.4 counts (RUNBOOK-M6B-SERVER). -->
+         clever here. Re-baseline in the container regardless before the soak numbers count. -->
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
   </PropertyGroup>

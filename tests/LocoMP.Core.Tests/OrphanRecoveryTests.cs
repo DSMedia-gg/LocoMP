@@ -8,7 +8,7 @@ namespace LocoMP.Core.Tests;
 
 /// <summary>
 /// Cleanup on departure, and the convergence the session was missing (the M4 smoke pass's orphan
-/// findings, RUNBOOK-M4-SMOKE). The session modelled acquisition — pick up, claim, couple — but not
+/// findings). The session modelled acquisition — pick up, claim, couple — but not
 /// involuntary relinquishment, and it never re-asserted truth, so state that went wrong stayed wrong
 /// with no repair path.
 ///

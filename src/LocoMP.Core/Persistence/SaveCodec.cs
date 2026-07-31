@@ -13,7 +13,7 @@ namespace LocoMP.Core.Persistence;
 /// The versioned binary server store ("LMPS", 03 §7). Hand-rolled over PacketWriter/Reader like
 /// the LMPW topology codec — zero new dependencies in the mod payload, and the wire codecs are
 /// reused for the shared shapes so the store and the wire can't drift apart. (03 §7 sketched
-/// MessagePack here; the deviation is deliberate and flagged in STATE.md — MessagePack stays
+/// MessagePack here; the deviation is deliberate — MessagePack stays
 /// reserved for bulk transfer if join-snapshot sizes ever demand it.) Reads are bounds-checked and
 /// count-capped like every packet read: a truncated or hostile file throws InvalidDataException /
 /// EndOfStreamException rather than yielding garbage — callers fall back to a backup rotation.
