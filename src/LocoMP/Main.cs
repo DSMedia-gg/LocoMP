@@ -19,6 +19,7 @@ public static class Main
     private static SessionController? _session;
     private static bool _active;
     private static string _extractStatus = "";
+    private static string _careerStatus = "";
 
     public static bool Load(UnityModManager.ModEntry modEntry)
     {
@@ -88,7 +89,8 @@ public static class Main
         return $"{Mvid(typeof(Main))}/{Mvid(typeof(PresenceShim))}";
     }
 
-    /// <summary>Dev tools under the session panel — currently just the M2.2 world extractor.</summary>
+    /// <summary>Dev tools under the session panel: the M2.2 world extractor and the M6-B career
+    /// exporter — the two operator-supplied files the dedicated server mounts.</summary>
     private static void OnToolsGUI(UnityModManager.ModEntry modEntry, Action<string> log)
     {
         GUILayout.Space(4);
@@ -107,6 +109,24 @@ public static class Main
             }
         }
         if (_extractStatus.Length > 0) GUILayout.Label(_extractStatus);
+        GUILayout.EndHorizontal();
+
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button("Export career (.lmpc)", GUILayout.Width(180)))
+        {
+            try
+            {
+                var preset = _session?.HostPreset ?? Core.Career.ProgressionPreset.PerPlayer;
+                string path = CareerConfigExporter.Export(preset, modEntry.Path, log);
+                _careerStatus = "wrote " + Path.GetFileName(path);
+            }
+            catch (Exception e)
+            {
+                _careerStatus = "failed: " + e.Message;
+                log("[career-export] FAILED: " + e);
+            }
+        }
+        if (_careerStatus.Length > 0) GUILayout.Label(_careerStatus);
         GUILayout.EndHorizontal();
     }
 }

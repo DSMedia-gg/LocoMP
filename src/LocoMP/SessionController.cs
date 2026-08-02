@@ -440,6 +440,11 @@ public sealed class SessionController
         return $"[{def.Id}] {def.JobType} {def.Origin}→{def.Destination}  {def.CarCount}× {def.CargoKind}  {Money(def.PayoutCents)}{needs}";
     }
 
+    /// <summary>The progression preset the panel currently has selected — the career exporter
+    /// stamps it into the <c>.lmpc</c> (the file is authoritative on the server, preset included).</summary>
+    public ProgressionPreset HostPreset =>
+        _sharedCareer ? ProgressionPreset.SharedCareer : ProgressionPreset.PerPlayer;
+
     private void Host()
     {
         try
