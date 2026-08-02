@@ -95,6 +95,15 @@ public sealed class SoakReporter
     // the mode-independent successor to a fixed multiple.
     private const double MemoryLeakFactor = 2.0;
 
+    // A ratio alone is meaningless against a tiny floor — found by the first containerized soak
+    // (2026-08-03): a BARE server (no topology, the SVHost compose default) baselines at ~0.1 MB
+    // retained on its empty first report, so the ~0.4 MB of ordinary roster/transport state that
+    // 8 connecting bots add read as ">2× baseline" and latched a false UNHEALTHY. So a runaway
+    // needs BOTH: the ratio (drift against a meaningful floor) and an absolute rise no amount of
+    // legitimate connection state produces — measured legit load contribution is ~0.4-0.5 MB on
+    // both rigs; a real leak crosses 8 MB of RETAINED growth without breaking stride overnight.
+    private const long MemoryLeakMinDeltaBytes = 8 * 1024 * 1024;
+
     public SoakReporter(IClock clock, long intervalMs)
     {
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
@@ -125,7 +134,8 @@ public sealed class SoakReporter
         ReportsWritten++;
         if (s.ManagedBytes > PeakManagedBytes) PeakManagedBytes = s.ManagedBytes;
 
-        bool memoryLeak = _baselineManaged > 0 && s.ManagedBytes > _baselineManaged * MemoryLeakFactor;
+        bool memoryLeak = _baselineManaged > 0 && s.ManagedBytes > _baselineManaged * MemoryLeakFactor
+                          && s.ManagedBytes - _baselineManaged > MemoryLeakMinDeltaBytes;
         bool healthy = s.MoneyConservationHolds && s.ItemConservationHolds && !memoryLeak;
         if (!healthy) EverUnhealthy = true;
 

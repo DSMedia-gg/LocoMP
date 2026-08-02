@@ -75,7 +75,7 @@ public class SoakReporterTests
 
         for (int i = 0; i <= 10; i++)
         {
-            r.Poll(With(players: 8, managedBytes: 2_000_000 + i * 250_000)); // 2.0 → 4.5 MB
+            r.Poll(With(players: 8, managedBytes: 2_000_000 + i * 1_500_000)); // 2.0 → 17.0 MB
             clock.Advance(1000);
         }
 
@@ -83,14 +83,42 @@ public class SoakReporterTests
         Assert.Contains("FAIL", r.Summary());
     }
 
-    /// <summary>The threshold has to be tight enough to matter. A 25% drift — the healthy measured
-    /// figure — must pass, and a doubling must not: that band is the whole calibration.</summary>
+    /// <summary>
+    /// Regression for the false FAIL the first CONTAINERIZED soak produced (2026-08-03): a BARE server
+    /// (no topology — the compose default) baselines at ~0.1 MB retained, so the ~0.4 MB of ordinary
+    /// roster/transport state that 8 connecting bots add is 5× the baseline — and a ratio alone cannot
+    /// tell that apart from a leak. It is not one: it is bounded working state. The runaway verdict
+    /// therefore also requires an absolute rise (8 MB) no legitimate connection state produces.
+    /// </summary>
+    [Fact]
+    public void A_bare_server_baseline_is_not_tripped_by_ordinary_connection_state()
+    {
+        var clock = new ManualClock();
+        var r = new SoakReporter(clock, intervalMs: 1000);
+
+        r.Poll(With(players: 0, managedBytes: 100_000));   // bare server: near-zero floor
+        clock.Advance(1000);
+        foreach (long bytes in new long[] { 400_000, 500_000, 400_000, 500_000, 400_000 })
+        {
+            r.Poll(With(players: 8, managedBytes: bytes)); // 8 bots' worth of state — 4-5× the floor
+            clock.Advance(1000);
+        }
+
+        Assert.False(r.EverUnhealthy, "bounded connection state on a tiny floor is not a leak");
+        Assert.Contains("PASS", r.Summary());
+    }
+
+    /// <summary>The verdict needs BOTH conditions: the ratio (drift against the floor) and an absolute
+    /// rise (8 MB) that bounded working state never produces. A 25% drift — the healthy measured
+    /// figure — must pass; a doubling alone is still not enough on a small floor (the container
+    /// finding); a doubling that has ALSO grown past the absolute floor is a leak being a leak.</summary>
     [Theory]
-    [InlineData(2_500_000, false)] // +25%: the measured healthy run
-    [InlineData(3_900_000, false)] // +95%: uncomfortable, still under the bar
-    [InlineData(4_100_000, true)]  // +105%: over
-    [InlineData(9_000_000, true)]  // runaway
-    public void The_leak_threshold_sits_between_measured_drift_and_a_doubling(long endBytes, bool expectUnhealthy)
+    [InlineData(2_500_000, false)]  // +25%: the measured healthy run
+    [InlineData(3_900_000, false)]  // +95%: uncomfortable, still under the ratio bar
+    [InlineData(4_100_000, false)]  // +105%: ratio tripped, but +2.1 MB is bounded-state territory
+    [InlineData(9_900_000, false)]  // ~5×, +7.9 MB: still under the absolute floor — not yet a verdict
+    [InlineData(11_000_000, true)]  // ~5.5×, +9 MB: both conditions — a leak being a leak
+    public void The_leak_threshold_needs_both_the_ratio_and_absolute_growth(long endBytes, bool expectUnhealthy)
     {
         var clock = new ManualClock();
         var r = new SoakReporter(clock, intervalMs: 1000);

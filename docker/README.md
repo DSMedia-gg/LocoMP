@@ -66,7 +66,11 @@ runs every `--autosave-seconds` (default 60) as a backstop.
   wanted.
 - **No reverse proxy / TLS** — it's game UDP, not HTTP. Access control is the port-forward + (optionally)
   `--password`.
-- **`docker build` not yet run here** — authored + `dotnet build`-verified (the server publishes clean,
-  0 warnings); the image build itself needs a running Docker daemon. Build it on first deploy.
+- **The image builds and runs** (first verified 2026-08-03: 286 MB, a 6-minute containerized soak with
+  an 8-bot churn swarm over the mapped UDP port). Two operational notes from that run: with Docker
+  Desktop on Windows, invoke `docker run` from Git Bash with `MSYS_NO_PATHCONV=1` or container-side
+  argument paths (`--save /data/…`) get silently rewritten into `C:/Program Files/Git/…`; and the
+  soak's leak verdict needs both its ratio and an absolute-growth floor precisely because a BARE
+  server (this compose's default) baselines near zero — see `SoakReporter.MemoryLeakMinDeltaBytes`.
 - **Verified game-free:** `DedicatedServerIntegrationTests` + `SoakTests` stand the same server up over
   real UDP / Loopback in CI; `SoakReporterTests` cover the health line. See `../src/LocoMP.Server/README.md`.
