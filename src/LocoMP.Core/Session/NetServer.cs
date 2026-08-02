@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LocoMP.Core.Career;
 using LocoMP.Core.Net;
 using LocoMP.Core.Persistence;
 using LocoMP.Core.Presence;
@@ -100,7 +101,11 @@ public sealed class NetServer : IDisposable
     public void Poll()
     {
         _transport.Poll();
-        Career.Tick();
+        CareerTick tick = Career.Tick();
+        // Grace has ONE clock (the career's); a lapse fans out to every subsystem holding state
+        // for the departed player — their minted item possessions release to the world.
+        foreach (string key in tick.LapsedPlayers)
+            Items.OnGraceLapsed(key);
 
         // Re-evaluate spatial relevance as players move (D10) — throttled, and a no-op while disabled.
         // The hot relay reads the cached relevance set, so recomputing a few times a second is ample.
@@ -272,6 +277,12 @@ public sealed class NetServer : IDisposable
 
     private void Remove(int peerId)
     {
+        // Capture where they were last seen BEFORE the player record dies — the item release
+        // transaction drops a departing holder's possessions at this pose. Gated on _posed so a
+        // default (never-streamed) pose is null here, not a phantom position at the origin.
+        Pose? lastPose = _posed.Contains(peerId) && _players.TryGetValue(peerId, out PlayerState? last)
+            ? last.Pose : (Pose?)null;
+
         if (!_players.Remove(peerId)) return; // never joined, or already removed — no double broadcast
 
         byte[] payload = new PacketWriter(8)
@@ -282,7 +293,7 @@ public sealed class NetServer : IDisposable
             _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);
 
         Trains.OnPlayerRemoved(peerId);                    // park their consists, free their grants
-        Items.OnPlayerRemoved(peerId);                     // mark their held items offline — BEFORE
+        Items.OnPlayerRemoved(peerId, lastPose);           // release/retain their held items — BEFORE
         Career.OnPlayerRemoved(peerId);                    // career drops the peer↔key map it reads
 
         _posed.Remove(peerId);

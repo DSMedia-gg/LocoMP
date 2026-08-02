@@ -26,6 +26,12 @@ public sealed class ServerItems
     private readonly Func<int, Pose?> _poseOf;
     private readonly ServerCareer _career; // wallet charge + peer↔key identity resolution
 
+    // Where a departed holder was last seen, per player key — the release pose their MINTED
+    // possessions drop at if the grace lapses. In memory only: across a restart the retained
+    // last-world-pose on each record is the fallback, which is the honest answer anyway (the
+    // disconnect pose died with the process). Cleared on rejoin.
+    private readonly Dictionary<string, Pose> _releasePoseByKey = new(StringComparer.Ordinal);
+
     internal ServerItems(ITransport transport, Func<IEnumerable<int>> connectedIds, ItemConfig config,
         Func<int, Pose?> poseOf, ServerCareer career, ItemsSaveData? restore)
     {
@@ -35,6 +41,17 @@ public sealed class ServerItems
         _poseOf = poseOf;
         _career = career;
         Registry = new ItemRegistry(career.Registry.Policy, restore);
+
+        // A restart IS every holder's disconnect. The registry already released possessed
+        // host-native items to the world (ApplyRestore); the minted possessions that remain need
+        // their scopes under a live grace hold, or a holder who never returns would hold them
+        // forever — capture only wrote grace entries for players who had already disconnected.
+        // Per-player scope IS the player key (shared scopes, '@'-prefixed, outlive any peer).
+        if (restore != null)
+            foreach (ItemRecord rec in Registry.Items.Values)
+                if (rec.Location == ItemLocationKind.Possessed &&
+                    rec.OwnerScope.Length > 0 && rec.OwnerScope[0] != '@')
+                    career.Registry.EnsureGrace(rec.OwnerScope);
     }
 
     /// <summary>The authoritative item store. Exposed for the host UI, admin, and tests.</summary>
@@ -74,6 +91,7 @@ public sealed class ServerItems
 
         if (_career.KeyOf(peerId) is string key)
         {
+            _releasePoseByKey.Remove(key); // back inside grace: their minted possessions stay theirs
             string scope = Registry.Policy.InventoryScopeFor(key);
             foreach (ItemRecord rec in Registry.Items.Values)
                 if (rec.Location == ItemLocationKind.Possessed &&
@@ -82,18 +100,79 @@ public sealed class ServerItems
         }
     }
 
-    /// <summary>A player left: their possessions are RETAINED (keyed by scope, restored on rejoin
-    /// like a career claim under grace), but their holder peer just died — tell the room the item is
-    /// now held by an offline player (peer 0, name kept) so nobody addresses a stale id. In shared
-    /// career the scope is communal and outlives any single peer, so nothing changes.</summary>
-    internal void OnPlayerRemoved(int peerId)
+    /// <summary>A player left — departure is a RELEASE transaction, split by provenance (the M4
+    /// orphan concept's item half). A HOST-NATIVE possession releases to the world right now, where
+    /// the holder was last seen: the host's real object was hidden when they took it, and an
+    /// involuntary departure with no release would orphan it for the session. A MINTED possession is
+    /// RETAINED under the holder's reconnect grace (restored exactly on rejoin, like a career
+    /// claim); <see cref="OnGraceLapsed"/> releases it if they never return — the room meanwhile
+    /// sees it held by an offline player (peer 0, name kept) so nobody addresses a stale id. In
+    /// shared career the scope is communal and outlives any single peer, so nothing releases.</summary>
+    internal void OnPlayerRemoved(int peerId, Pose? lastPose)
     {
         if (_career.KeyOf(peerId) is not string key) return;
         if (Registry.Policy.LicensesShared) return; // shared inventory isn't tied to a peer
         string scope = Registry.Policy.InventoryScopeFor(key);
+
+        List<ItemRecord>? natives = null;
+        bool holdsMinted = false;
+        foreach (ItemRecord rec in Registry.Items.Values)
+        {
+            if (rec.Location != ItemLocationKind.Possessed ||
+                !string.Equals(rec.OwnerScope, scope, StringComparison.Ordinal)) continue;
+            if (rec.Provenance == ItemProvenance.HostNative)
+                (natives ??= new List<ItemRecord>()).Add(rec);
+            else
+                holdsMinted = true;
+        }
+
+        if (natives != null)
+            foreach (ItemRecord rec in natives)
+            {
+                // Fall back to the item's retained last world pose — "back where it was taken
+                // from" — when the holder never streamed a position (a fresh join, a bot).
+                if (Registry.TryReleaseToWorld(rec.Def.Id, lastPose ?? rec.WorldPose, out _, out _))
+                    Broadcast(BuildMoved(rec));
+            }
+
+        if (holdsMinted)
+        {
+            if (lastPose is Pose pose) _releasePoseByKey[key] = pose;
+            // NOT BuildMoved: this runs BEFORE the career drops the peer↔key map (KeyOf above needs
+            // it alive), so PeerOf would still resolve the DYING peer id and the room would mirror a
+            // stale holder. Encode "offline" explicitly — peer 0, display name kept — the same shape
+            // a job claimant takes when their peer dies.
+            string name = _career.NameOf(key);
+            foreach (ItemRecord rec in Registry.Items.Values)
+                if (rec.Location == ItemLocationKind.Possessed &&
+                    string.Equals(rec.OwnerScope, scope, StringComparison.Ordinal))
+                    Broadcast(BuildMovedOffline(rec, name));
+        }
+    }
+
+    /// <summary>A player's reconnect grace lapsed (the career's clock — fanned out by NetServer.Poll):
+    /// they are not coming back, so every possession still in their scope releases to the world at
+    /// their disconnect pose (or the item's own last world pose when that was never known). This is
+    /// the minted items' schedule; a host-native possession normally released at disconnect and only
+    /// lands here through belt-and-braces.</summary>
+    internal void OnGraceLapsed(string key)
+    {
+        // Shared career pools inventory in the communal scope: one player's lapse must not dump
+        // the whole crew's items into the world (the disconnect path has the same guard).
+        if (Registry.Policy.LicensesShared) return;
+        string scope = Registry.Policy.InventoryScopeFor(key);
+        Pose? atKey = _releasePoseByKey.TryGetValue(key, out Pose stashed) ? stashed : (Pose?)null;
+        _releasePoseByKey.Remove(key);
+
+        List<ItemRecord>? held = null;
         foreach (ItemRecord rec in Registry.Items.Values)
             if (rec.Location == ItemLocationKind.Possessed &&
                 string.Equals(rec.OwnerScope, scope, StringComparison.Ordinal))
+                (held ??= new List<ItemRecord>()).Add(rec);
+        if (held == null) return;
+
+        foreach (ItemRecord rec in held)
+            if (Registry.TryReleaseToWorld(rec.Def.Id, atKey ?? rec.WorldPose, out _, out _))
                 Broadcast(BuildMoved(rec));
     }
 
@@ -110,7 +189,9 @@ public sealed class ServerItems
             Reject(peerId, "register: only the world source registers items");
             return;
         }
-        ItemRecord rec = Registry.SpawnInWorld(proposal.PrefabName, pose, proposal.State, locked);
+        // Registered items are the world source's REAL objects by construction (only it may
+        // register) — the provenance that releases them immediately if a holder departs.
+        ItemRecord rec = Registry.SpawnInWorld(proposal.PrefabName, pose, proposal.State, locked, ItemProvenance.HostNative);
         // Echo the token to the registrant (Shim maps its GameObject → server id); others get 0.
         _transport.Send(peerId, BuildSpawned(token, rec), DeliveryMethod.ReliableOrdered);
         byte[] plain = BuildSpawned(0, rec);
@@ -210,6 +291,7 @@ public sealed class ServerItems
             .WriteByte((byte)MessageType.ItemSpawned)
             .WriteVarUInt(token);
         ItemCodec.WriteItemDef(w, rec.Def);
+        w.WriteByte((byte)rec.Provenance); // birth identity rides with the def, not the location (v12)
         WriteLocation(w, rec);
         return w.ToArray();
     }
@@ -220,6 +302,20 @@ public sealed class ServerItems
             .WriteByte((byte)MessageType.ItemMoved)
             .WriteVarUInt((uint)rec.Def.Id);
         WriteLocation(w, rec);
+        return w.ToArray();
+    }
+
+    /// <summary>A possessed item whose holder's peer just died: peer 0 + name kept, bypassing
+    /// <see cref="ServerCareer.PeerOf"/> — the departure sequence still has the dying peer mapped
+    /// when this is sent, so resolving the scope would mirror a stale live id to the room.</summary>
+    private static byte[] BuildMovedOffline(ItemRecord rec, string holderName)
+    {
+        var w = new PacketWriter(48)
+            .WriteByte((byte)MessageType.ItemMoved)
+            .WriteVarUInt((uint)rec.Def.Id)
+            .WriteByte((byte)rec.Location);
+        w.WriteVarUInt(0u);
+        w.WriteString(holderName);
         return w.ToArray();
     }
 

@@ -23,6 +23,11 @@ public sealed class ClientItem
     /// <summary>A world item that is a personal essential (map/radio/wallet) set down by its owner:
     /// visible to all, but only its owner may pick it up. The Shim renders its replica non-grabbable.</summary>
     public bool WorldLocked { get; internal set; }
+
+    /// <summary>Birth identity (v12): host-native (the world source's real object) vs LocoMP-minted
+    /// (a purchase). Mirrored so the Shim can one day rebind restored natives; the release-on-
+    /// departure schedule it drives is entirely server-side.</summary>
+    public ItemProvenance Provenance { get; internal set; }
 }
 
 /// <summary>
@@ -114,7 +119,7 @@ public sealed class ClientItems
             {
                 uint token = r.ReadVarUInt();
                 ItemDef def = ItemCodec.ReadItemDef(r);
-                var item = new ClientItem(def);
+                var item = new ClientItem(def) { Provenance = (ItemProvenance)r.ReadByte() };
                 ReadLocation(r, item);
                 _items[def.Id] = item;
                 ItemAdded?.Invoke(item);

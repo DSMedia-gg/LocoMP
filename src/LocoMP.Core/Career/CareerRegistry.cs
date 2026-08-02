@@ -15,6 +15,11 @@ public sealed class CareerTick
 
     /// <summary>Claims released by TTL or reconnect-grace expiry — Available again, progress reset.</summary>
     public List<JobRecord> ReleasedJobs { get; } = new();
+
+    /// <summary>Players whose reconnect grace just lapsed this tick — they are not coming back.
+    /// The session layer fans this out to every subsystem holding state for them (item possessions
+    /// release to the world), so "grace over" has ONE clock: this one.</summary>
+    public List<string> LapsedPlayers { get; } = new();
 }
 
 /// <summary>
@@ -122,6 +127,19 @@ public sealed class CareerRegistry
         _graceUntilMs[playerKey] = _clock.NowMs + _config.ReconnectGraceMs;
     }
 
+    /// <summary>Make sure an OFFLINE player key is under a grace hold, without disturbing one already
+    /// running. The restore path calls this for every scope still holding item possessions: capture
+    /// only writes grace entries for players who had disconnected, so a player who was ONLINE at the
+    /// save — whose restart IS their disconnect — would otherwise be held forever, never lapsing.
+    /// (The career side solves this per-claim in <see cref="ApplyRestore"/>; items have no claimant
+    /// list of their own, so they route through here.)</summary>
+    public void EnsureGrace(string playerKey)
+    {
+        if (_online.Contains(playerKey)) return;
+        if (_graceUntilMs.ContainsKey(playerKey)) return;
+        _graceUntilMs[playerKey] = _clock.NowMs + _config.ReconnectGraceMs;
+    }
+
     // ── the tick: expiries + deterministic board refill ──
 
     /// <summary>Advance time-driven career state. Cheap when nothing is due; call every poll.</summary>
@@ -147,6 +165,7 @@ public sealed class CareerRegistry
             foreach (string key in lapsed)
             {
                 _graceUntilMs.Remove(key);
+                tick.LapsedPlayers.Add(key);
                 List<JobRecord>? held = null;
                 foreach (JobRecord job in _jobs.Values)
                     if (job.State == JobLifecycle.Claimed && job.ClaimantKey == key)

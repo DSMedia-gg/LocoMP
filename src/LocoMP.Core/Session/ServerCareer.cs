@@ -195,8 +195,9 @@ public sealed class ServerCareer
     }
 
     /// <summary>Advance time-driven state (claim TTLs, grace expiries, board refill) and broadcast
-    /// whatever committed. Called from NetServer.Poll — cheap when nothing is due.</summary>
-    internal void Tick()
+    /// whatever committed. Called from NetServer.Poll — cheap when nothing is due. Returns the tick
+    /// so the caller can fan grace lapses out to the other subsystems (items release possessions).</summary>
+    internal CareerTick Tick()
     {
         CareerTick tick = Registry.Tick();
         foreach (JobRecord job in tick.GeneratedJobs)
@@ -224,6 +225,8 @@ public sealed class ServerCareer
                 }
             }
         }
+
+        return tick;
     }
 
     // ── handlers ──

@@ -82,13 +82,15 @@ public sealed class TrainsSaveData
 /// 02 §5). World items store their pose; possessed items store the owning scope.</summary>
 public sealed class ItemSave
 {
-    public ItemSave(ItemDef def, ItemLocationKind location, Pose worldPose, string ownerScope, bool worldLocked = false)
+    public ItemSave(ItemDef def, ItemLocationKind location, Pose worldPose, string ownerScope, bool worldLocked = false,
+        ItemProvenance provenance = ItemProvenance.Minted)
     {
         Def = def;
         Location = location;
         WorldPose = worldPose;
         OwnerScope = ownerScope;
         WorldLocked = worldLocked;
+        Provenance = provenance;
     }
 
     public ItemDef Def { get; }
@@ -100,6 +102,10 @@ public sealed class ItemSave
 
     /// <summary>A set-down personal essential (map/radio/wallet) — restored as look-but-don't-touch.</summary>
     public bool WorldLocked { get; }
+
+    /// <summary>Birth identity (schema v6) — decides the release schedule when a holder departs,
+    /// including the restart leg: a restored possessed host-native item releases to the world.</summary>
+    public ItemProvenance Provenance { get; }
 }
 
 /// <summary>The items half of a server save (M4): world-dropped items + per-player inventory + the

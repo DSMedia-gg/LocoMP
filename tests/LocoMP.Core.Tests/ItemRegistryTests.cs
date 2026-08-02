@@ -178,6 +178,78 @@ public class ItemRegistryTests
     }
 
     [Fact]
+    public void Release_to_world_is_the_involuntary_drop_and_refuses_non_held()
+    {
+        ItemRegistry reg = Registry();
+        int held = reg.SpawnInPossession("key-alice", "lantern", "").Def.Id;
+        int world = reg.SpawnInWorld("crate", At(1, 1), "").Def.Id;
+
+        // No scope check — the server releases ON BEHALF of a departed holder (departure is a
+        // release transaction, the M4 orphan concept), so only "not actually held" refuses.
+        Assert.True(reg.TryReleaseToWorld(held, At(40, 50), out ItemRecord? rec, out _));
+        Assert.Equal(ItemLocationKind.World, rec!.Location);
+        Assert.Equal(At(40, 50), rec.WorldPose);
+        Assert.Equal("", rec.OwnerScope);
+
+        Assert.False(reg.TryReleaseToWorld(world, At(0, 0), out _, out string? reason));
+        Assert.Contains("not held", reason);
+        Assert.False(reg.TryReleaseToWorld(99, At(0, 0), out _, out _));
+        Assert.True(reg.ItemConservationHolds);
+    }
+
+    [Fact]
+    public void Pickup_retains_the_last_world_pose_as_the_release_fallback()
+    {
+        ItemRegistry reg = Registry();
+        int id = reg.SpawnInWorld("crate", At(70, 80), "").Def.Id;
+
+        Assert.True(reg.TryPickUp("key-alice", id, out ItemRecord? rec, out _));
+        // Possessed, but the world pose is deliberately kept: an involuntary release with no known
+        // holder position puts the item back where it was taken from, not at the origin.
+        Assert.Equal(ItemLocationKind.Possessed, rec!.Location);
+        Assert.Equal(At(70, 80), rec.WorldPose);
+
+        Assert.True(reg.TryReleaseToWorld(id, rec.WorldPose, out ItemRecord? released, out _));
+        Assert.Equal(At(70, 80), released!.WorldPose);
+    }
+
+    [Fact]
+    public void Provenance_is_stamped_at_mint_and_survives_capture_and_restore()
+    {
+        ItemRegistry reg = Registry();
+        int native = reg.SpawnInWorld("crate", At(1, 1), "", provenance: ItemProvenance.HostNative).Def.Id;
+        int bought = reg.SpawnInPossession("key-alice", "lantern", "").Def.Id;
+
+        Assert.Equal(ItemProvenance.HostNative, reg.Items[native].Provenance);
+        Assert.Equal(ItemProvenance.Minted, reg.Items[bought].Provenance);
+
+        ItemRegistry restored = new(new ProgressionPolicy(ProgressionPreset.PerPlayer), reg.Capture());
+        Assert.Equal(ItemProvenance.HostNative, restored.Items[native].Provenance);
+        Assert.Equal(ItemProvenance.Minted, restored.Items[bought].Provenance);
+    }
+
+    [Fact]
+    public void Restore_releases_a_possessed_host_native_item_but_keeps_a_minted_one_held()
+    {
+        ItemRegistry reg = Registry();
+        int native = reg.SpawnInWorld("crate", At(100, 200), "", provenance: ItemProvenance.HostNative).Def.Id;
+        int bought = reg.SpawnInPossession("key-bob", "lantern", "").Def.Id;
+        Assert.True(reg.TryPickUp("key-bob", native, out _, out _));
+
+        // A restart IS every holder's departure: the host-native possession releases to the world
+        // at its retained last world pose (the host's hidden real object must re-show), while the
+        // minted one stays held — its scope rides a fresh reconnect grace at the session layer.
+        ItemRegistry restored = new(new ProgressionPolicy(ProgressionPreset.PerPlayer), reg.Capture());
+
+        Assert.Equal(ItemLocationKind.World, restored.Items[native].Location);
+        Assert.Equal(At(100, 200), restored.Items[native].WorldPose);
+        Assert.Equal("", restored.Items[native].OwnerScope);
+        Assert.Equal(ItemLocationKind.Possessed, restored.Items[bought].Location);
+        Assert.Equal("key-bob", restored.Items[bought].OwnerScope);
+        Assert.True(restored.ItemConservationHolds);
+    }
+
+    [Fact]
     public void Fuzz_preserves_single_location_and_item_conservation_across_saves()
     {
         var rng = new Random(20260719);

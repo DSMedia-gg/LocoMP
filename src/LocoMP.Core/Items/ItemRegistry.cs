@@ -46,10 +46,12 @@ public sealed class ItemRegistry
 
     /// <summary>Put a fresh item into the WORLD at a pose (a dropped purchase's alternative, a
     /// restored world item, or a host-captured real item in a later slice). Always succeeds — a mint
-    /// is unconditional; only moves are validated.</summary>
-    public ItemRecord SpawnInWorld(string prefabName, Pose pose, string state, bool locked = false)
+    /// is unconditional; only moves are validated. Provenance is stamped here and never changes:
+    /// the register path passes HostNative; everything else defaults to Minted.</summary>
+    public ItemRecord SpawnInWorld(string prefabName, Pose pose, string state, bool locked = false,
+        ItemProvenance provenance = ItemProvenance.Minted)
     {
-        var rec = new ItemRecord(new ItemDef(_nextItemId++, prefabName, state), ItemLocationKind.World, pose, string.Empty, locked);
+        var rec = new ItemRecord(new ItemDef(_nextItemId++, prefabName, state), ItemLocationKind.World, pose, string.Empty, locked, provenance);
         _items[rec.Def.Id] = rec;
         TotalSpawned++;
         return rec;
@@ -91,7 +93,10 @@ public sealed class ItemRegistry
         }
         item.Location = ItemLocationKind.Possessed;
         item.OwnerScope = _policy.InventoryScopeFor(playerKey);
-        item.WorldPose = Pose.Identity;
+        // The world pose is deliberately RETAINED (not reset): it is the involuntary-release
+        // fallback — if the holder departs and their last position is unknown, the item goes back
+        // where it was taken from rather than to the origin. The wire never sends a possessed
+        // item's pose, so nothing downstream can read a stale one.
         rec = item;
         reason = null;
         return true;
@@ -111,6 +116,31 @@ public sealed class ItemRegistry
         if (item.Location != ItemLocationKind.Possessed || !string.Equals(item.OwnerScope, scope, StringComparison.Ordinal))
         {
             reason = $"you are not holding item {itemId}";
+            return false;
+        }
+        item.Location = ItemLocationKind.World;
+        item.OwnerScope = string.Empty;
+        item.WorldPose = pose;
+        rec = item;
+        reason = null;
+        return true;
+    }
+
+    /// <summary>Possession → the world WITHOUT the holder asking: the involuntary-relinquishment
+    /// primitive (the M4 orphan concept — departure is a release transaction). Unlike
+    /// <see cref="TryDrop"/> there is no scope check — the server invokes this ON BEHALF of a
+    /// departed holder, so the only refusals are an unknown item or one not actually possessed.</summary>
+    public bool TryReleaseToWorld(int itemId, Pose pose, out ItemRecord? rec, out string? reason)
+    {
+        rec = null;
+        if (!_items.TryGetValue(itemId, out ItemRecord? item))
+        {
+            reason = $"unknown item {itemId}";
+            return false;
+        }
+        if (item.Location != ItemLocationKind.Possessed)
+        {
+            reason = $"item {itemId} is not held";
             return false;
         }
         item.Location = ItemLocationKind.World;
@@ -163,7 +193,7 @@ public sealed class ItemRegistry
     {
         var save = new ItemsSaveData { NextItemId = _nextItemId };
         foreach (ItemRecord rec in _items.Values)
-            save.Items.Add(new ItemSave(rec.Def, rec.Location, rec.WorldPose, rec.OwnerScope, rec.WorldLocked));
+            save.Items.Add(new ItemSave(rec.Def, rec.Location, rec.WorldPose, rec.OwnerScope, rec.WorldLocked, rec.Provenance));
         return save;
     }
 
@@ -171,7 +201,20 @@ public sealed class ItemRegistry
     {
         _items.Clear();
         foreach (ItemSave s in save.Items)
-            _items[s.Def.Id] = new ItemRecord(s.Def, s.Location, s.WorldPose, s.OwnerScope, s.WorldLocked);
+        {
+            var rec = new ItemRecord(s.Def, s.Location, s.WorldPose, s.OwnerScope, s.WorldLocked, s.Provenance);
+            // A restart IS every holder's departure (nobody is online yet), so a possessed
+            // HOST-NATIVE item releases to the world right here, at its last world pose — the same
+            // rule the live path applies on disconnect, so the host's hidden real object re-shows
+            // when it re-registers the world. Minted possessions stay held: the session layer grants
+            // their scopes a fresh reconnect grace and the lapse releases them if nobody returns.
+            if (rec.Provenance == ItemProvenance.HostNative && rec.Location == ItemLocationKind.Possessed)
+            {
+                rec.Location = ItemLocationKind.World;
+                rec.OwnerScope = string.Empty;
+            }
+            _items[s.Def.Id] = rec;
+        }
         _nextItemId = save.NextItemId;
         // The live set IS the saved world; the counters reset to it so ItemConservationHolds is true
         // from the first post-restore op (spawned/despawned are per-process, like the ledger totals).

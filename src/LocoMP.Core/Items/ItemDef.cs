@@ -11,6 +11,18 @@ public enum ItemLocationKind : byte
     Possessed = 1,
 }
 
+/// <summary>An item's birth identity, fixed at mint and never changed by moves. It decides the
+/// RELEASE schedule when the holder departs (the M4 orphan finding's item half): a HOST-NATIVE item
+/// is the world source's REAL object — its native was hidden when a remote took it, so departure
+/// must release it back to the world immediately or the host's object is lost for the session. A
+/// MINTED item (a purchase, job paperwork) is LocoMP's own — nothing is hidden anywhere, so it rides
+/// the holder's reconnect grace and only releases when the hold lapses.</summary>
+public enum ItemProvenance : byte
+{
+    Minted = 0,
+    HostNative = 1,
+}
+
 /// <summary>
 /// One item's stable identity + payload (03 §7 / 02 §5). The item recon (research/item-system-recon
 /// .md) found DV has NO per-instance id — only <c>itemPrefabName</c> as the TYPE — so LocoMP mints
@@ -45,20 +57,29 @@ public sealed class ItemDef
 /// re-poses without re-minting), mirroring how a trainset's owner changes without a new car id.</summary>
 public sealed class ItemRecord
 {
-    internal ItemRecord(ItemDef def, ItemLocationKind location, Pose worldPose, string ownerScope, bool worldLocked = false)
+    internal ItemRecord(ItemDef def, ItemLocationKind location, Pose worldPose, string ownerScope, bool worldLocked = false,
+        ItemProvenance provenance = ItemProvenance.Minted)
     {
         Def = def;
         Location = location;
         WorldPose = worldPose;
         OwnerScope = ownerScope;
         WorldLocked = worldLocked;
+        Provenance = provenance;
     }
 
     public ItemDef Def { get; internal set; }
     public ItemLocationKind Location { get; internal set; }
 
-    /// <summary>Valid when <see cref="Location"/> is World; Pose.Identity otherwise.</summary>
+    /// <summary>The item's world pose when <see cref="Location"/> is World. While Possessed it
+    /// RETAINS the last world pose (where the item was picked up), so an involuntary release — the
+    /// holder departing with no known position — can put the item back where it was taken from
+    /// instead of losing it. Pose.Identity only for an item that has never been in the world.</summary>
     public Pose WorldPose { get; internal set; }
+
+    /// <summary>Birth identity (host-native vs LocoMP-minted) — fixed at mint, drives the release
+    /// schedule on the holder's departure. See <see cref="ItemProvenance"/>.</summary>
+    public ItemProvenance Provenance { get; internal set; }
 
     /// <summary>A "look, but don't touch" world item — a DV personal essential (map, radio, wallet…)
     /// its owner set down. Visible to everyone, but only its owner interacts, so it can never be picked

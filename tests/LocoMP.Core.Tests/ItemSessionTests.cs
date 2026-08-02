@@ -302,6 +302,138 @@ public class ItemSessionTests
     }
 
     [Fact]
+    public void A_departing_holder_releases_a_host_native_item_to_the_world_immediately()
+    {
+        var (_, _, server, a, b) = Session();
+        a.Items.RegisterWorldItem("crate", At(3, 4), "", token: 1); // a is the world source
+        Pump(server, new[] { a, b });
+        int id = a.Items.Items.Values.Single().Def.Id;
+        Assert.Equal(ItemProvenance.HostNative, a.Items.Items[id].Provenance); // mirrored birth identity
+
+        b.Items.RequestPickup(id);
+        b.SendPose(At(100, 150));
+        Pump(server, new[] { a, b });
+        Assert.Equal(b.LocalId, a.Items.Items[id].OwnerPeerId);
+
+        // Departure is a release transaction: the host's REAL object was hidden when Bob took it,
+        // so it must come back the moment he is gone — not ride his reconnect grace.
+        b.Leave();
+        Pump(server, new[] { a, b });
+
+        Assert.Equal(ItemLocationKind.World, a.Items.Items[id].Location);
+        Assert.Equal(At(100, 150), a.Items.Items[id].WorldPose); // where the carrier was last seen
+        Assert.Equal(ItemLocationKind.World, server.Items.Registry.Items[id].Location);
+        Assert.True(server.Items.Registry.ItemConservationHolds);
+    }
+
+    [Fact]
+    public void A_departing_buyers_minted_item_rides_grace_and_releases_on_expiry()
+    {
+        var (_, clock, server, a, b) = Session(); // 10 s reconnect grace
+        b.Items.Purchase("lantern");
+        b.SendPose(At(30, 40));
+        Pump(server, new[] { a, b });
+        int id = b.Items.Items.Keys.Single();
+        Assert.Equal(ItemProvenance.Minted, a.Items.Items[id].Provenance);
+
+        b.Leave();
+        Pump(server, new[] { a, b });
+
+        // Inside grace the purchase is RETAINED (like a career claim): held by an offline player.
+        Assert.Equal(ItemLocationKind.Possessed, a.Items.Items[id].Location);
+        Assert.Equal(0, a.Items.Items[id].OwnerPeerId);
+        Assert.Equal("Bob", a.Items.Items[id].OwnerName);
+
+        clock.Advance(10_001);
+        Pump(server, new[] { a });
+
+        // The lapse is the not-coming-back verdict: the item drops where Bob was last seen.
+        Assert.Equal(ItemLocationKind.World, a.Items.Items[id].Location);
+        Assert.Equal(At(30, 40), a.Items.Items[id].WorldPose);
+        Assert.True(server.Items.Registry.ItemConservationHolds);
+    }
+
+    [Fact]
+    public void Rejoining_within_grace_keeps_minted_possessions_past_the_original_deadline()
+    {
+        var (hub, clock, server, a, b) = Session();
+        b.Items.Purchase("lantern");
+        Pump(server, new[] { a, b });
+        int id = b.Items.Items.Keys.Single();
+
+        b.Leave();
+        Pump(server, new[] { a, b });
+        clock.Advance(9_000); // still inside the 10 s hold
+
+        var b2 = new NetClient(hub.Connect(out _), Identity, "Bob", clock, playerKey: "key-bob");
+        Pump(server, new[] { a, b2 });
+        Assert.Equal(ItemLocationKind.Possessed, b2.Items.Items[id].Location);
+        Assert.Equal(b2.LocalId, b2.Items.Items[id].OwnerPeerId); // rebound to the new peer
+
+        // The rejoin cancelled the hold: sailing past the original deadline releases nothing.
+        clock.Advance(5_000);
+        Pump(server, new[] { a, b2 });
+        Assert.Equal(ItemLocationKind.Possessed, a.Items.Items[id].Location);
+        Assert.Equal(b2.LocalId, a.Items.Items[id].OwnerPeerId);
+    }
+
+    [Fact]
+    public void Cold_restart_releases_host_native_possessions_and_graces_minted_ones()
+    {
+        var (_, clock, server, a, b) = Session();
+        a.Items.RegisterWorldItem("crate", At(100, 200), "", token: 1);
+        b.Items.Purchase("lantern");
+        Pump(server, new[] { a, b });
+        int crateId = a.Items.Items.Values.Single(i => i.Def.PrefabName == "crate").Def.Id;
+        int lanternId = b.Items.Items.Values.Single(i => i.Def.PrefabName == "lantern").Def.Id;
+        b.Items.RequestPickup(crateId);
+        Pump(server, new[] { a, b });
+
+        // Save while BOTH are online and Bob holds a native crate + a minted lantern; the restart
+        // is everyone's disconnect.
+        byte[] bytes = SaveCodec.Write(server.CaptureSave());
+        server.Dispose();
+
+        var hub2 = new LoopbackNetwork();
+        var server2 = new NetServer(hub2.Server,
+            new ServerConfig(Identity, career: Career(), items: Items()), clock, SaveCodec.Read(bytes));
+        var a2 = new NetClient(hub2.Connect(out _), Identity, "Alice", clock, playerKey: "key-alice");
+        Pump(server2, new[] { a2 });
+
+        // The host-native crate released to the world at its retained pose (the host's hidden real
+        // object re-shows); Bob's minted lantern is still his, under a fresh grace hold.
+        Assert.Equal(ItemLocationKind.World, a2.Items.Items[crateId].Location);
+        Assert.Equal(At(100, 200), a2.Items.Items[crateId].WorldPose);
+        Assert.Equal(ItemLocationKind.Possessed, a2.Items.Items[lanternId].Location);
+
+        // Nobody returns: the fresh hold lapses and the lantern surfaces (its own last world pose —
+        // a pure purchase has none, so the identity pose is the honest answer).
+        clock.Advance(10_001);
+        Pump(server2, new[] { a2 });
+        Assert.Equal(ItemLocationKind.World, a2.Items.Items[lanternId].Location);
+        Assert.True(server2.Items.Registry.ItemConservationHolds);
+    }
+
+    [Fact]
+    public void Shared_career_retains_communal_items_when_a_player_departs_for_good()
+    {
+        var (_, clock, server, a, b) = Session(ProgressionPreset.SharedCareer);
+        b.Items.Purchase("lantern");
+        Pump(server, new[] { a, b });
+        int id = b.Items.Items.Keys.Single();
+
+        // The communal scope outlives any single peer: neither the disconnect nor the grace lapse
+        // may dump the crew's pooled inventory into the world.
+        b.Leave();
+        Pump(server, new[] { a, b });
+        clock.Advance(10_001);
+        Pump(server, new[] { a });
+
+        Assert.Equal(ItemLocationKind.Possessed, a.Items.Items[id].Location);
+        Assert.True(server.Items.Registry.ItemConservationHolds);
+    }
+
+    [Fact]
     public void Shared_career_pools_purchased_inventory()
     {
         var (_, _, server, a, b) = Session(ProgressionPreset.SharedCareer);

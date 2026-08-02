@@ -27,8 +27,10 @@ public static class SaveCodec
     /// stores defs via the wire codec, so the layout follows it. Same no-migration policy.
     /// v4: the items half (M4) is appended — world-dropped items + per-player inventory + the id
     /// counter, so a cold restart resumes both. Same no-migration policy (a v3 file is refused
-    /// cleanly and the host starts fresh; backups keep the old bytes).</remarks>
-    public const uint SchemaVersion = 5;
+    /// cleanly and the host starts fresh; backups keep the old bytes).
+    /// v6: each item gains a provenance byte (host-native vs LocoMP-minted — the involuntary-release
+    /// schedule when a holder departs). Same no-migration policy.</remarks>
+    public const uint SchemaVersion = 6;
 
     private const int MaxCollection = 100_000; // hygiene cap for any one saved collection
 
@@ -232,6 +234,7 @@ public static class SaveCodec
             PresenceCodec.WritePose(w, s.WorldPose);
             w.WriteString(s.OwnerScope);
             w.WriteByte(s.WorldLocked ? (byte)1 : (byte)0); // look-but-don't-touch essential (schema v5)
+            w.WriteByte((byte)s.Provenance);                // host-native vs minted (schema v6)
         }
         w.WriteVarUInt((uint)items.NextItemId);
     }
@@ -247,7 +250,8 @@ public static class SaveCodec
             Pose pose = PresenceCodec.ReadPose(r);
             string ownerScope = r.ReadString();
             bool worldLocked = r.ReadByte() != 0;
-            items.Items.Add(new ItemSave(def, location, pose, ownerScope, worldLocked));
+            var provenance = (ItemProvenance)r.ReadByte();
+            items.Items.Add(new ItemSave(def, location, pose, ownerScope, worldLocked, provenance));
         }
         items.NextItemId = (int)r.ReadVarUInt();
         return items;

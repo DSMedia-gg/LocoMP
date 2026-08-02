@@ -43,5 +43,8 @@ public static class ProtocolVersion
     /// <remarks>v11 (D10, interest management): the server may send InterestHide (MessageType 64) to
     /// tell one client to hide a replica that left its spatial relevance set; a v10 peer wouldn't know
     /// the message, so it is a deliberate incompatible bump (the filtering itself is off by default).</remarks>
-    public const int Current = 11;
+    /// <remarks>v12 (M4 orphan cleanup, item half): ItemSpawned gains a provenance byte after the def
+    /// (host-native vs LocoMP-minted — the involuntary-release schedule when a holder departs). The
+    /// layout change makes this incompatible by construction.</remarks>
+    public const int Current = 12;
 }
