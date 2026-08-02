@@ -75,6 +75,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a manually-copied build can be silently replaced.
 
 ### Added
+- **"Export career (.lmpc)"** button beside the world extractor: reads your live game — real
+  stations, route distances, license catalog and prices, plus which cargo actually leaves each yard
+  for which destinations at what consist sizes, mined from every station's own job rules — and
+  writes the career file the dedicated server loads with `--config`. A fresh server then generates
+  jobs that route real cargo along the real map instead of the built-in placeholder board. Payouts
+  use a simple, documented per-car + per-kilometre formula (not the game's exact economy — close
+  enough for pacing, easy to tune later). The file is stamped with the preset currently selected in
+  the host panel.
+
+### Changed
+- **Other players' trains track their true position noticeably closer.** The render smoothing
+  constant, not the network rate, was three-quarters of a remote train's lag (~3 m at 100 km/h —
+  felt hardest when coupling up to a friend's consist). Smoothing is now ~2.5× tighter, cutting
+  typical lag from ~108 ms to ~58 ms with no protocol change. If this makes remote trains look
+  jittery rather than laggy on your connection, say so — that observation decides whether the next
+  step (predictive extrapolation) is worth building.
+
 - Spatial interest management — **trains** (D10, Burst 2): the payoff. The server now streams a moving
   consist only to the players near it, instead of sending every train's position to everyone. Measured on
   a test session where 4 of 24 consists were nearby, this cut the train traffic reaching that player by

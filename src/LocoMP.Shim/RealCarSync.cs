@@ -24,7 +24,13 @@ namespace LocoMP.Shim;
 /// </summary>
 public sealed class RealCarSync
 {
-    private const float LerpRate = 12f;      // same smoothing family as avatars/ghosts
+    // Was 12 (τ = 1/12 s ≈ 83 ms), which made the SMOOTHING — not the 20 Hz packet rate — ~75% of
+    // a remote train's position lag (~3 m at 100 km/h, felt hardest while coupling to a remote
+    // consist beside your zero-lag native one). 30 cuts τ to ~33 ms (~58 ms total with snapshot
+    // staleness) at zero protocol risk. Deliberately shipped AHEAD of any dead reckoning: if
+    // jitter turns ugly at 30, that diagnosis — lag vs jitter — decides whether extrapolation
+    // (TopologyWalker + the 03 §5 250 ms cap) is worth building at all. Judge it in-game.
+    private const float LerpRate = 30f;
     private const float SnapDistance = 80f;
     private const float HardenSeconds = 3f;  // car components finish initializing over a few frames
     private const int MaxRespawnsPerSet = 3;
