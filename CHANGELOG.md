@@ -10,6 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Items no longer vanish for the session when the player carrying them disconnects.** If a friend
+  picked up one of the host's items and then crashed or lost connection, the item was simply gone —
+  the host's real object stayed hidden with no way to get it back short of ending the session. An
+  item now remembers where it came from, and that decides what happens when its carrier leaves: an
+  item that belongs to the host's world drops back into the world **immediately**, where the carrier
+  was last seen (or where it was originally picked up, if the server never saw them move); a
+  **bought** item stays theirs through the usual reconnect window — rejoin in time and it is still in
+  your hands — and only drops to the ground once that window closes and they are considered gone for
+  good. The same rule now covers a server restart, which counts as everyone disconnecting at once:
+  host items return to the world right away, purchases wait out a fresh reconnect window. In a
+  shared-career session nothing is released at all — the crew's pooled inventory outlives any single
+  player, as it always did. (Save format and network protocol both updated; old saves are refused
+  cleanly and a fresh start is offered, as usual for pre-release saves.)
 - **Cars split off from a train no longer go missing for anyone who joins later.** When you uncoupled a
   train and drove away with one half, the half you left behind stopped being sent to anybody — so a friend
   joining afterwards simply never saw those cars, for the rest of the session. The abandoned half now keeps
