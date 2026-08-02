@@ -80,7 +80,9 @@ public sealed class TrainSync : IDisposable
         _client = client ?? throw new ArgumentNullException(nameof(client));
         _isHost = isHost;
         _log = log ?? throw new ArgumentNullException(nameof(log));
-        _remote = new RealCarSync(log);
+        // The reconcile's escape hatch (03 §4): an unspawned, stream-quiet remote set asks the
+        // server to replay its baseline — def AND position, since the orphan fix.
+        _remote = new RealCarSync(log, id => _client.Trains.RequestResync(id));
 
         client.Trains.View.TrainsetAdded += OnTrainsetAdded;
         client.Trains.View.TransactionApplied += OnTransaction;
@@ -785,7 +787,7 @@ public sealed class TrainSync : IDisposable
     }
 
     /// <summary>ChainHook filter: a chain loosen on a remote-driven car becomes an uncouple
-    /// request; the commit arrives as a split transaction and RepairCouplings follows it.</summary>
+    /// request; the commit arrives as a split transaction and ReconcileCouplings follows it.</summary>
     private bool FilterChainUncouple(Coupler mine)
     {
         if (!_client.Joined) return true;

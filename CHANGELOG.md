@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Couplers on other players' trains now correct themselves instead of staying wrong forever.**
+  When a train you could see was split up, the leftover half could keep a coupler that still believed
+  it was attached — the car would fight an invisible joint, render its coupler hanging straight down,
+  and refuse to ever couple again. The one repair pass that existed ran only at the moment of the
+  split, skipped exactly the broken case (a coupler holding something that isn't part of that train),
+  and never re-checked. Remote trains now re-assert the truth about their couplers every second, in
+  both directions: anything attached that shouldn't be is detached, anything detached that should be
+  attached is re-coupled. The same sweep also notices a train the server told us about that never
+  received a position — or a parked train you're walking toward that nobody is streaming — and asks
+  the server to re-send it, so it appears where it should instead of never appearing at all.
 - **Items no longer vanish for the session when the player carrying them disconnects.** If a friend
   picked up one of the host's items and then crashed or lost connection, the item was simply gone —
   the host's real object stayed hidden with no way to get it back short of ending the session. An

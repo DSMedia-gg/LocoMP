@@ -37,6 +37,17 @@ public sealed class RealCarSync
     private const float DematerializeRadius = 330f;
     private const float StreamOutCooldownSeconds = 10f; // DV killed it near us — back off, retry
 
+    // Mechanism B (M4 orphan concept, train half): periodically re-assert server truth against
+    // local native state instead of trusting one-shot repairs — the item side has done this from
+    // the start (ItemSync.Reconcile); the train side had no equivalent, which IS the third M4
+    // smoke finding. Coupler truth is swept every interval; a set with no live snapshot stream
+    // asks the server to replay its baseline (03 §4's ResyncRequest — the server replays def AND
+    // position since the orphan fix), which also re-runs the materialize distance check, healing
+    // the parked-far-consist case (Apply only ever runs on an arriving snapshot).
+    private const float ReconcileIntervalSeconds = 1f;
+    private const float StaleSnapshotSeconds = 5f;  // stream quiet this long + unspawned → replay
+    private const float ResyncRetrySeconds = 10f;   // per-set floor between baseline requests
+
     private sealed class Entry
     {
         public Entry(CarDef def) => Def = def;
@@ -65,6 +76,9 @@ public sealed class RealCarSync
         public float HardenUntil;
         public float NextMaterializeAllowed;
         public bool FarLogged;
+        public float LastSnapshotAt;    // when Apply last saw this set (seeded at creation)
+        public float NextResyncAllowed; // reconcile's per-set request throttle
+        public bool ResyncLogged;       // first request logs; retries stay quiet
     }
 
     private readonly Dictionary<int, RemoteSet> _sets = new();
@@ -78,10 +92,13 @@ public sealed class RealCarSync
     private readonly HashSet<int> _occupiedWarned = new();
     private readonly GhostConsists _ghosts;
     private readonly Action<string> _log;
+    private readonly Action<int>? _requestResync; // the 03 §4 escape hatch, wired by TrainSync
+    private float _reconcileAccum;
 
-    public RealCarSync(Action<string> log)
+    public RealCarSync(Action<string> log, Action<int>? requestResync = null)
     {
         _log = log;
+        _requestResync = requestResync;
         _ghosts = new GhostConsists(log);
     }
 
@@ -174,7 +191,7 @@ public sealed class RealCarSync
             DeleteCars(strays);
         }
 
-        RepairCouplings();
+        ReconcileCouplings();
     }
 
     public void Remove(int trainsetId)
@@ -208,6 +225,9 @@ public sealed class RealCarSync
             return;
         }
         if (!_sets.TryGetValue(snap.TrainsetId, out RemoteSet? set) || set.Cars.Length != snap.Cars.Length) return;
+
+        set.LastSnapshotAt = Time.unscaledTime;
+        set.ResyncLogged = false; // the stream answered — a future silence is a new event
 
         if (!set.Spawned)
         {
@@ -270,12 +290,20 @@ public sealed class RealCarSync
     }
 
     /// <summary>Advance smoothing + keep the hardening honest while components finish initializing.
-    /// Call once per frame.</summary>
+    /// Call once per frame. Also pumps the mechanism-B reconcile (coupler truth + baseline replay)
+    /// on its own slower cadence.</summary>
     public void Tick(float dt)
     {
         _ghosts.Tick(dt);
         float t = Mathf.Clamp01(LerpRate * dt);
         float now = Time.unscaledTime;
+
+        _reconcileAccum += dt;
+        if (_reconcileAccum >= ReconcileIntervalSeconds)
+        {
+            _reconcileAccum = 0;
+            Reconcile(now);
+        }
         foreach (RemoteSet set in _sets.Values)
         {
             if (!set.Spawned) continue;
@@ -331,7 +359,12 @@ public sealed class RealCarSync
             }
         }
 
-        var set = new RemoteSet(def, entries);
+        var set = new RemoteSet(def, entries)
+        {
+            // Seeded as "just heard from" so the reconcile grants the normal join/replay round-trip
+            // its quiet window before ever asking the server to repeat itself.
+            LastSnapshotAt = Time.unscaledTime,
+        };
         if (claimed == entries.Length)
         {
             // All cars survived a merge/split re-map — nothing to spawn.
@@ -564,9 +597,43 @@ public sealed class RealCarSync
         }
     }
 
-    /// <summary>After a transaction: break couplings that no longer match membership and make the
-    /// ones that now should exist. The def is the truth; the physical state follows it.</summary>
-    private void RepairCouplings()
+    /// <summary>Mechanism B: re-assert server truth against local native state, periodically —
+    /// not only when a transaction happens to arrive. Two directions: coupler state follows the
+    /// def (below), and an unspawned set whose stream has gone quiet asks the server to replay its
+    /// baseline. Scope is deliberately _sets, not the whole client view: a set absent from _sets
+    /// is ghost-delegated or interest-hidden, and both of those are decisions, not drift.</summary>
+    private void Reconcile(float now)
+    {
+        ReconcileCouplings();
+
+        if (_requestResync == null) return;
+        foreach (KeyValuePair<int, RemoteSet> kv in _sets)
+        {
+            RemoteSet set = kv.Value;
+            if (set.Spawned) continue;                                  // live and placed — nothing to heal
+            if (now - set.LastSnapshotAt < StaleSnapshotSeconds) continue; // stream is alive; Apply decides
+            if (now < set.NextResyncAllowed) continue;
+            set.NextResyncAllowed = now + ResyncRetrySeconds;
+            if (!set.ResyncLogged)
+            {
+                set.ResyncLogged = true;
+                _log($"[trains] remote consist {kv.Key} has no live stream and is not materialized — " +
+                     "requesting a baseline replay (03 §4)");
+            }
+            _requestResync(kv.Key);
+        }
+    }
+
+    /// <summary>Break couplings that don't match membership and make the ones that should exist.
+    /// The def is the truth; the physical state follows it — in BOTH directions, every time this
+    /// runs. A remote car's coupler may only ever hold its def-adjacent neighbour: a partner that
+    /// is not a mapped remote car (the host's own native car, a foreign spawn) is exactly the
+    /// stale-split leftover the M4 smoke pass caught ("coupler pointing straight down", no
+    /// re-couple possible) — the old repair SKIPPED those, and only ran after a transaction, so a
+    /// missed repair never healed. Runs from ApplyTransaction (immediacy) and the reconcile
+    /// cadence (truth re-asserted). Idempotent; forced coupler ops on remote cars cannot echo as
+    /// proposals (TrainSync.TryGetPair requires both cars in the OWN-bound map).</summary>
+    private void ReconcileCouplings()
     {
         foreach (RemoteSet set in _sets.Values)
         {
@@ -579,18 +646,23 @@ public sealed class RealCarSync
                 {
                     if (coupler == null || !coupler.IsCoupled()) continue;
                     TrainCar other = coupler.coupledTo != null ? coupler.coupledTo.train : null!;
-                    if (other == null || !_serverIdByCar.TryGetValue(other, out int otherId)) continue;
-                    bool adjacent =
-                        (i > 0 && set.Cars[i - 1].Def.Id == otherId) ||
-                        (i + 1 < set.Cars.Length && set.Cars[i + 1].Def.Id == otherId);
+                    if (other == null) continue;
+                    // Server truth: one set never spans own and remote cars, so a partner outside
+                    // the remote map can NEVER be legitimate — detach it, don't skip it.
+                    bool adjacent = _serverIdByCar.TryGetValue(other, out int otherId) &&
+                        ((i > 0 && set.Cars[i - 1].Def.Id == otherId) ||
+                         (i + 1 < set.Cars.Length && set.Cars[i + 1].Def.Id == otherId));
                     if (!adjacent)
                     {
                         try { coupler.Uncouple(playAudio: false, calledOnOtherCoupler: false, dueToBrokenCouple: false, viaChainInteraction: false); }
-                        catch { /* cosmetic */ }
+                        catch { /* cosmetic — the def is the membership truth */ }
                     }
                 }
             }
-            set.CouplingChecked = false; // re-run the adjacency pass on the next snapshot
+
+            // The inverse assertion the old repair never had: def-adjacent neighbours must be
+            // coupled. CoupleAdjacent is idempotent (skips held couplers, 8 m proximity guard).
+            if (AllPlaced(set)) CoupleAdjacent(set);
         }
     }
 
