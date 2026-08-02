@@ -130,6 +130,8 @@ server.PlayerAdmitted += p => Console.WriteLine($"[server] admitted {p.Name} (id
 server.PlayerRemoved += id => Console.WriteLine($"[server] removed id {id} — {server.PlayerCount} player(s)");
 
 var autosaver = new Autosaver(clock, opts.AutosaveSeconds * 1000L, storage, () => SaveCodec.Write(server.CaptureSave()));
+autosaver.SaveFailed += e => Console.WriteLine(
+    $"[server] WARNING: save failed — {e.Message} (world changes since the last good save are not on disk)");
 var admin = new ConsoleAdmin();
 
 server.Poll(); // prime the deterministic board (Career.Tick fills it) so the banner's job count is real
@@ -218,7 +220,7 @@ while (!stopping)
         server.BroadcastTime();
     }
     autosaver.Tick();
-    if (admin.Drain(Status, autosaver.SaveNow)) stopping = true;
+    if (admin.Drain(Status, () => autosaver.SaveNow())) stopping = true; // failure already logs via SaveFailed
 
     // Only gather the sample when a report is actually due — it queries process memory and forces a
     // full collection, so Due() keeps that cost on the report cadence rather than on every tick.
@@ -240,10 +242,14 @@ while (!stopping)
 }
 
 Console.WriteLine("[server] shutting down — saving world…");
-autosaver.SaveNow();               // capture reads the live registries, so save BEFORE disposing
+bool finalSaved = autosaver.SaveNow(); // capture reads the live registries, so save BEFORE disposing
 server.Dispose();
 udp.Dispose();
 Thread.Sleep(150);                 // let LiteNetLib flush the disconnects
 if (soak is not null) Console.WriteLine(soak.Summary());
-Console.WriteLine($"[server] saved to {opts.SavePath}. Bye.");
-return soak?.EverUnhealthy == true ? 2 : 0; // non-zero so an unattended soak's exit code flags a failure
+Console.WriteLine(finalSaved
+    ? $"[server] saved to {opts.SavePath}. Bye."
+    : $"[server] FINAL SAVE FAILED — {opts.SavePath} was not written (see the warning above). Bye.");
+// Exit codes: 2 = soak latched unhealthy (the unattended-run contract, checked first); 1 = the
+// world's final save never reached disk; 0 = clean. Both non-zero cases are for scripts to catch.
+return soak?.EverUnhealthy == true ? 2 : finalSaved ? 0 : 1;

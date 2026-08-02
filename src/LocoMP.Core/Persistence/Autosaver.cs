@@ -29,20 +29,47 @@ public sealed class Autosaver
 
     public long SavesWritten { get; private set; }
 
-    /// <summary>Write a save if the interval elapsed. Cheap no-op otherwise.</summary>
+    /// <summary>Saves that threw instead of writing (unwritable path, disk full, AV lock).</summary>
+    public long SaveFailures { get; private set; }
+
+    /// <summary>The most recent failure, kept for postmortem even after a later success.</summary>
+    public Exception? LastSaveError { get; private set; }
+
+    /// <summary>A save attempt threw. Fired for BOTH the interval path and SaveNow, so a frontend
+    /// subscribes once and every failure is logged — a save failure must be a logged error, never
+    /// an unhandled crash out of the tick loop or the shutdown path (the real-exe finding: an
+    /// unwritable --save killed the server with an UnauthorizedAccessException on the way down).</summary>
+    public event Action<Exception>? SaveFailed;
+
+    /// <summary>Write a save if the interval elapsed. Cheap no-op otherwise. Never throws — a
+    /// failing disk is retried on the autosave cadence, not hammered every tick.</summary>
     public void Tick()
     {
         if (_clock.NowMs < _nextDueMs) return;
-        _storage.Save(_capture());
-        _nextDueMs = _clock.NowMs + _intervalMs;
-        SavesWritten++;
+        TrySave();
     }
 
-    /// <summary>Save right now (session end, world unload) and restart the interval.</summary>
-    public void SaveNow()
+    /// <summary>Save right now (session end, world unload) and restart the interval. Returns
+    /// whether the bytes actually reached storage — callers gate their "saved" message on it, so a
+    /// failure can't masquerade as success in a log a runbook greps.</summary>
+    public bool SaveNow() => TrySave();
+
+    private bool TrySave()
     {
-        _storage.Save(_capture());
+        // The interval restarts on failure too: the next attempt is one autosave period away.
         _nextDueMs = _clock.NowMs + _intervalMs;
+        try
+        {
+            _storage.Save(_capture());
+        }
+        catch (Exception e)
+        {
+            SaveFailures++;
+            LastSaveError = e;
+            SaveFailed?.Invoke(e);
+            return false;
+        }
         SavesWritten++;
+        return true;
     }
 }

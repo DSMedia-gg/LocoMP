@@ -528,6 +528,8 @@ public sealed class SessionController
             _server.Career.AutoGrantHostLicenses = _autoGrant;
             _autosaver = new Autosaver(_clock, intervalMs: 120_000, storage,
                 () => SaveCodec.Write(_server!.CaptureSave()));
+            _autosaver.SaveFailed += e =>
+                _log($"[career] save FAILED — {e.Message} (changes since the last good save are not on disk)");
 
             _client = MakeClient(_hub.Connect(out _)); // the host is just client #1, zero latency
             _trains = new TrainSync(_client, isHost: true, _log);
@@ -650,15 +652,12 @@ public sealed class SessionController
     {
         if (_autosaver != null && _server != null)
         {
-            try
-            {
-                _autosaver.SaveNow();
+            // SaveNow no longer throws (Autosaver guards storage) — gate the success line on the
+            // RESULT, because "[career] career saved" is a log line the runbooks grep for.
+            if (_autosaver.SaveNow())
                 _log("[career] career saved");
-            }
-            catch (Exception e)
-            {
-                _log("[career] final save FAILED: " + e.Message);
-            }
+            else
+                _log("[career] final save FAILED: " + (_autosaver.LastSaveError?.Message ?? "unknown"));
         }
         _autosaver = null;
         _jobCapture?.Dispose();

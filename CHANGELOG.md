@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A save that cannot be written no longer crashes the server (or the host).** Pointing the
+  dedicated server's `--save` at an unwritable location used to kill the process with an unhandled
+  error during shutdown — losing the world state it was trying to save, and any autosave failure
+  mid-run had the same crash waiting. A failed save is now a logged warning ("world changes since
+  the last good save are not on disk"), the disk is retried on the normal autosave cadence, the
+  shutdown message tells the truth instead of claiming success, and the server exits with a
+  distinct code (1) so scripts notice. The host's "career saved" log line is likewise only printed
+  when the save actually reached disk.
 - **Couplers on other players' trains now correct themselves instead of staying wrong forever.**
   When a train you could see was split up, the leftover half could keep a coupler that still believed
   it was attached — the car would fight an invisible joint, render its coupler hanging straight down,

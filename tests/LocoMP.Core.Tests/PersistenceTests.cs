@@ -187,6 +187,53 @@ public class PersistenceTests
         Assert.Equal(2, storage.Writes);
     }
 
+    private sealed class FailingStorage : ISaveStorage
+    {
+        public bool Failing = true;
+        public int Writes;
+        public byte[]? TryLoad() => null;
+
+        public void Save(byte[] data)
+        {
+            if (Failing) throw new UnauthorizedAccessException("save path is protected");
+            Writes++;
+        }
+    }
+
+    [Fact]
+    public void Autosaver_reports_a_failing_disk_instead_of_throwing_and_recovers()
+    {
+        // The real-exe finding: an unwritable --save killed the server with an unhandled
+        // UnauthorizedAccessException out of SaveNow during shutdown. A save failure must be a
+        // reported error — retried on the autosave cadence — never a crash.
+        var clock = new ManualClock();
+        var storage = new FailingStorage();
+        var saver = new Autosaver(clock, intervalMs: 5_000, storage, () => new byte[] { 7 });
+        Exception? reported = null;
+        saver.SaveFailed += e => reported = e;
+
+        Assert.False(saver.SaveNow());                         // no throw — a bool verdict
+        Assert.Equal(1, saver.SaveFailures);
+        Assert.IsType<UnauthorizedAccessException>(reported);
+        Assert.IsType<UnauthorizedAccessException>(saver.LastSaveError);
+        Assert.Equal(0, saver.SavesWritten);
+
+        clock.Advance(5_000);
+        saver.Tick();                                          // the interval path is guarded too
+        Assert.Equal(2, saver.SaveFailures);
+
+        // The failure restarted the interval: the disk is retried on the autosave cadence, not
+        // hammered every tick.
+        saver.Tick();
+        Assert.Equal(2, saver.SaveFailures);
+
+        storage.Failing = false;
+        Assert.True(saver.SaveNow());                          // recovery resumes counting writes
+        Assert.Equal(1, saver.SavesWritten);
+        Assert.Equal(1, storage.Writes);
+        Assert.Equal(2, saver.SaveFailures);                   // history is kept, not rewritten
+    }
+
     [Fact]
     public void Cold_restart_resumes_the_world_and_a_rejoin_continues_mid_job()
     {
