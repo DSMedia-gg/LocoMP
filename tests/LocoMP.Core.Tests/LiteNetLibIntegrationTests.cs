@@ -52,7 +52,15 @@ public class LiteNetLibIntegrationTests
             "both clients should complete the handshake over UDP");
 
         int aId = a.LocalId!.Value;
-        Assert.True(b.Players.ContainsKey(aId));
+        // Must SPIN, not assert flat: the join condition above is server-side + own-side state
+        // only — B's PlayerJoined(A) notification is a separate reliable-ordered packet that can
+        // still be in flight over real UDP when that condition first samples true. This was the
+        // suite's long-unidentified ~1-in-30 flake (captured 2026-08-03, fail-run29): the one
+        // cross-client assertion in the file with no wait around it. Machine load widens the
+        // window, which is why it correlated with a live game — the 5 s budgets were never the
+        // problem, and widening them would not have fixed this.
+        Assert.True(SpinUntil(() => b.Players.ContainsKey(aId), 5000, pumps),
+            "B should learn about A (roster broadcast) over UDP");
 
         // Pose from A must reach B over real UDP (sequenced-unreliable channel).
         Pose? seen = null;
