@@ -24,7 +24,7 @@ public sealed class SessionViewModel
     public SessionViewModel(SessionController c)
     {
         _c = c;
-        c.PhaseChanged += _ => Raise();
+        c.PhaseChanged += p => { if (p == SessionPhase.Idle) JoinInitiatedFromUi = false; Raise(); };
         c.PlayersChanged += Raise;
         c.ErrorRaised += e => { Error = e; Raise(); };
         c.CareerToast += t => { Toast = t; Raise(); };
@@ -75,11 +75,22 @@ public sealed class SessionViewModel
     /// <summary>A join was refused; the mismatch screen decides how to render it.</summary>
     public event Action<RejectInfo>? JoinRejected;
 
+    /// <summary>True while the current join attempt was started from the uGUI screens. The
+    /// loading cover and the reject auto-leave are scoped to this path — a dev-panel join keeps
+    /// its legacy flow untouched (Cody's call, 2026-08-04). Set by <see cref="Join"/>, cleared
+    /// when the session returns to Idle.</summary>
+    public bool JoinInitiatedFromUi { get; private set; }
+
     public event Action? Changed;
     private void Raise() => Changed?.Invoke();
 
     // Commands — screens call these, never the controller directly.
     public void Host(HostOptions options) => _c.HostSession(options);
-    public void Join(JoinOptions options) => _c.JoinSession(options);
+
+    public void Join(JoinOptions options)
+    {
+        JoinInitiatedFromUi = true; // before the call — JoinSession raises PhaseChanged synchronously
+        _c.JoinSession(options);
+    }
     public void Leave() => _c.Leave();
 }

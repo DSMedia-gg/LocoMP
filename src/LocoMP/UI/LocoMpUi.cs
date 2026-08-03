@@ -85,7 +85,8 @@ public sealed class LocoMpUi
     {
         SessionPhase phase = _vm.Phase;
         if (phase == _lastPhase) return;
-        if (phase == SessionPhase.Connecting) BeginJoinGate();
+        // Cover only uGUI-initiated joins — the dev panel keeps its legacy flow (Cody, 2026-08-04).
+        if (phase == SessionPhase.Connecting && _vm.JoinInitiatedFromUi) BeginJoinGate();
         else if (phase == SessionPhase.Idle && Gate.Active) Gate.Clear();
         // Joined/Hosting do NOT clear the gate — admission precedes the burst's end; only the
         // sentinel (via done()) or Idle may take the cover down.
@@ -118,6 +119,9 @@ public sealed class LocoMpUi
 
     private void OnJoinRejected(RejectInfo info)
     {
+        // A dev-panel join keeps its legacy reject flow (error text, manual Leave) — the cover,
+        // auto-leave and modal belong to the uGUI path only (Cody, 2026-08-04).
+        if (!_vm.JoinInitiatedFromUi) return;
         Gate.Clear();          // the join is dead — never leave the cover to wait out its failsafe
         _pendingLeave = true;  // tear down the half-open client next tick (see Tick)
         if (info.IsVersionMismatch && _router != null)
