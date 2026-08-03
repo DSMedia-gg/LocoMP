@@ -25,6 +25,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   waiting or back out, never a silent hang and never a timer pretending the work finished.
   The familiar dev panel (Ctrl+F10) is untouched and remains the primary surface for this build;
   set `LOCOMP_DEBUG=0` to hide it once the real screens land.
+- **Real join and host screens (M5.1).** The Direct Join and Host tabs now carry actual forms
+  instead of placeholders: name, address and port with a remembered recent-server list (your last
+  five, one click to refill — names and addresses persist between game runs; passwords never do),
+  and the full set of hosting options — port, password (typed masked, in both forms), max players,
+  autosave cadence, the career preset, license auto-grant, fresh-career and bandwidth-saving
+  toggles. Both screens drive exactly the same code path as the dev panel, so nothing can behave
+  differently between the two. While a join is in flight you now get a real loading cover with
+  live stages — connecting → world → career → items — driven by the server actually saying "your
+  join data is fully sent" (a new end-of-burst signal on the wire), never by a timer guessing; if
+  it stalls, the cover names the stage it stalled at and offers keep-waiting or back-out. And when
+  a join is refused because the two sides don't match, the screen now shows exactly what you have
+  and what the server needs (game build, LocoMP version, protocol, mod set) with advice per case —
+  the server has always known; now it tells you instead of a one-line error. Typing in any LocoMP
+  field no longer triggers game hotkeys. (Network protocol bumped — both sides must run this build,
+  and older/newer mixes still refuse with a readable reason in both directions.)
 
 ### Fixed
 - **A save that cannot be written no longer crashes the server (or the host).** Pointing the
