@@ -41,7 +41,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field no longer triggers game hotkeys. (Network protocol bumped — both sides must run this build,
   and older/newer mixes still refuse with a readable reason in both directions.)
 
+### Changed
+- **Shared careers now release a departing player's carried host items.** When a guest carrying
+  one of the host's real items disconnected from a shared-career session, the item used to stay
+  locked to the (communal) crew inventory forever, leaving the host's hidden original in limbo.
+  It now drops where the carrier was last seen, immediately — same rule per-player careers have
+  always had. Purchases and other crew-owned items are untouched: they still belong to the whole
+  crew and never dump on anyone's departure.
+- **Bots can keep a stable identity across reconnects** (`--player-key`): required for testing
+  the reconnect-grace flows; with `--count`, each bot gets a distinct derived key.
+
 ### Fixed
+- **Unhooking another player's train now really unhooks it.** Grabbing a chain on a
+  remotely-driven car used to leave the visuals lying: the game's chain animation ran as if the
+  act had happened, but the real uncouple was still travelling to the train's owner — so the
+  chain snapped back onto a hook it had logically left, and both cars' couplers went dead to
+  further interaction. Chain gestures on remote cars now take effect locally the moment you make
+  them (harmless — those cars are position-driven replicas) while the owner is asked in
+  parallel; if the owner's side refuses, the coupling visibly snaps back within a few seconds
+  instead of silently disagreeing. The once-a-second coupler truth sweep also logs every
+  correction it makes now, so a future session can see it working (or failing) in the log.
+- **Two paint cans no longer flood the session with phantom items.** Some items re-seat
+  themselves the moment they touch a valid surface, with no player input — and every re-seat
+  used to register a brand-new shared item and despawn the old one (two stationary objects
+  produced ~40 identities in minutes, drowning the log and growing a dedicated server's item
+  store without bound). Item registration now waits for an item to actually settle, and a
+  momentary bounce keeps its existing identity with zero network traffic. Really picking an item
+  up is recognised and still takes effect immediately.
+- **Distant remote trains no longer crash the game's own train optimizer.** When a remote
+  consist rolled out of range and its local stand-in was removed, Derail Valley's physics-sleep
+  sweep could still reach the dying cars a frame later and throw. Remote stand-ins (and cars
+  mid-teardown) are now exempt from that sweep entirely — they are position-driven and have no
+  local physics for it to manage. This also stops the optimizer quietly re-enabling gravity on
+  them while they exist.
+- **A version mismatch now says so instead of hanging.** Connecting to a server on a different
+  network protocol used to die at the socket — ten silent seconds, then "timed out", with the
+  mismatch screen never getting a chance to speak. The socket-level key no longer embeds the
+  protocol version, so mismatched builds actually connect far enough for the server to answer
+  with exactly what you have vs. what it needs (one caveat, one time: builds older than this one
+  still use the versioned key and will still time out against it).
+- **World extraction now survives the game's unmappable tracks.** Extracting world geometry for
+  the bandwidth-saving "only stream nearby trains" option always came up short on this game
+  build — 139 special tracks (turntables and friends) never expose their positions, and the old
+  all-or-nothing rule threw ALL geometry away because of them, so the option silently never
+  worked. Geometry is now carried per track: the ~93% of the network that can be mapped filters
+  normally, trains on the few bare tracks are simply streamed to everyone, the extractor names
+  each track it could not map, and both host and server report an honest "X of Y placeable"
+  instead of pretending nothing was extracted. Existing extracted files keep loading.
+
 - **A save that cannot be written no longer crashes the server (or the host).** Pointing the
   dedicated server's `--save` at an unwritable location used to kill the process with an unhandled
   error during shutdown — losing the world state it was trying to save, and any autosave failure
