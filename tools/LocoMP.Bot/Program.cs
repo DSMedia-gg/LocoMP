@@ -65,9 +65,11 @@ for (int i = 0; i < opts.Count; i++)
     Func<ITransport> connect = hub is { } h
         ? () => h.Connect(out _)
         : () => LiteNetLibTransport.ConnectClient(opts.Host, opts.Port, opts.Key);
+    string? playerKey = opts.PlayerKey is null ? null
+        : opts.Count > 1 ? $"{opts.PlayerKey}-{i + 1}" : opts.PlayerKey;
     var bot = new BotClient(name, connect,
         opts.ToIdentity(), behavior, clock, Console.WriteLine,
-        opts.Password, opts.ChurnSeconds);
+        opts.Password, opts.ChurnSeconds, playerKey);
     // Multiple ghosts/claimers share a start hint; stagger them a seed apart so they diverge at junctions.
     uint? startEdge = opts.StartEdge >= 0 ? (uint)opts.StartEdge : (uint?)null;
     ConsistDriver? driver = null;

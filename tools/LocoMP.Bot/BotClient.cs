@@ -29,6 +29,11 @@ public sealed class BotClient : IDisposable
     private readonly Action<string> _log;
     private readonly long _churnMs;
 
+    /// <summary>Stable player identity across reconnects (null = a fresh GUID per attempt, the
+    /// historical behavior). Without this a killed bot can never exercise the reconnect-grace
+    /// reclaim path — the server sees every rejoin as a brand-new player.</summary>
+    private readonly string? _playerKey;
+
     private ITransport? _transport;
     private NetClient? _client;
     private long _attemptStartedMs;
@@ -37,7 +42,7 @@ public sealed class BotClient : IDisposable
 
     public BotClient(string name, Func<ITransport> connectFactory, HandshakeRequest identity,
                      IBotBehavior behavior, IClock clock, Action<string> log,
-                     string? password = null, double churnSeconds = 0)
+                     string? password = null, double churnSeconds = 0, string? playerKey = null)
     {
         _name = name;
         _connect = connectFactory;
@@ -47,6 +52,7 @@ public sealed class BotClient : IDisposable
         _log = log;
         _password = password;
         _churnMs = (long)(churnSeconds * 1000);
+        _playerKey = playerKey;
     }
 
     public bool Joined => _client?.Joined == true;
@@ -114,7 +120,7 @@ public sealed class BotClient : IDisposable
         _attemptStartedMs = now;
         _joinedAtMs = 0;
         _transport = _connect();
-        _client = new NetClient(_transport, _identity, _name, _clock, _password);
+        _client = new NetClient(_transport, _identity, _name, _clock, _password, _playerKey);
         _client.Accepted += id => _log($"[{_name}] joined as id {id} (server offset {_client!.ServerTimeOffsetMs} ms, sees {_client.Players.Count} other player(s))");
         _client.Rejected += reason =>
         {

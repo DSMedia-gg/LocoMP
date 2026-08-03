@@ -17,6 +17,7 @@ public sealed class BotOptions
     public int Port = NetDefaults.Port;
     public string Key = NetDefaults.ConnectKey;
     public string? Password;
+    public string? PlayerKey;           // stable identity across runs (reconnect-grace testing)
     public int Count = 1;
     public string Name = "Bot";
     public string Behavior = "orbit";
@@ -87,6 +88,7 @@ public sealed class BotOptions
                     case "--host": o.Host = Next(); break;
                     case "--port": o.Port = int.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--key": o.Key = Next(); break;
+                    case "--player-key": o.PlayerKey = Next(); break;
                     case "--password": o.Password = Next(); break;
                     case "--count": o.Count = Math.Max(1, int.Parse(Next(), CultureInfo.InvariantCulture)); break;
                     case "--name": o.Name = Next(); break;
@@ -169,6 +171,9 @@ Usage: LocoMP.Bot [options]
   --host <addr>          server address           (default 127.0.0.1)
   --port <port>          server UDP port          (default {NetDefaults.Port})
   --key <key>            transport connect key    (default {NetDefaults.ConnectKey})
+  --player-key <k>       stable player identity across runs (default: fresh GUID per
+                         attempt) — required to exercise reconnect-grace reclaim; with
+                         --count > 1 each bot appends -1, -2, … so keys stay distinct
   --password <pw>        session password         (default none)
   --count <n>            number of bots           (default 1)
   --name <prefix>        bot name prefix          (default Bot -> Bot-1, Bot-2, ...)
