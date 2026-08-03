@@ -41,6 +41,17 @@ public sealed class ItemSync : IDisposable
 {
     private const double ReconcileIntervalSeconds = 0.5;
 
+    // R20 (2026-08-04 gauntlet F9): DV's self-placement bounces an item out of and straight back
+    // into world storage with no player input, and registering fresh per bounce minted unbounded
+    // world-item ids (two paint cans → ~40 ids in minutes; a dedicated server accumulates them
+    // forever). Both directions debounce: an unmapped ADD only registers once the item has
+    // SETTLED in world storage, and a mapped REMOVE that is not a grab/destroy holds its despawn
+    // briefly — a re-add inside the hold keeps the id and mapping with zero server traffic. A
+    // real grab despawns immediately (IsGrabbed discriminates), so the possession-race window
+    // stays as narrow as it was.
+    private const float RegisterSettleSeconds = 1f;
+    private const float DespawnHoldSeconds = 1f;
+
     private readonly NetClient _client;
     private readonly bool _isHost;
     private readonly Action<string> _log;
@@ -54,6 +65,8 @@ public sealed class ItemSync : IDisposable
     private readonly Dictionary<uint, ItemBase> _pendingRegistration = new(); // token → awaiting id echo
     private readonly Dictionary<ItemBase, Action<ItemBase>> _destroyHooks = new();
     private readonly HashSet<string> _missingPrefabWarned = new(StringComparer.Ordinal);
+    private readonly Dictionary<ItemBase, float> _pendingNativeAdds = new();          // R20: item → register-at
+    private readonly Dictionary<ItemBase, (int Id, float At)> _pendingDespawns = new(); // R20: item → (id, despawn-at)
 
     private bool _captureInstalled;
     private bool _applying;      // native changes WE initiate must not echo back as captures (M2 idiom)
@@ -94,7 +107,37 @@ public sealed class ItemSync : IDisposable
             Reconcile();
         }
 
+        PumpNativeDebounce();
         PinWorldGhosts();
+    }
+
+    /// <summary>R20: fire debounced registrations for items that stayed settled in world storage,
+    /// and held despawns whose re-add never came. Both maps are small (human-paced drops).</summary>
+    private void PumpNativeDebounce()
+    {
+        float now = Time.unscaledTime;
+        if (_pendingNativeAdds.Count > 0)
+        {
+            foreach (KeyValuePair<ItemBase, float> kv in _pendingNativeAdds.ToList())
+            {
+                if (kv.Key == null) { _pendingNativeAdds.Remove(kv.Key!); continue; } // destroyed unmapped
+                if (now < kv.Value) continue;
+                _pendingNativeAdds.Remove(kv.Key);
+                if (!_serverIdByItem.ContainsKey(kv.Key)) RegisterNative(kv.Key);
+            }
+        }
+        if (_pendingDespawns.Count > 0)
+        {
+            foreach (KeyValuePair<ItemBase, (int Id, float At)> kv in _pendingDespawns.ToList())
+            {
+                if (kv.Key != null && now < kv.Value.At) continue;
+                _pendingDespawns.Remove(kv.Key!);
+                Unmap(kv.Key!); // reference-keyed — works even for a destroyed ItemBase
+                _client.Items.DespawnItem(kv.Value.Id);
+                _log($"[items] world item {kv.Value.Id} left the world locally (no re-add within " +
+                     $"{DespawnHoldSeconds:F0} s) — despawning from the session");
+            }
+        }
     }
 
     /// <summary>Hold each materialized world item at its server pose, kinematic, every frame — DV's
@@ -139,13 +182,17 @@ public sealed class ItemSync : IDisposable
         _log($"[items] host item capture installed — offered {swept} world item(s) to the session");
     }
 
-    /// <summary>A player-owned item entered the host's world storage: a native drop. Register it so
-    /// remote players see it. Skipped while we're applying a remote change (our own spawn adds to
-    /// world storage too) and for items already mapped (a re-add echo).</summary>
+    /// <summary>A player-owned item entered the host's world storage: a native drop. Skipped while
+    /// we're applying a remote change (our own spawn adds to world storage too) and for items
+    /// already mapped (a re-add echo). R20: registration is DEBOUNCED — DV's self-placement can
+    /// bounce the item back out within a frame, and a held despawn cancelled here keeps the
+    /// existing id with zero server traffic.</summary>
     private void OnNativeWorldAdded(ItemBase item)
     {
-        if (_applying || item == null || _serverIdByItem.ContainsKey(item)) return;
-        RegisterNative(item);
+        if (_applying || item == null) return;
+        if (_pendingDespawns.Remove(item)) return; // the bounce came home — id + mapping intact
+        if (_serverIdByItem.ContainsKey(item)) return;
+        _pendingNativeAdds[item] = Time.unscaledTime + RegisterSettleSeconds;
     }
 
     private bool RegisterNative(ItemBase item)
@@ -167,14 +214,30 @@ public sealed class ItemSync : IDisposable
     /// <summary>A world item left the host's world storage. If it's one we track and WE didn't cause
     /// it (a native grab / dumpster / install), it's no longer a shared world item — despawn it from
     /// the session. The physical item lives on in the host's hand/inventory (native, its own save);
-    /// we only stop mirroring it.</summary>
+    /// we only stop mirroring it. R20: a removal that is NOT a grab is usually DV's self-placement
+    /// bounce — hold the despawn briefly so the re-add can keep the id; a grab stays immediate so
+    /// the possession-race window doesn't widen.</summary>
     private void OnNativeWorldRemoved(ItemBase item)
     {
         if (_applying || item == null) return;
+        _pendingNativeAdds.Remove(item); // an unmapped item that bounced out before settling never registers
         if (!_serverIdByItem.TryGetValue(item, out int id)) return;
-        Unmap(item);
-        _client.Items.DespawnItem(id);
-        _log($"[items] world item {id} ({PrefabNameOf(item) ?? "?"}) left the world locally — despawning from the session");
+        if (IsGrabbedSafe(item))
+        {
+            Unmap(item);
+            _client.Items.DespawnItem(id);
+            _log($"[items] world item {id} ({PrefabNameOf(item) ?? "?"}) left the world locally (grabbed) — despawning from the session");
+            return;
+        }
+        _pendingDespawns[item] = (id, Time.unscaledTime + DespawnHoldSeconds);
+    }
+
+    /// <summary>IsGrabbed is DV interaction-layer code — treat a throw as "not grabbed" (the
+    /// conservative answer here: worst case the despawn is one hold-window late).</summary>
+    private static bool IsGrabbedSafe(ItemBase item)
+    {
+        try { return item.IsGrabbed(); }
+        catch { return false; }
     }
 
     /// <summary>The item's GameObject is being destroyed (dumpster, consumed) — the item-world analog
@@ -183,6 +246,8 @@ public sealed class ItemSync : IDisposable
     private void OnItemDestroyed(ItemBase item)
     {
         if (_applying || item == null) return;
+        _pendingNativeAdds.Remove(item);
+        _pendingDespawns.Remove(item); // destruction is final — no re-add is coming (R20)
         if (!_serverIdByItem.TryGetValue(item, out int id)) return;
         Unmap(item);
         _client.Items.DespawnItem(id);
@@ -491,6 +556,8 @@ public sealed class ItemSync : IDisposable
             _worldStorage.ItemAdded -= OnNativeWorldAdded;
             _worldStorage.ItemRemoved -= OnNativeWorldRemoved;
         }
+        _pendingNativeAdds.Clear();
+        _pendingDespawns.Clear(); // session over — the board dies with it; nothing to flush
 
         // Restore any host natives we hid (a remote was holding them at leave) — reposition to the pose we
         // snapshotted when hiding (an inactive item misses OriginShift, so its raw local transform is stale;
