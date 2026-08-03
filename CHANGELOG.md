@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **First-party UI foundation (M5.0).** A MULTIPLAYER button now appears in the game's own main
+  menu, and a LocoMP entry in the pause menu — both cloned live from Derail Valley's own buttons,
+  so they look, animate and (in VR) point-and-click exactly like the game's, while LocoMP ships
+  none of the game's assets. They open LocoMP's new screen framework: a root screen with the
+  Direct Join · Friends · Host · Settings tabs (tab content arrives slice by slice — M5.1 brings
+  the real join/host forms; Friends unlocks with the Steam transport). Opening the in-game screen
+  never pauses the world: in multiplayer the session keeps running behind any menu, always.
+  Under the hood this adds the presentation seam the whole M5 milestone builds on — a view-model
+  the screens bind to (the session backend now pushes state changes instead of being polled), a
+  themed widget kit, and a reusable "readiness gate": a blocking cover for the moments the world
+  is deliberately not yet interactable (joining, reconnecting, session teardown) that only ever
+  clears on the REAL completion signal — if something stalls, it says so and offers to keep
+  waiting or back out, never a silent hang and never a timer pretending the work finished.
+  The familiar dev panel (Ctrl+F10) is untouched and remains the primary surface for this build;
+  set `LOCOMP_DEBUG=0` to hide it once the real screens land.
+
 ### Fixed
 - **A save that cannot be written no longer crashes the server (or the host).** Pointing the
   dedicated server's `--save` at an unwritable location used to kill the process with an unhandled
