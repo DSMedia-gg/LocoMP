@@ -205,6 +205,57 @@ public class TrainInterestTests
         Assert.Equal(3700f, c.Trains.View.LatestSnapshots[def.Id].Cars[0].Front.S, 1);
     }
 
+    /// <summary>
+    /// PARTIAL geometry (F4, 2026-08-04 gauntlet): B99.7 deterministically withholds node transforms
+    /// on its special tracks, so a real extract always has bare edges — all-or-nothing meant the
+    /// filter NEVER ran. With per-edge geometry the placeable share filters normally, while a train
+    /// on a bare edge is unplaceable and must stay visible to everyone (the same fail-open the
+    /// unknown-edge test pins). Regression test: reverting the per-edge topology change fails it.
+    /// </summary>
+    [Fact]
+    public void Partial_geometry_filters_placeable_edges_and_fails_open_on_bare_ones()
+    {
+        var partial = new WorldTopology(
+            "B99.7",
+            new[]
+            {
+                new TrackEdge(0, 4000f, nodeA: 1, nodeB: 2, new WorldPoint(0, 0, 0), new WorldPoint(4000, 0, 0)),
+                new TrackEdge(1, 100f, nodeA: 2, nodeB: 3), // bare — a turntable-style special track
+            },
+            new JunctionDef[0]);
+
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        using var server = new NetServer(hub.Server, new ServerConfig(Identity, interest: Filtering()),
+                                         clock, restore: null, topology: partial);
+        using var c = new NetClient(hub.Connect(out int cId), Identity, "Watcher", clock, playerKey: "k");
+        Pump(clock, server, c);
+
+        // Partial geometry is usable geometry: the filter must NOT suppress itself.
+        Assert.DoesNotContain(EntityKind.Trainset, server.Interest.Suppressed);
+
+        TrainsetDef far = server.Trains.SpawnServerOwned(Cars(2));
+        TrainsetDef bare = server.Trains.SpawnServerOwned(Cars(2));
+        c.SendPose(At(0f, 0f));
+        Pump(clock, server, c);
+
+        // One consist runs 3 km out along the PLACEABLE edge — filtered like any distant train.
+        for (int s = 200; s <= 3000; s += 200)
+        {
+            server.Trains.PushServerSnapshot(SnapshotAt(far, s));
+            Pump(clock, server, c, rounds: 2);
+        }
+        // The other sits on the BARE edge (its cars' bogies reference edge 1).
+        var cars = new CarSnapshot[bare.Cars.Count];
+        for (int i = 0; i < cars.Length; i++)
+            cars[i] = CarSnapshot.Railed(new BogieState(1, 50f, 0f), new BogieState(1, 41f, 0f));
+        server.Trains.PushServerSnapshot(new TrainsetSnapshot(bare.Id, bare.Epoch, 0L, cars));
+        Pump(clock, server, c, rounds: 4);
+
+        Assert.False(server.Interest.IsRelevant(cId, Train(far.Id)));  // placeable + distant → hidden
+        Assert.True(server.Interest.IsRelevant(cId, Train(bare.Id))); // unplaceable → everyone sees it
+    }
+
     /// <summary>No topology at all (a host that couldn't read the track network, or a bare server) is
     /// the same story as a geometry-free one: suppressed, never guessed.</summary>
     [Fact]

@@ -145,6 +145,7 @@ public static class TopologyExtractor
         var nodeIds = new Dictionary<int, uint>();
         var edges = new TrackEdge[tracks.Length];
         int zeroLength = 0, missingGeometry = 0;
+        var missingDetails = new List<string>(); // F4: name WHICH edges, or nobody can diagnose why
         double totalMetres = 0;
         for (int i = 0; i < tracks.Length; i++)
         {
@@ -153,8 +154,8 @@ public static class TopologyExtractor
             if (length <= 0f) zeroLength++;
             totalMetres += length;
 
-            // Endpoint geometry (codec v2): A at s = 0 is the IN node, B at s = LengthM the OUT node —
-            // the same convention NodeA/NodeB already encode, so s interpolates A→B directly.
+            // Endpoint geometry (codec v3, per edge): A at s = 0 is the IN node, B at s = LengthM
+            // the OUT node — the same convention NodeA/NodeB already encode, so s interpolates A→B.
             Vector3? a = EndPosition(i * 2), b = EndPosition(i * 2 + 1);
             if (a.HasValue && b.HasValue)
             {
@@ -165,6 +166,11 @@ public static class TopologyExtractor
             else
             {
                 missingGeometry++;
+                string trackName;
+                try { trackName = tracks[i] != null ? tracks[i].name : "<destroyed>"; }
+                catch { trackName = "<unreadable>"; }
+                missingDetails.Add($"edge {i} '{trackName}' ({length:F0} m, " +
+                    $"in={(a.HasValue ? "ok" : "missing")} out={(b.HasValue ? "ok" : "missing")})");
                 edges[i] = new TrackEdge((uint)i, length, NodeId(i * 2), NodeId(i * 2 + 1));
             }
         }
@@ -186,10 +192,21 @@ public static class TopologyExtractor
             $", {zeroLength} zero-length edge(s), {missingTracks} branch(es) to unregistered tracks");
         if (positionMismatches > 0)
             log("[extract] WARNING: position mismatches mean the Branch.first convention or the graph is off — do NOT trust this file.");
-        log(topology.HasGeometry
-            ? "[extract] world geometry: present on every edge — interest management can filter railed trains."
-            : $"[extract] world geometry: MISSING on {missingGeometry} edge(s) — train interest will fail open " +
-              "(everything broadcast, as before). Extract again with the world fully loaded.");
+        if (missingGeometry == 0)
+        {
+            log("[extract] world geometry: present on every edge — interest management can filter railed trains.");
+        }
+        else
+        {
+            // F4 (2026-08-04 gauntlet): B99.7 deterministically withholds node transforms on a set
+            // of special tracks, so "extract again with the world fully loaded" was a dead end —
+            // geometry is per-edge now (codec v3), the placeable share filters, bare edges fail
+            // open per train. The per-edge list below is what makes the WHY diagnosable.
+            log($"[extract] world geometry: {edges.Length - missingGeometry}/{edges.Length} edge(s) placeable — " +
+                $"trains on the {missingGeometry} bare edge(s) broadcast to everyone (per-train fail-open).");
+            foreach (string detail in missingDetails)
+                log($"[extract]   no node transform: {detail}");
+        }
 
         return topology;
     }

@@ -70,7 +70,12 @@ if (worldFile is not null)
     {
         topology = TopologyCodec.Read(File.ReadAllBytes(worldFile));
         Console.WriteLine($"[server] topology {Path.GetFileName(worldFile)}: {topology.Edges.Count} edge(s), " +
-                          $"build {topology.GameBuild}, world geometry {(topology.HasGeometry ? "present" : "ABSENT (v1 file)")}.");
+                          $"build {topology.GameBuild}, world geometry " +
+                          (topology.HasGeometry
+                              ? topology.GeometryEdgeCount == topology.Edges.Count
+                                  ? "present."
+                                  : $"on {topology.GeometryEdgeCount}/{topology.Edges.Count} edge(s) (bare edges broadcast per-train)."
+                              : "ABSENT (v1 file)."));
     }
     catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException)
     {

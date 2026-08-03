@@ -107,13 +107,13 @@ public sealed class WorldTopology
         Junctions = junctions ?? throw new ArgumentNullException(nameof(junctions));
 
         _byId = new Dictionary<uint, TrackEdge>(edges.Count);
-        bool geometry = edges.Count > 0;
+        int geometryEdges = 0;
         foreach (TrackEdge e in edges)
         {
             _byId[e.Id] = e; // a duplicate id would already have broken edge lookup everywhere else
-            if (!e.HasGeometry) geometry = false;
+            if (e.HasGeometry) geometryEdges++;
         }
-        HasGeometry = geometry;
+        GeometryEdgeCount = geometryEdges;
     }
 
     /// <summary>The exact build string this topology was extracted from (e.g. "99-build2702").</summary>
@@ -122,11 +122,17 @@ public sealed class WorldTopology
     public IReadOnlyList<TrackEdge> Edges { get; }
     public IReadOnlyList<JunctionDef> Junctions { get; }
 
-    /// <summary>True when EVERY edge carries world geometry, so <see cref="TryEdgeWorldPoint"/> can
-    /// place any bogie. All-or-nothing on purpose: a partially-placeable network would filter some
-    /// trains and silently fail open on others, which is worse than not filtering at all (D10 Burst 2
-    /// — the server disables train interest outright when this is false).</summary>
-    public bool HasGeometry { get; }
+    /// <summary>How many edges carry world geometry. B99.7 deterministically has a set of special
+    /// tracks (139 of 2073 — turntables and the like) whose node transforms never resolve, so
+    /// "every edge or nothing" meant NEVER filtering (the 2026-08-04 gauntlet's F4). Partial
+    /// geometry is safe because placement already fails open PER ENTITY: a train on a bare edge
+    /// can't be placed, lands in nobody's <c>_placed</c> set, and is relevant to everyone.</summary>
+    public int GeometryEdgeCount { get; }
+
+    /// <summary>True when this topology can place bogies at all — i.e. ANY edge carries geometry
+    /// (was all-or-nothing before F4; see <see cref="GeometryEdgeCount"/> for the honest count).
+    /// The server suppresses train interest outright when this is false.</summary>
+    public bool HasGeometry => GeometryEdgeCount > 0;
 
     /// <summary>The edge with this id, or null. O(1).</summary>
     public TrackEdge? Edge(uint edgeId) => _byId.TryGetValue(edgeId, out TrackEdge? e) ? e : null;

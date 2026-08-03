@@ -63,8 +63,10 @@ public sealed class NetServer : IDisposable
             OnInterestLeave,
             TrainEntities);
 
-        // Without placeable geometry a train has no anchor, so the filter would hide every consist
-        // rather than the distant ones. Fail open loudly instead (D10 Burst 2).
+        // With NO placeable geometry anywhere a train has no anchor, so the filter would hide every
+        // consist rather than the distant ones — fail open loudly instead (D10 Burst 2). Partial
+        // geometry is fine (F4): a train on a bare edge simply isn't yielded by TrainEntities, so
+        // it never lands in _placed and IsRelevant fails open to everyone for that one set.
         if (_topology is null || !_topology.HasGeometry) _interest.SuppressKind(EntityKind.Trainset);
         Trains.BindInterest(_interest);
 
@@ -357,10 +359,11 @@ public sealed class NetServer : IDisposable
             }
             if (_topology.TryEdgeWorldPoint(head.Front.EdgeId, head.Front.S, out WorldPoint p))
                 yield return new SpatialEntity(new EntityKey(EntityKind.Trainset, kv.Key), p.X, p.Z);
-            // Unknown edge (a topology from a different extraction than the snapshots): yield nothing,
-            // so the set is never in anyone's scope set and IsRelevant... would refuse it. That is the
-            // one place this could wrongly hide a train, so it is guarded at the source — the server
-            // only enables train interest for a topology whose build matches the session's.
+            // Unknown or geometry-free edge (F4: B99.7 has bare special-track edges even in a good
+            // extract): yield nothing — the set then isn't in _placed after the next Recompute, and
+            // IsRelevant FAILS OPEN for it (relevant to everyone, streamed to everyone). Broadcast
+            // for one set beats wrongly hiding it; the build-match guard at load time still keeps a
+            // foreign topology from mis-placing everything.
         }
     }
 

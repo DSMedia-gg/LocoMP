@@ -629,8 +629,14 @@ public sealed class SessionController
                                  career: careerConfig, items: itemConfig, interest: interestConfig),
                 _clock, restore, topology);
             if (_interest)
-                _log($"[session] interest management ON — trains " +
-                     $"{(topology is { HasGeometry: true } ? "filtered by distance" : "broadcast (no world geometry)")}, players filtered");
+            {
+                string trains = topology is { HasGeometry: true } t
+                    ? t.GeometryEdgeCount == t.Edges.Count
+                        ? "filtered by distance"
+                        : $"filtered on {t.GeometryEdgeCount}/{t.Edges.Count} placeable edge(s) (bare edges broadcast)"
+                    : "broadcast (no world geometry)";
+                _log($"[session] interest management ON — trains {trains}, players filtered");
+            }
             _server.PlayerAdmitted += p => _log($"[session] admitted {p.Name} (id {p.Id}) — {_server!.PlayerCount} player(s)");
             _server.PlayerRemoved += id => _log($"[session] removed id {id} — {_server!.PlayerCount} player(s)");
             // Server-side refusals go to the requesting PEER; without these lines a remote

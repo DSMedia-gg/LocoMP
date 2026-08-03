@@ -55,11 +55,12 @@ public class TopologyCodecTests
         new JunctionDef[0]);
 
     [Fact]
-    public void Edge_geometry_survives_the_round_trip_and_reads_back_as_v2()
+    public void Edge_geometry_survives_the_write_read_round_trip()
     {
         WorldTopology read = TopologyCodec.Read(TopologyCodec.Write(WithGeometry()));
 
         Assert.True(read.HasGeometry);
+        Assert.Equal(2, read.GeometryEdgeCount);
         Assert.Equal(100f, read.Edges[0].B.X);
         Assert.Equal(200f, read.Edges[1].B.Z);
         Assert.Equal(30f, read.Edges[1].B.Y);
@@ -85,7 +86,7 @@ public class TopologyCodecTests
         Assert.False(read.TryEdgeWorldPoint(0, 10f, out _)); // ...it just can't place anything
     }
 
-    /// <summary>A geometry-free topology written by THIS build is v2-with-the-flag-clear, and still
+    /// <summary>A geometry-free topology written by THIS build is v3-with-the-flag-clear, and still
     /// round-trips as geometry-free — the flag is not a proxy for the version.</summary>
     [Fact]
     public void A_geometry_free_topology_round_trips_without_inventing_positions()
@@ -96,22 +97,63 @@ public class TopologyCodecTests
         Assert.False(read.Edges[0].HasGeometry);
     }
 
-    /// <summary>Geometry is all-or-nothing: one edge without it disables placement for the whole
-    /// network, because a partly-placeable world would filter some trains and silently fail open on
-    /// others — harder to diagnose than not filtering at all.</summary>
+    /// <summary>Geometry is PER EDGE since v3 (the 2026-08-04 gauntlet's F4): B99.7 deterministically
+    /// withholds node transforms on its special tracks, so all-or-nothing meant the filter never ran
+    /// on a real extract. A bare edge stays unplaceable — its trains fail open per entity — while its
+    /// neighbours keep their geometry through the round trip.</summary>
     [Fact]
-    public void One_geometry_free_edge_disables_geometry_for_the_whole_topology()
+    public void A_bare_edge_keeps_its_neighbours_geometry_through_the_round_trip()
     {
         var mixed = new WorldTopology("99-build2702",
             new[]
             {
                 new TrackEdge(0, 100f, 1, 2, new WorldPoint(0, 0, 0), new WorldPoint(100, 0, 0)),
-                new TrackEdge(1, 100f, 2, 3), // no geometry
+                new TrackEdge(1, 100f, 2, 3), // no geometry — a turntable-style special track
             },
             new JunctionDef[0]);
 
-        Assert.False(mixed.HasGeometry);
-        Assert.False(TopologyCodec.Read(TopologyCodec.Write(mixed)).HasGeometry);
+        Assert.True(mixed.HasGeometry);          // usable: SOME edges place
+        Assert.Equal(1, mixed.GeometryEdgeCount);
+        Assert.True(mixed.TryEdgeWorldPoint(0, 50f, out WorldPoint mid));
+        Assert.Equal(50f, mid.X, 3);
+        Assert.False(mixed.TryEdgeWorldPoint(1, 50f, out _)); // the caller fails open per train
+
+        WorldTopology read = TopologyCodec.Read(TopologyCodec.Write(mixed));
+        Assert.True(read.HasGeometry);
+        Assert.Equal(1, read.GeometryEdgeCount);
+        Assert.True(read.Edges[0].HasGeometry);
+        Assert.False(read.Edges[1].HasGeometry);
+        Assert.Equal(100f, read.Edges[0].B.X);
+    }
+
+    /// <summary>The v2 back-compat contract: an old file's single flag byte meant ALL edges carry
+    /// geometry (its own all-or-nothing invariant), with no per-edge flags in the stream. Real v2
+    /// bytes, hand-written, must read back fully placeable.</summary>
+    [Fact]
+    public void A_v2_file_still_loads_with_geometry_on_every_edge()
+    {
+        WorldTopology t = WithGeometry();
+        var w = new PacketWriter(256);
+        foreach (byte m in new[] { (byte)'L', (byte)'M', (byte)'P', (byte)'W' }) w.WriteByte(m);
+        w.WriteByte(2);
+        w.WriteString(t.GameBuild);
+        w.WriteByte(1); // v2: one file-level flag, no per-edge flags
+        w.WriteVarUInt((uint)t.Edges.Count);
+        foreach (TrackEdge e in t.Edges)
+        {
+            w.WriteVarUInt(e.Id);
+            w.WriteSingle(e.LengthM);
+            w.WriteVarUInt(e.NodeA);
+            w.WriteVarUInt(e.NodeB);
+            w.WriteSingle(e.A.X); w.WriteSingle(e.A.Y); w.WriteSingle(e.A.Z);
+            w.WriteSingle(e.B.X); w.WriteSingle(e.B.Y); w.WriteSingle(e.B.Z);
+        }
+        w.WriteVarUInt(0); // no junctions
+
+        WorldTopology read = TopologyCodec.Read(w.ToArray());
+        Assert.True(read.HasGeometry);
+        Assert.Equal(read.Edges.Count, read.GeometryEdgeCount);
+        Assert.Equal(100f, read.Edges[0].B.X);
     }
 
     /// <summary>The spline→world bridge: s metres along an edge lands proportionally along its chord.

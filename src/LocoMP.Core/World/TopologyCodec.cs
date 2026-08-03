@@ -25,9 +25,16 @@ public static class TopologyCodec
     /// a human. Refusing v1 would brick every existing extraction to gain nothing — a v1 topology is
     /// still perfectly valid for everything it always did (the walker, spline validation). It simply
     /// reads back with <see cref="WorldTopology.HasGeometry"/> false, and the server fails open on
-    /// train interest. So <see cref="Read"/> accepts v1..v2 and <see cref="Write"/> always emits v2.</para>
+    /// train interest. So <see cref="Read"/> accepts v1..v3 and <see cref="Write"/> always emits v3.</para>
+    ///
+    /// <para><b>v3 carries geometry PER EDGE.</b> v2 had one file-level flag because geometry was
+    /// all-or-nothing — and the 2026-08-04 gauntlet (F4) proved B99.7 deterministically withholds
+    /// node transforms on 139 special-track edges, so an all-or-nothing extract can never complete
+    /// and the filter never runs. v3 spends one flag byte per edge (a few KB) so the 93% of the
+    /// network that IS placeable filters, and trains on bare edges fail open per entity. A v2 file
+    /// with its flag set still reads as all-edges-geometry (its own invariant guarantees that).</para>
     /// </summary>
-    public const byte FormatVersion = 2;
+    public const byte FormatVersion = 3;
 
     /// <summary>Oldest layout <see cref="Read"/> still accepts.</summary>
     public const byte MinReadableVersion = 1;
@@ -41,13 +48,13 @@ public static class TopologyCodec
         if (topology is null) throw new ArgumentNullException(nameof(topology));
 
         bool geometry = topology.HasGeometry;
-        var w = new PacketWriter(topology.Edges.Count * (geometry ? 40 : 16) + 64);
+        var w = new PacketWriter(topology.Edges.Count * (geometry ? 41 : 16) + 64);
         foreach (byte m in Magic) w.WriteByte(m);
         w.WriteByte(FormatVersion);
         w.WriteString(topology.GameBuild);
 
-        // One flag for the whole file, not per edge: geometry is all-or-nothing (WorldTopology
-        // enforces it), so a per-edge flag would cost a byte an edge to encode an impossible state.
+        // File-level flag first (any geometry at all?) so a bare topology skips the per-edge
+        // bytes entirely; when set, each edge carries its own flag (F4: partial geometry is real).
         w.WriteByte(geometry ? (byte)1 : (byte)0);
 
         w.WriteVarUInt((uint)topology.Edges.Count);
@@ -58,6 +65,8 @@ public static class TopologyCodec
             w.WriteVarUInt(e.NodeA);
             w.WriteVarUInt(e.NodeB);
             if (!geometry) continue;
+            w.WriteByte(e.HasGeometry ? (byte)1 : (byte)0);
+            if (!e.HasGeometry) continue;
             w.WriteSingle(e.A.X); w.WriteSingle(e.A.Y); w.WriteSingle(e.A.Z);
             w.WriteSingle(e.B.X); w.WriteSingle(e.B.Y); w.WriteSingle(e.B.Z);
         }
@@ -86,7 +95,8 @@ public static class TopologyCodec
             throw new InvalidDataException($"topology format v{version}, this build reads v{MinReadableVersion}–v{FormatVersion}");
         string gameBuild = r.ReadString();
 
-        // v1 predates geometry entirely — no flag byte in the stream to read.
+        // v1 predates geometry entirely — no flag byte in the stream to read. v2's file-level
+        // flag means ALL edges carry geometry (its all-or-nothing invariant); v3 flags per edge.
         bool geometry = version >= 2 && r.ReadByte() != 0;
 
         int edgeCount = (int)r.ReadVarUInt();
@@ -98,7 +108,8 @@ public static class TopologyCodec
             float length = r.ReadSingle();
             uint nodeA = r.ReadVarUInt();
             uint nodeB = r.ReadVarUInt();
-            if (!geometry)
+            bool edgeGeometry = geometry && (version < 3 || r.ReadByte() != 0);
+            if (!edgeGeometry)
             {
                 edges[i] = new TrackEdge(id, length, nodeA, nodeB);
                 continue;
