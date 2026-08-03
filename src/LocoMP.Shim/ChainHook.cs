@@ -6,10 +6,13 @@ namespace LocoMP.Shim;
 /// <summary>
 /// M3.5c: the chain-coupler seam. Every manual chain couple/uncouple funnels through
 /// <c>ChainCouplerCouplerAdapter.TryCouple/TryUncouple</c> (the interaction FSM's tighten/loosen
-/// completions call them), so one prefix pair intercepts the physical act BEFORE it happens.
-/// While a session is live, an act involving a REMOTE-driven car is suppressed and routed to the
-/// consist's sim owner as a request — the owner performs the real couple/uncouple and its native
-/// event drives the normal proposal path. Pure-local acts pass through untouched.
+/// completions call them), so one prefix pair sees the physical act BEFORE it happens.
+/// While a session is live, an act involving a REMOTE-driven car also routes a request to the
+/// consist's sim owner; whether the native act is allowed to proceed is the filter's call
+/// (F1, 2026-08-04: remote↔remote acts DO proceed — the gesture FSM assumes a synchronous act,
+/// and suppressing it left the chain visual lying and interactables dead; only mixed
+/// local↔remote couples stay suppressed, the kinematic-anchor hazard). Pure-local acts pass
+/// through untouched.
 /// </summary>
 public static class ChainHook
 {

@@ -770,24 +770,50 @@ public sealed class TrainSync : IDisposable
     private static CoupleEnd CouplerEnd(Coupler coupler) =>
         coupler.isFrontCoupler ? CoupleEnd.Front : CoupleEnd.Rear;
 
-    /// <summary>ChainHook filter: a chain tighten involving a remote-driven car becomes a request
-    /// to its simulating player instead of a local physical couple. Pure-local chains (and
-    /// anything outside a session) pass through to the native path untouched.</summary>
+    /// <summary>ChainHook filter for chain tightens involving a remote-driven car (F1 rework,
+    /// 2026-08-04 gauntlet). DV's chain-gesture FSM assumes the physical act happens the moment it
+    /// calls TryCouple — suppressing the act (the old shape) left the FSM finishing its gesture
+    /// against stale reality: the chain visual re-hooked a logically-uncoupled partner and the
+    /// partner's knob went InteractionAllowed=false ("interactables dead"). So:
+    /// REMOTE↔REMOTE now applies the couple NATIVELY (both cars are kinematic replicas — the
+    /// joint is physically inert) and still asks the sim owner; a suppression window keeps the
+    /// reconcile sweep from detaching the pair before the commit lands, and an expired window
+    /// re-asserts the def, which makes a refusal VISIBLE (the chain pops off).
+    /// MIXED local↔remote keeps the old suppress-and-route shape — a native couple there anchors
+    /// a physics train to a teleporting kinematic body, the incumbent's snap-back class.
+    /// ALREADY-COUPLED passes through with NO request: the FSM's loosen sequence re-enters
+    /// Attached_Loose, whose entry action re-fires TryCouple on a coupled coupler (native no-op);
+    /// the old filter minted a spurious couple request per screw-loosen (gauntlet F8 noise).</summary>
     private bool FilterChainCouple(Coupler mine, Coupler? theirs)
     {
         if (!_client.Joined || theirs == null) return true;
         TrainCar a = mine.train, b = theirs.train;
         if (a == null || b == null) return true;
-        if (!_remote.IsRemoteCar(a) && !_remote.IsRemoteCar(b)) return true;
+        bool aRemote = _remote.IsRemoteCar(a), bRemote = _remote.IsRemoteCar(b);
+        if (!aRemote && !bRemote) return true;
+        if (mine.IsCoupled() || theirs.IsCoupled()) return true; // FSM re-entry — native no-op, not intent
         if (!TryAnyCarId(a, out int carA) || !TryAnyCarId(b, out int carB)) return true;
 
+        if (aRemote && bRemote)
+        {
+            _remote.SuppressPairAssert(carA, carB);
+            _client.Trains.RequestCouple(carA, CouplerEnd(mine), carB, CouplerEnd(theirs));
+            _log($"[trains] chain couple on remote-driven cars {carA}+{carB} — applied locally, asked the sim owner");
+            return true;
+        }
+
         _client.Trains.RequestCouple(carA, CouplerEnd(mine), carB, CouplerEnd(theirs));
-        _log($"[trains] chain couple involves a remote-driven car — asked its simulating player (cars {carA}+{carB})");
+        _log($"[trains] chain couple joins a local car to a remote-driven one — routed as a request (cars {carA}+{carB})");
         return false;
     }
 
-    /// <summary>ChainHook filter: a chain loosen on a remote-driven car becomes an uncouple
-    /// request; the commit arrives as a split transaction and ReconcileCouplings follows it.</summary>
+    /// <summary>ChainHook filter for a chain loosen on a remote-driven car (F1 rework — same
+    /// reasoning as <see cref="FilterChainCouple"/>): the uncouple is applied NATIVELY so the
+    /// gesture FSM stays consistent (grab-detach really detaches; kinematic replicas make the
+    /// joint change physically inert), the request still travels to the sim owner, and the
+    /// suppression window keeps the reconcile's inverse assert from snapping the chain back
+    /// before the split commits. The native Uncoupled event cannot echo as a proposal —
+    /// TryGetPair requires both cars in the OWN-bound map.</summary>
     private bool FilterChainUncouple(Coupler mine)
     {
         if (!_client.Joined) return true;
@@ -795,9 +821,13 @@ public sealed class TrainSync : IDisposable
         if (car == null || !_remote.IsRemoteCar(car)) return true;
         if (!TryAnyCarId(car, out int carId)) return true;
 
+        TrainCar? partner = mine.coupledTo != null ? mine.coupledTo.train : null;
+        if (partner != null && _remote.IsRemoteCar(partner) && TryAnyCarId(partner, out int partnerId))
+            _remote.SuppressPairAssert(carId, partnerId);
+
         _client.Trains.RequestUncouple(carId, CouplerEnd(mine));
-        _log($"[trains] chain uncouple on a remote-driven car — asked its simulating player (car {carId})");
-        return false;
+        _log($"[trains] chain uncouple on remote-driven car {carId} — applied locally, asked the sim owner");
+        return true;
     }
 
     /// <summary>A remote player physically chained one of OUR cars — perform the real couple; the

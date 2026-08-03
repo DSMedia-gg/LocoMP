@@ -54,6 +54,13 @@ public sealed class RealCarSync
     private const float StaleSnapshotSeconds = 5f;  // stream quiet this long + unspawned → replay
     private const float ResyncRetrySeconds = 10f;   // per-set floor between baseline requests
 
+    // F1 (2026-08-04 gauntlet): chain gestures on remote cars apply NATIVELY now (the gesture FSM
+    // assumes a synchronous act) while the request travels to the sim owner — so until the commit
+    // lands, the def and the native coupler state deliberately disagree for that one pair. This
+    // window keeps the sweep from "correcting" the disagreement mid-flight; expiry re-asserts the
+    // def, which is what makes a refused request visible (the chain pops back).
+    private const float PairAssertSuppressSeconds = 5f;
+
     private sealed class Entry
     {
         public Entry(CarDef def) => Def = def;
@@ -94,6 +101,7 @@ public sealed class RealCarSync
     private readonly Dictionary<TrainCar, Action> _destroyHooks = new();
     private readonly Dictionary<int, int> _respawns = new();
     private bool _deletingOurs;
+    private readonly Dictionary<(int, int), float> _pairAssertSuppressed = new();
     private readonly HashSet<int> _unresolvedWarned = new();
     private readonly HashSet<int> _occupiedWarned = new();
     private readonly GhostConsists _ghosts;
@@ -117,6 +125,27 @@ public sealed class RealCarSync
 
     /// <summary>True for cars this class spawned — i.e. cars simulated by ANOTHER player.</summary>
     public bool IsRemoteCar(TrainCar car) => _serverIdByCar.ContainsKey(car);
+
+    /// <summary>A chain gesture just applied a couple/uncouple to this pair NATIVELY and routed
+    /// the intent to the sim owner (F1) — hold the reconcile's truth-assert for this one pair
+    /// until the commit lands or the window expires (expiry = the def visibly wins).</summary>
+    public void SuppressPairAssert(int carIdA, int carIdB)
+    {
+        (int, int) key = carIdA < carIdB ? (carIdA, carIdB) : (carIdB, carIdA);
+        _pairAssertSuppressed[key] = Time.unscaledTime + PairAssertSuppressSeconds;
+    }
+
+    private bool IsPairAssertSuppressed(int carIdA, int carIdB)
+    {
+        (int, int) key = carIdA < carIdB ? (carIdA, carIdB) : (carIdB, carIdA);
+        if (!_pairAssertSuppressed.TryGetValue(key, out float until)) return false;
+        if (Time.unscaledTime >= until)
+        {
+            _pairAssertSuppressed.Remove(key);
+            return false;
+        }
+        return true;
+    }
 
     /// <summary>True while we are inside the game's spawn call — its CarSpawned event fires before
     /// the car lands in our maps, and the joined-client native-spawn cleaner must not eat it.</summary>
@@ -217,6 +246,7 @@ public sealed class RealCarSync
         _carByServerId.Clear();
         _destroyHooks.Clear();
         _ghostSets.Clear();
+        _pairAssertSuppressed.Clear();
         _ghosts.Clear();
     }
 
@@ -594,12 +624,22 @@ public sealed class RealCarSync
         {
             TrainCar? a = set.Cars[i].Car, b = set.Cars[i + 1].Car;
             if (a == null || b == null) continue;
+            int idA = set.Cars[i].Def.Id, idB = set.Cars[i + 1].Def.Id;
+            if (IsPairAssertSuppressed(idA, idB))
+                continue; // an in-flight uncouple request holds this exact pair (F1)
             Coupler? mine = NearestCoupler(a, b.transform.position);
             Coupler? theirs = NearestCoupler(b, a.transform.position);
             if (mine == null || theirs == null || mine.IsCoupled() || theirs.IsCoupled()) continue;
             if ((mine.transform.position - theirs.transform.position).sqrMagnitude > 8f * 8f) continue;
-            try { mine.CoupleTo(theirs, playAudio: false, viaChainInteraction: false); }
-            catch { /* cosmetic — the def is the membership truth */ }
+            try
+            {
+                mine.CoupleTo(theirs, playAudio: false, viaChainInteraction: false);
+                _log($"[trains] coupled def-adjacent cars {idA}+{idB}");
+            }
+            catch (Exception e)
+            {
+                _log($"[trains] couple of def-adjacent cars {idA}+{idB} FAILED ({e.Message})");
+            }
         }
     }
 
@@ -655,13 +695,25 @@ public sealed class RealCarSync
                     if (other == null) continue;
                     // Server truth: one set never spans own and remote cars, so a partner outside
                     // the remote map can NEVER be legitimate — detach it, don't skip it.
-                    bool adjacent = _serverIdByCar.TryGetValue(other, out int otherId) &&
+                    bool known = _serverIdByCar.TryGetValue(other, out int otherId);
+                    bool adjacent = known &&
                         ((i > 0 && set.Cars[i - 1].Def.Id == otherId) ||
                          (i + 1 < set.Cars.Length && set.Cars[i + 1].Def.Id == otherId));
-                    if (!adjacent)
+                    if (adjacent) continue;
+                    int myId = set.Cars[i].Def.Id;
+                    if (known && IsPairAssertSuppressed(myId, otherId))
+                        continue; // an in-flight couple request holds this exact pair (F1)
+                    // Every action logs — the 08-04 gauntlet spent a session unable to tell
+                    // "sweep never acted" from "sweep acted invisibly" from "sweep threw".
+                    try
                     {
-                        try { coupler.Uncouple(playAudio: false, calledOnOtherCoupler: false, dueToBrokenCouple: false, viaChainInteraction: false); }
-                        catch { /* cosmetic — the def is the membership truth */ }
+                        coupler.Uncouple(playAudio: false, calledOnOtherCoupler: false, dueToBrokenCouple: false, viaChainInteraction: false);
+                        _log($"[trains] reconcile: detached car {myId} from " +
+                             (known ? $"car {otherId}" : "a foreign car") + " (not def-adjacent)");
+                    }
+                    catch (Exception e)
+                    {
+                        _log($"[trains] reconcile: detach on car {myId} FAILED ({e.Message})");
                     }
                 }
             }
