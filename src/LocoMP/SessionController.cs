@@ -84,6 +84,60 @@ public sealed class SessionController
 
     public SessionController(Action<string> log) => _log = log;
 
+    // ── M5.0 public seam ─────────────────────────────────────────────────────────────────────
+    // The observable surface SessionViewModel (and the retained IMGUI panel) binds to. Events
+    // fire from Update()/the Core callbacks, i.e. on the Unity main thread (UMM pumps OnUpdate),
+    // so handlers may touch GameObjects directly.
+
+    /// <summary>Current lifecycle phase; transitions raise <see cref="PhaseChanged"/>.</summary>
+    public SessionPhase Phase { get; private set; } = SessionPhase.Idle;
+
+    /// <summary>Last user-facing error ("" when clear). Set → <see cref="ErrorRaised"/>.</summary>
+    public string LastError => _lastError;
+
+    /// <summary>Last career/items toast ("" when clear). Set → <see cref="CareerToast"/>.</summary>
+    public string LastToast => _careerToast;
+
+    /// <summary>The session's client half (host included — the host is client #1). UI reads
+    /// Players/Career/Items from here; commands still go through this controller.</summary>
+    public NetClient? Client => _client;
+
+    /// <summary>Host-only surfaces (PlayerCount, Career.AutoGrantHostLicenses…); null unless hosting.</summary>
+    public NetServer? Server => _server;
+
+    public event Action<SessionPhase>? PhaseChanged;
+    public event Action? PlayersChanged;
+    public event Action<string>? ErrorRaised;
+    public event Action<string>? CareerToast;
+
+    /// <summary>The one spot phase transitions are detected. Called from Update() (async
+    /// transitions: admission, session-lost, world unload) and at the end of every command.</summary>
+    private void SyncPhase()
+    {
+        SessionPhase phase = _mode switch
+        {
+            Mode.Idle => SessionPhase.Idle,
+            _ when _sessionLost => SessionPhase.SessionLost,
+            Mode.Hosting => SessionPhase.Hosting,
+            _ => _client is { Joined: true } ? SessionPhase.Joined : SessionPhase.Connecting,
+        };
+        if (phase == Phase) return;
+        Phase = phase;
+        PhaseChanged?.Invoke(phase);
+    }
+
+    private void SetError(string message)
+    {
+        _lastError = message;
+        if (message.Length > 0) ErrorRaised?.Invoke(message);
+    }
+
+    private void Toast(string message)
+    {
+        _careerToast = message;
+        if (message.Length > 0) CareerToast?.Invoke(message);
+    }
+
     private static string ModVersion
     {
         get
@@ -142,7 +196,7 @@ public sealed class SessionController
             // Flagged from inside the tick; tear down afterwards so we never dispose mid-callback.
             _worldUnloaded = false;
             _log("[session] game world unloaded — session closed (host again once the new world is up)");
-            _lastError = "world unloaded — session closed";
+            SetError("world unloaded — session closed");
             Leave();
             return;
         }
@@ -160,12 +214,13 @@ public sealed class SessionController
             else if ((_lostCountdown -= dt) <= 0)
             {
                 _sessionLost = true;
-                _lastError = "session lost — the host is gone. Leave, then reload your save.";
+                SetError("session lost — the host is gone. Leave, then reload your save.");
                 _log("[session] connection to the host lost — the session is over. Press Leave to " +
                      "restore your world, then reload your save (native saving stays blocked until you leave).");
             }
         }
         _avatars.Tick((float)dt);
+        SyncPhase();
     }
 
     /// <summary>The game world is going away (quit to menu, load another save, exit). Teardown itself is
@@ -385,7 +440,7 @@ public sealed class SessionController
             {
                 career.GrantExternalLicense(licenseId, _grantTarget);
                 string who = _client.Players[_grantTarget].Name;
-                _careerToast = $"granted {licenseId} to {who}";
+                Toast($"granted {licenseId} to {who}");
                 _log($"[career] host grant: {licenseId} → {who} (peer {_grantTarget})");
             }
             GUILayout.Label(licenseId);
@@ -445,18 +500,40 @@ public sealed class SessionController
     public ProgressionPreset HostPreset =>
         _sharedCareer ? ProgressionPreset.SharedCareer : ProgressionPreset.PerPlayer;
 
-    private void Host()
+    /// <summary>IMGUI adapter: builds a <see cref="HostOptions"/> from the panel's field state and
+    /// calls the shared entry point — the dev panel and the uGUI host screen ride one code path.</summary>
+    private void Host() => HostSession(new HostOptions
+    {
+        PlayerName = _playerName,
+        Port = ParsePort(),
+        Password = _password.Length > 0 ? _password : null,
+        Preset = _sharedCareer ? ProgressionPreset.SharedCareer : ProgressionPreset.PerPlayer,
+        FreshCareer = _freshCareer,
+        AutoGrantLicenses = _autoGrant,
+        InterestFiltering = _interest,
+    });
+
+    /// <summary>Host a session (M5.0 seam entry point). Mirrors the options back into the IMGUI
+    /// field state so the two UIs can never drift about what the live session was started with.</summary>
+    public void HostSession(HostOptions o)
     {
         try
         {
             _lastError = "";
-            int port = ParsePort();
+            int port = o.Port is > 0 and < 65536 ? o.Port : NetDefaults.Port;
+            _playerName = o.PlayerName;
+            _portText = port.ToString(CultureInfo.InvariantCulture);
+            _password = o.Password ?? "";
+            _sharedCareer = o.Preset == ProgressionPreset.SharedCareer;
+            _freshCareer = o.FreshCareer;
+            _autoGrant = o.AutoGrantLicenses;
+            _interest = o.InterestFiltering;
 
             // M3 career: real map data in, saved career back (host-mode resume restores the CAREER
             // half only — the host's live game world is the physical truth and re-registers its
             // consists fresh; restoring saved trainsets here would duplicate them as ghosts. The
             // full-world restore is the dedicated server's path, M6).
-            ProgressionPreset preset = _sharedCareer ? ProgressionPreset.SharedCareer : ProgressionPreset.PerPlayer;
+            ProgressionPreset preset = o.Preset;
             CareerConfigBuilder.TryBuild(preset, out CareerConfig careerConfig, _log);
             var storage = new FileSaveStorage(CareerSavePath(preset));
             ServerSaveData? restore = null;
@@ -544,7 +621,7 @@ public sealed class SessionController
             // generated job onto the server board. Only joining CLIENTS suppress.
             JobGenSuppressor.Active = false;
             _jobCapture = new JobCapture(_client, _log);
-            _jobCapture.TakeRefused += reason => _careerToast = reason;
+            _jobCapture.TakeRefused += Toast;
             // D14: the native career manager is the shop and native money is the wallet's view —
             // licenses sync both ways, register purchases burn through the ledger.
             _licenseSync = new LicenseSync(_client, _log);
@@ -567,18 +644,36 @@ public sealed class SessionController
         }
         catch (Exception e)
         {
-            _lastError = $"host failed: {e.Message}";
+            SetError($"host failed: {e.Message}");
             _log("[session] " + _lastError);
             Leave();
         }
+        SyncPhase();
     }
 
-    private void Join()
+    /// <summary>IMGUI adapter for <see cref="JoinSession"/> — same single-code-path deal as Host().</summary>
+    private void Join() => JoinSession(new JoinOptions
+    {
+        PlayerName = _playerName,
+        Address = _address,
+        Port = ParsePort(),
+        Password = _password.Length > 0 ? _password : null,
+    });
+
+    /// <summary>Join a session (M5.0 seam entry point). Options mirror back into the IMGUI fields,
+    /// same as HostSession.</summary>
+    public void JoinSession(JoinOptions o)
     {
         try
         {
             _lastError = "";
-            _clientTransport = LiteNetLibTransport.ConnectClient(_address, ParsePort(), NetDefaults.ConnectKey);
+            int port = o.Port is > 0 and < 65536 ? o.Port : NetDefaults.Port;
+            _playerName = o.PlayerName;
+            _address = o.Address;
+            _portText = port.ToString(CultureInfo.InvariantCulture);
+            _password = o.Password ?? "";
+
+            _clientTransport = LiteNetLibTransport.ConnectClient(o.Address, port, NetDefaults.ConnectKey);
             _client = MakeClient(_clientTransport);
             _trains = new TrainSync(_client, isHost: false, _log);
             _trains.WorldUnloaded += OnWorldUnloaded;
@@ -605,10 +700,11 @@ public sealed class SessionController
         }
         catch (Exception e)
         {
-            _lastError = $"join failed: {e.Message}";
+            SetError($"join failed: {e.Message}");
             _log("[session] " + _lastError);
             Leave();
         }
+        SyncPhase();
     }
 
     private NetClient MakeClient(ITransport transport)
@@ -618,24 +714,34 @@ public sealed class SessionController
             _playerName.Length > 0 ? _playerName : "Player", _clock,
             _password.Length > 0 ? _password : null, _playerKey);
         client.Accepted += id => _log($"[session] joined as id {id} (server offset {client.ServerTimeOffsetMs} ms)");
-        client.Rejected += reason => { _lastError = reason; _log($"[session] REJECTED: {reason}"); };
+        client.Rejected += reason => { SetError(reason); _log($"[session] REJECTED: {reason}"); };
         // Only meaningful for JOINED sessions: the host's own loopback link can't drop. The
         // countdown (not an immediate declare) lets a transport re-handshake absorb load freezes.
         client.Disconnected += () => { if (_mode == Mode.Joined && _lostCountdown <= 0 && !_sessionLost) _lostCountdown = 3.0; };
-        client.PlayerJoined += p => { _avatars.AddOrUpdate(p.Id, p.Name, p.Pose); _log($"[session] player joined: {p.Name} (id {p.Id})"); };
-        client.PlayerLeft += id => { _avatars.Remove(id); _log($"[session] player left: id {id}"); };
+        client.PlayerJoined += p =>
+        {
+            _avatars.AddOrUpdate(p.Id, p.Name, p.Pose);
+            _log($"[session] player joined: {p.Name} (id {p.Id})");
+            PlayersChanged?.Invoke();
+        };
+        client.PlayerLeft += id =>
+        {
+            _avatars.Remove(id);
+            _log($"[session] player left: id {id}");
+            PlayersChanged?.Invoke();
+        };
         client.PlayerMoved += (id, pose) => _avatars.Move(id, pose);
         // D10 interest management: the server hid a player who left our spatial relevance set. Keep the
         // avatar object (a later Move re-shows it) — unlike PlayerLeft, they are still in the session.
         client.PlayerHidden += id => _avatars.Hide(id);
 
-        client.Career.RequestRejected += (r, _) => { _careerToast = r; _log("[career] refused: " + r); };
+        client.Career.RequestRejected += (r, _) => { Toast(r); _log("[career] refused: " + r); };
         // Item proposal refusals (a doomed purchase/pickup/drop) surface as the same panel toast;
         // ItemSync already writes the log line, so this only feeds the UI.
-        client.Items.RequestRejected += (r, _) => _careerToast = r;
+        client.Items.RequestRejected += (r, _) => Toast(r);
         client.Career.EconomyEventReceived += (kind, cents, reason) =>
         {
-            _careerToast = $"{kind}: {Money(cents)} — {reason}";
+            Toast($"{kind}: {Money(cents)} — {reason}");
             _log($"[career] {kind}: {Money(cents)} — {reason}");
         };
         client.Career.JobChanged += job =>
@@ -699,6 +805,7 @@ public sealed class SessionController
         _sessionLost = false;
         _lostCountdown = 0;
         _mode = Mode.Idle;
+        SyncPhase();
     }
 
     private int ParsePort() =>

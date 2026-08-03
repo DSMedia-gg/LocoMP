@@ -121,6 +121,12 @@ jobs:
               <Reference Include="UnityEngine.PhysicsModule"><HintPath>$(DvManaged)/UnityEngine.PhysicsModule.dll</HintPath><Private>false</Private></Reference>
               <Reference Include="UnityEngine.TextRenderingModule"><HintPath>$(DvManaged)/UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private></Reference>
               <Reference Include="UnityEngine.IMGUIModule"><HintPath>$(DvManaged)/UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="UnityEngine.UIModule"><HintPath>$(DvManaged)/UnityEngine.UIModule.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="UnityEngine.UI"><HintPath>$(DvManaged)/UnityEngine.UI.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="Unity.TextMeshPro"><HintPath>$(DvManaged)/Unity.TextMeshPro.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(DvManaged)/UnityEngine.InputLegacyModule.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="DV.UI"><HintPath>$(DvManaged)/DV.UI.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="DV.UIFramework"><HintPath>$(DvManaged)/DV.UIFramework.dll</HintPath><Private>false</Private></Reference>
             </ItemGroup>
           </Project>
           EOF

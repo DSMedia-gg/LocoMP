@@ -3,6 +3,7 @@ using System.IO;
 using HarmonyLib;
 using LocoMP.Core.Protocol;
 using LocoMP.Shim;
+using LocoMP.UI;
 using UnityEngine;
 using UnityModManagerNet;
 
@@ -17,9 +18,18 @@ public static class Main
 {
     private static UnityModManager.ModEntry.ModLogger? _logger;
     private static SessionController? _session;
+    private static SessionViewModel? _viewModel;
+    private static LocoMpUi? _ui;
     private static bool _active;
     private static string _extractStatus = "";
     private static string _careerStatus = "";
+    private static bool _demoSignal;
+
+    /// <summary>M5.0 transitional default: the IMGUI dev panel stays ON unless LOCOMP_DEBUG=0 —
+    /// the uGUI root is still stub tabs, so the panel remains the functional surface. The draft's
+    /// intended default (panel off, uGUI primary) flips when M5.1 lands the real join/host screens.</summary>
+    private static readonly bool DevPanel =
+        Environment.GetEnvironmentVariable("LOCOMP_DEBUG") != "0";
 
     public static bool Load(UnityModManager.ModEntry modEntry)
     {
@@ -50,17 +60,33 @@ public static class Main
 
         _session = new SessionController(log);
 
+        // M5.0 UI foundation: the view-model seam + the first-party screens. The menu hook is the
+        // one DV.UI coupling point (clone-and-rewire, gated + isolated); everything else is ours.
+        _viewModel = new SessionViewModel(_session);
+        _ui = new LocoMpUi(_viewModel, log);
+        MenuHook.Install(log);
+        MenuHook.OpenRequested += origin => { if (_active) _ui?.Open(origin); };
+
         modEntry.OnToggle = (_, value) =>
         {
             _active = value;
-            if (!value) _session?.Leave(); // toggling the mod off ends any live session cleanly
+            if (!value)
+            {
+                _session?.Leave(); // toggling the mod off ends any live session cleanly
+                _ui?.Dispose();
+            }
             log($"[mod] {(value ? "enabled" : "disabled — session closed")}.");
             return true;
         };
-        modEntry.OnUpdate = (_, dt) => { if (_active) _session?.Update(dt); };
-        modEntry.OnGUI = entry =>
+        modEntry.OnUpdate = (_, dt) =>
         {
             if (!_active) return;
+            _session?.Update(dt);
+            _ui?.Tick(dt);
+        };
+        modEntry.OnGUI = entry =>
+        {
+            if (!_active || !DevPanel) return; // dev rig behind the flag; the uGUI screens are the product surface
             _session?.OnGUI();
             OnToolsGUI(entry, log);
         };
@@ -127,6 +153,21 @@ public static class Main
             }
         }
         if (_careerStatus.Length > 0) GUILayout.Label(_careerStatus);
+        GUILayout.EndHorizontal();
+
+        // M5.0 readiness-gate demo (the exit checklist's mechanism proof): the cover must clear
+        // ONLY on the signal button, and the 8 s failsafe must resolve to the explain screen —
+        // never a silent lift (plan §5 doctrine). Real boundaries wire in at M5.1/M5.2 (U5).
+        GUILayout.BeginHorizontal();
+        if (_ui != null && GUILayout.Button("Demo readiness gate (8s)", GUILayout.Width(180)))
+        {
+            _demoSignal = false;
+            _ui.Gate.Begin("Demo cover", new[] { "Contacting", "Streaming", "Spawning" },
+                () => _demoSignal, failsafeSeconds: 8.0,
+                onFail: f => log($"[ui] demo gate stalled at {f.StalledStage} (expected — use the explain buttons)"));
+        }
+        if (_ui is { Gate.Active: true } && GUILayout.Button("Fire demo signal", GUILayout.Width(140)))
+            _demoSignal = true;
         GUILayout.EndHorizontal();
     }
 }
