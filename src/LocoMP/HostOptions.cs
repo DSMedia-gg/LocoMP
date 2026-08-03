@@ -25,5 +25,12 @@ public sealed class HostOptions
     /// <summary>D10: only stream nearby trains/players (needs live world geometry; fails open).</summary>
     public bool InterestFiltering { get; set; }
 
+    /// <summary>Admission cap (M5.1 host screen). Out-of-range values fall back to the default.</summary>
+    public int MaxPlayers { get; set; } = 32;
+
+    /// <summary>Career autosave cadence in seconds (M5.1 host screen). Clamped to a sane floor —
+    /// an accidental "1" must not turn the autosaver into a disk hammer.</summary>
+    public int AutosaveIntervalSeconds { get; set; } = 120;
+
     public static HostOptions Defaults(string playerName) => new() { PlayerName = playerName };
 }

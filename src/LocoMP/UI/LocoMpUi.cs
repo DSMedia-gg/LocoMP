@@ -1,6 +1,8 @@
 using System;
 using DV.UI;
 using DV.Utils;
+using LocoMP.Core.Protocol;
+using LocoMP.Core.Session;
 using UnityEngine;
 
 namespace LocoMP.UI;
@@ -18,20 +20,30 @@ namespace LocoMP.UI;
 /// </summary>
 public sealed class LocoMpUi
 {
+    private static readonly string[] JoinStages =
+        { "Connecting to server", "Receiving world", "Receiving career", "Receiving items" };
+
     private readonly SessionViewModel _vm;
     private readonly Action<string> _log;
     private readonly LocoMpTheme _theme = new();
+    private readonly UiPrefs _prefs;
 
     private LocoMpCanvas? _canvas;
     private ScreenRouter? _router;
     private bool _cursorRequested;
+    private SessionPhase _lastPhase = SessionPhase.Idle;
+    private bool _pendingLeave;
 
     public LocoMpUi(SessionViewModel vm, Action<string> log)
     {
         _vm = vm;
         _log = log;
+        _prefs = UiPrefs.Load(log);
         Gate = new ReadinessGate(_theme, log);
         Hud = new StatusHud(_theme);
+        _vm.Changed += OnVmChanged;
+        _vm.JoinStageChanged += OnJoinStage;
+        _vm.JoinRejected += OnJoinRejected;
     }
 
     /// <summary>The readiness-gate primitive (plan §5) — later slices Begin() it around their
@@ -49,6 +61,13 @@ public sealed class LocoMpUi
     {
         MenuHook.Tick();
         Gate.Tick(dt);
+        if (_pendingLeave)
+        {
+            // A reject's Leave is deferred here: the Rejected event fires from inside the client's
+            // own receive callback, and tearing the client down mid-poll is not a safe re-entry.
+            _pendingLeave = false;
+            _vm.Leave();
+        }
         if (_canvas is { Alive: false })
         {
             // Scene change took the canvas (and every screen) with it — drop the wreckage.
@@ -57,6 +76,56 @@ public sealed class LocoMpUi
             ReleaseCursor();
         }
         if (IsOpen && Input.GetKeyDown(KeyCode.Escape)) Close();
+    }
+
+    /// <summary>Phase-edge reactions: the join gate begins when a join goes in flight and is
+    /// force-cleared when the session returns to Idle (Leave, failed join teardown); the HUD
+    /// carries the non-blocking session-lost banner (plan §5's status tier).</summary>
+    private void OnVmChanged()
+    {
+        SessionPhase phase = _vm.Phase;
+        if (phase == _lastPhase) return;
+        if (phase == SessionPhase.Connecting) BeginJoinGate();
+        else if (phase == SessionPhase.Idle && Gate.Active) Gate.Clear();
+        // Joined/Hosting do NOT clear the gate — admission precedes the burst's end; only the
+        // sentinel (via done()) or Idle may take the cover down.
+
+        if (phase == SessionPhase.SessionLost) Hud.Show("SESSION LOST — leave to restore your world");
+        else if (_lastPhase == SessionPhase.SessionLost) Hud.Hide();
+        _lastPhase = phase;
+    }
+
+    private void BeginJoinGate()
+    {
+        if (Gate.Active) return;
+        Gate.Begin("Joining session", JoinStages, () => _vm.JoinSettled,
+            failsafeSeconds: 30.0, onGiveUp: () => _vm.Leave());
+    }
+
+    private void OnJoinStage(JoinStage stage)
+    {
+        if (!Gate.Active) return;
+        int index = stage switch
+        {
+            JoinStage.Connecting => 0,
+            JoinStage.World => 1,
+            JoinStage.Career => 2,
+            JoinStage.Items => 3,
+            _ => -1, // Complete clears via done() on the next tick; None resolves via Idle
+        };
+        if (index >= 0) Gate.SetStage(index);
+    }
+
+    private void OnJoinRejected(RejectInfo info)
+    {
+        Gate.Clear();          // the join is dead — never leave the cover to wait out its failsafe
+        _pendingLeave = true;  // tear down the half-open client next tick (see Tick)
+        if (info.IsVersionMismatch && _router != null)
+        {
+            ScreenRouter router = _router;
+            router.Push(new MismatchScreen(info, () => router.Pop()));
+        }
+        // Non-version refusals (password, full, key) read fine as the root status line's ⚠ text.
     }
 
     public void Open(MenuHookOrigin origin)
@@ -70,7 +139,7 @@ public sealed class LocoMpUi
             _theme.Font ??= MenuHook.HarvestedFont;
             var kit = new WidgetKit(_theme);
             _router = new ScreenRouter(_canvas.Root, kit);
-            _router.Push(new RootScreen(_vm, Close));
+            _router.Push(new RootScreen(_vm, _prefs, _log, Close));
             RequestCursor();
             _log($"[ui] LocoMP screens opened ({origin})");
         }
@@ -93,6 +162,9 @@ public sealed class LocoMpUi
     /// <summary>Full teardown (mod toggle-off).</summary>
     public void Dispose()
     {
+        _vm.Changed -= OnVmChanged;
+        _vm.JoinStageChanged -= OnJoinStage;
+        _vm.JoinRejected -= OnJoinRejected;
         Close();
         Gate.Clear();
         Hud.Destroy();

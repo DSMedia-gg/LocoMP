@@ -69,6 +69,10 @@ public sealed class SessionController
     private bool _sharedCareer;
     private bool _freshCareer;
     private bool _autoGrant;
+    // M5.1 host options with no IMGUI field: mirrored here anyway so the panel's Host() adapter
+    // re-hosts with the last uGUI-set values instead of silently resetting them (the no-drift rule).
+    private int _maxPlayers = 32;
+    private int _autosaveSeconds = 120;
 
     // Interest management (D10). OFF by default: a friend-scale session is well inside the bandwidth
     // budget, so this is for bigger sessions and slow uplinks. Gating railed trains is the real win
@@ -109,6 +113,27 @@ public sealed class SessionController
     public event Action? PlayersChanged;
     public event Action<string>? ErrorRaised;
     public event Action<string>? CareerToast;
+
+    // ── M5.1 join progress + structured refusal ──────────────────────────────────────────────
+
+    /// <summary>Where the join burst is (<see cref="Core.Session.JoinStage.None"/> when no client
+    /// exists). The loading interstitial's stage feed; its gate clears on <see cref="JoinSettled"/>.</summary>
+    public JoinStage JoinStage => _client?.Stage ?? JoinStage.None;
+
+    /// <summary>The join burst is fully delivered — the ONLY signal a join readiness gate may
+    /// clear on (never a timer, never an inferred stage).</summary>
+    public bool JoinSettled => _client?.JoinSettled ?? false;
+
+    /// <summary>The last structured join refusal (kind + have/need); null until a reject arrives,
+    /// cleared by the next Host/Join command. The mismatch screen branches on this.</summary>
+    public RejectInfo? LastReject { get; private set; }
+
+    /// <summary>Join-burst stage transitions, re-raised from the client on the main thread.</summary>
+    public event Action<JoinStage>? JoinStageChanged;
+
+    /// <summary>A join was refused, with structure. Fires after <see cref="ErrorRaised"/> (which
+    /// still carries the prose reason for the panel/status line).</summary>
+    public event Action<RejectInfo>? JoinRejected;
 
     /// <summary>The one spot phase transitions are detected. Called from Update() (async
     /// transitions: admission, session-lost, world unload) and at the end of every command.</summary>
@@ -511,6 +536,8 @@ public sealed class SessionController
         FreshCareer = _freshCareer,
         AutoGrantLicenses = _autoGrant,
         InterestFiltering = _interest,
+        MaxPlayers = _maxPlayers,
+        AutosaveIntervalSeconds = _autosaveSeconds,
     });
 
     /// <summary>Host a session (M5.0 seam entry point). Mirrors the options back into the IMGUI
@@ -520,6 +547,7 @@ public sealed class SessionController
         try
         {
             _lastError = "";
+            LastReject = null;
             int port = o.Port is > 0 and < 65536 ? o.Port : NetDefaults.Port;
             _playerName = o.PlayerName;
             _portText = port.ToString(CultureInfo.InvariantCulture);
@@ -528,6 +556,9 @@ public sealed class SessionController
             _freshCareer = o.FreshCareer;
             _autoGrant = o.AutoGrantLicenses;
             _interest = o.InterestFiltering;
+            _maxPlayers = o.MaxPlayers is >= 1 and <= 256 ? o.MaxPlayers : 32;
+            // 15 s floor: an accidental tiny interval must not hammer the disk; ≤0 means "default".
+            _autosaveSeconds = o.AutosaveIntervalSeconds <= 0 ? 120 : Math.Max(15, o.AutosaveIntervalSeconds);
 
             // M3 career: real map data in, saved career back (host-mode resume restores the CAREER
             // half only — the host's live game world is the physical truth and re-registers its
@@ -594,8 +625,8 @@ public sealed class SessionController
             };
 
             _server = new NetServer(_serverTransport,
-                new ServerConfig(Identity(), _password.Length > 0 ? _password : null, career: careerConfig,
-                                 items: itemConfig, interest: interestConfig),
+                new ServerConfig(Identity(), _password.Length > 0 ? _password : null, maxPlayers: _maxPlayers,
+                                 career: careerConfig, items: itemConfig, interest: interestConfig),
                 _clock, restore, topology);
             if (_interest)
                 _log($"[session] interest management ON — trains " +
@@ -608,7 +639,7 @@ public sealed class SessionController
             _server.Trains.ProposalRejected += (peer, reason) => _log($"[server] trains refused (peer {peer}): {reason}");
             // D15: joining players inherit the host's licenses (and live acquisitions) while on.
             _server.Career.AutoGrantHostLicenses = _autoGrant;
-            _autosaver = new Autosaver(_clock, intervalMs: 120_000, storage,
+            _autosaver = new Autosaver(_clock, intervalMs: _autosaveSeconds * 1000, storage,
                 () => SaveCodec.Write(_server!.CaptureSave()));
             _autosaver.SaveFailed += e =>
                 _log($"[career] save FAILED — {e.Message} (changes since the last good save are not on disk)");
@@ -667,6 +698,7 @@ public sealed class SessionController
         try
         {
             _lastError = "";
+            LastReject = null;
             int port = o.Port is > 0 and < 65536 ? o.Port : NetDefaults.Port;
             _playerName = o.PlayerName;
             _address = o.Address;
@@ -714,7 +746,14 @@ public sealed class SessionController
             _playerName.Length > 0 ? _playerName : "Player", _clock,
             _password.Length > 0 ? _password : null, _playerKey);
         client.Accepted += id => _log($"[session] joined as id {id} (server offset {client.ServerTimeOffsetMs} ms)");
-        client.Rejected += reason => { SetError(reason); _log($"[session] REJECTED: {reason}"); };
+        client.Rejected += reason =>
+        {
+            LastReject = client.RejectDetail;
+            SetError(reason);
+            _log($"[session] REJECTED: {reason}");
+            if (client.RejectDetail is { } detail) JoinRejected?.Invoke(detail);
+        };
+        client.JoinStageChanged += stage => JoinStageChanged?.Invoke(stage);
         // Only meaningful for JOINED sessions: the host's own loopback link can't drop. The
         // countdown (not an immediate declare) lets a transport re-handshake absorb load freezes.
         client.Disconnected += () => { if (_mode == Mode.Joined && _lostCountdown <= 0 && !_sessionLost) _lostCountdown = 3.0; };

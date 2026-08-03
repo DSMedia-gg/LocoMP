@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using LocoMP.Core.Presence;
+using LocoMP.Core.Protocol;
 using LocoMP.Core.Session;
 
 namespace LocoMP.UI;
@@ -27,6 +28,8 @@ public sealed class SessionViewModel
         c.PlayersChanged += Raise;
         c.ErrorRaised += e => { Error = e; Raise(); };
         c.CareerToast += t => { Toast = t; Raise(); };
+        c.JoinStageChanged += s => { JoinStageChanged?.Invoke(s); Raise(); };
+        c.JoinRejected += r => { JoinRejected?.Invoke(r); Raise(); };
     }
 
     public SessionPhase Phase => _c.Phase;
@@ -53,6 +56,24 @@ public sealed class SessionViewModel
 
     /// <summary>Host-only: live player count as the server sees it (0 otherwise).</summary>
     public int ServerPlayerCount => _c.Server?.PlayerCount ?? 0;
+
+    // ── M5.1 join progress + structured refusal (the loading + mismatch screens' feed) ────────
+
+    /// <summary>Where the join burst is; <see cref="JoinStage.None"/> outside a join.</summary>
+    public JoinStage JoinStage => _c.JoinStage;
+
+    /// <summary>The join burst is fully delivered — the ONLY predicate the join gate clears on.</summary>
+    public bool JoinSettled => _c.JoinSettled;
+
+    /// <summary>The last structured join refusal; null until one arrives, cleared by the next
+    /// Host/Join command (the controller owns that lifecycle).</summary>
+    public RejectInfo? Reject => _c.LastReject;
+
+    /// <summary>Stage transitions for the loading interstitial (also coalesced into Changed).</summary>
+    public event Action<JoinStage>? JoinStageChanged;
+
+    /// <summary>A join was refused; the mismatch screen decides how to render it.</summary>
+    public event Action<RejectInfo>? JoinRejected;
 
     public event Action? Changed;
     private void Raise() => Changed?.Invoke();

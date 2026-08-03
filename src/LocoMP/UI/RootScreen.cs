@@ -6,11 +6,11 @@ using UnityEngine.UI;
 namespace LocoMP.UI;
 
 /// <summary>
-/// The LocoMP root (M5.0 stub): the tab bar — Direct Join · Friends · Host · Settings — with
-/// placeholder tab bodies and a live session status line bound to the view-model. Real tab
-/// content is M5.1+ (join/host forms), M5.3 (settings); Friends ships visible-but-disabled until
-/// the M5.5 Steam slice so the information architecture is complete from the first drop
-/// (10-M5-UIUX-PLAN §6). M5.0's exit only needs this to open, switch tabs, and close.
+/// The LocoMP root: the tab bar — Direct Join · Friends · Host · Settings — with a live session
+/// status line bound to the view-model. Direct Join and Host carry their real M5.1 forms
+/// (<see cref="DirectJoinTab"/>/<see cref="HostTab"/>); Settings is M5.3; Friends ships
+/// visible-but-disabled until the M5.5 Steam slice so the information architecture is complete
+/// from the first drop (10-M5-UIUX-PLAN §6).
 /// </summary>
 public sealed class RootScreen : IScreen
 {
@@ -18,14 +18,18 @@ public sealed class RootScreen : IScreen
 
     private readonly SessionViewModel _vm;
     private readonly Action _closeRequested;
+    private readonly DirectJoinTab _joinTab;
+    private readonly HostTab _hostTab;
     private readonly GameObject?[] _bodies = new GameObject?[TabNames.Length];
     private TMP_Text? _status;
     private int _tab;
 
-    public RootScreen(SessionViewModel vm, Action closeRequested)
+    public RootScreen(SessionViewModel vm, UiPrefs prefs, Action<string> log, Action closeRequested)
     {
         _vm = vm;
         _closeRequested = closeRequested;
+        _joinTab = new DirectJoinTab(vm, prefs, log);
+        _hostTab = new HostTab(vm, prefs, log);
     }
 
     public GameObject? Go { get; private set; }
@@ -55,16 +59,17 @@ public sealed class RootScreen : IScreen
             kit.Button(tabs, TabNames[i], () => SwitchTab(index), enabled, width: 180f);
         }
 
-        // Placeholder bodies — one per tab so M5.1+ can drop real content in per slice.
+        // Tab bodies: Direct Join and Host are the real M5.1 forms; Friends/Settings stay
+        // placeholders until their slices.
         RectTransform bodyHost = kit.Panel(panel, name: "Body");
         bodyHost.GetComponent<Image>().color = kit.Theme.PanelLight;
         var bodyElement = bodyHost.gameObject.AddComponent<LayoutElement>();
         bodyElement.flexibleHeight = 1f;
-        string[] placeholders =
+        string?[] placeholders =
         {
-            "Direct join arrives with M5.1 — use the dev panel (Ctrl+F10) meanwhile.",
+            null,
             "Friends goes live once LocoMP connects via Steam (M5.5).",
-            "Hosting arrives with M5.1 — use the dev panel (Ctrl+F10) meanwhile.",
+            null,
             "Settings arrive with M5.3.",
         };
         for (int i = 0; i < TabNames.Length; i++)
@@ -76,10 +81,12 @@ public sealed class RootScreen : IScreen
             bodyRect.anchorMax = Vector2.one;
             bodyRect.offsetMin = new Vector2(16f, 12f);
             bodyRect.offsetMax = new Vector2(-16f, -12f);
-            kit.Label(bodyRect, placeholders[i], dim: true);
+            if (placeholders[i] is { } placeholder) kit.Label(bodyRect, placeholder, dim: true);
             _bodies[i] = bodyGo;
             bodyGo.SetActive(false);
         }
+        _joinTab.Build((RectTransform)_bodies[0]!.transform, kit);
+        _hostTab.Build((RectTransform)_bodies[2]!.transform, kit);
         SwitchTab(0);
     }
 
@@ -113,5 +120,7 @@ public sealed class RootScreen : IScreen
         if (_vm.Error.Length > 0 && _vm.Phase is SessionPhase.Idle or SessionPhase.SessionLost)
             line += $"   ⚠ {_vm.Error}";
         _status.text = line;
+        _joinTab.Refresh();
+        _hostTab.Refresh();
     }
 }

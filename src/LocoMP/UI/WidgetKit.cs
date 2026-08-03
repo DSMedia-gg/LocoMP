@@ -1,4 +1,5 @@
 using System;
+using DV.Utils;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
@@ -41,6 +42,26 @@ public sealed class WidgetKit
         return rect;
     }
 
+    /// <summary>A plain vertical column that fills its parent (no background) — the container a
+    /// tab body's form lives in when the parent rect has no layout group of its own (M5.1).</summary>
+    public RectTransform Column(RectTransform parent, string name = "Column")
+    {
+        var go = new GameObject(name, typeof(RectTransform));
+        var rect = (RectTransform)go.transform;
+        rect.SetParent(parent, worldPositionStays: false);
+        rect.anchorMin = Vector2.zero;
+        rect.anchorMax = Vector2.one;
+        rect.offsetMin = Vector2.zero;
+        rect.offsetMax = Vector2.zero;
+        var layout = go.AddComponent<VerticalLayoutGroup>();
+        layout.spacing = 8f;
+        layout.childControlWidth = true;
+        layout.childControlHeight = true;
+        layout.childForceExpandWidth = true;
+        layout.childForceExpandHeight = false;
+        return rect;
+    }
+
     /// <summary>A horizontal row (tab bars, button rows) inside a vertical body.</summary>
     public RectTransform Row(RectTransform parent, string name = "Row")
     {
@@ -77,6 +98,9 @@ public sealed class WidgetKit
         go.transform.SetParent(parent, worldPositionStays: false);
         go.GetComponent<Image>().color = enabled ? _t.Accent : _t.AccentDisabled;
         var button = go.AddComponent<Button>();
+        // At runtime AddComponent leaves targetGraphic unset (the editor auto-find never ran), so
+        // without this a disabled button keeps its full accent tint — M5.1 toggles interactable live.
+        button.targetGraphic = go.GetComponent<Image>();
         button.interactable = enabled;
         button.onClick.AddListener(() => onClick());
         var element = go.AddComponent<LayoutElement>();
@@ -100,7 +124,22 @@ public sealed class WidgetKit
         return button;
     }
 
-    public TMP_InputField Field(RectTransform parent, string placeholder, string initial = "", float width = 0f)
+    /// <summary>A label + input field on one row — the M5.1 form staple. The field stretches to
+    /// the row's remaining width unless <paramref name="fieldWidth"/> pins it.</summary>
+    public TMP_InputField LabeledField(RectTransform parent, string label, string placeholder,
+        string initial = "", bool masked = false, float fieldWidth = 0f)
+    {
+        RectTransform row = Row(parent, "Row " + label);
+        TMP_Text text = Label(row, label);
+        var labelElement = text.gameObject.AddComponent<LayoutElement>();
+        labelElement.preferredWidth = 190f;
+        TMP_InputField field = Field(row, placeholder, initial, fieldWidth, masked);
+        if (fieldWidth <= 0f) field.GetComponent<LayoutElement>().flexibleWidth = 1f;
+        return field;
+    }
+
+    public TMP_InputField Field(RectTransform parent, string placeholder, string initial = "",
+        float width = 0f, bool masked = false)
     {
         var go = new GameObject("Field " + placeholder, typeof(RectTransform), typeof(Image));
         go.transform.SetParent(parent, worldPositionStays: false);
@@ -145,8 +184,49 @@ public sealed class WidgetKit
         input.textComponent = valueText;
         input.placeholder = placeholderText;
         input.lineType = TMP_InputField.LineType.SingleLine;
+        if (masked) input.contentType = TMP_InputField.ContentType.Password;
         input.text = initial;
+        // Typing in a LocoMP field must not fire game hotkeys (recon R-UI-4): route through DV's
+        // strict keyboard-focus refcount for the field's selected lifetime.
+        input.onSelect.AddListener(_ => TakeKeyboardFocus());
+        input.onDeselect.AddListener(_ => ReleaseKeyboardFocus());
         return input;
+    }
+
+    // DV's InputFocusManager error-logs on a double take/release, and focus we did not take is not
+    // ours to release (DV's own fields use the same manager) — hence the guard + ownership latch.
+    private static bool _tookKeyboardFocus;
+
+    private static void TakeKeyboardFocus()
+    {
+        try
+        {
+            InputFocusManager manager = SingletonBehaviour<InputFocusManager>.Instance;
+            if (manager != null && !manager.hasKeyboardFocus)
+            {
+                manager.TakeKeyboardFocus();
+                _tookKeyboardFocus = true;
+            }
+        }
+        catch (Exception)
+        {
+            // Main menu / teardown: no manager alive — game hotkeys are inert there anyway.
+        }
+    }
+
+    private static void ReleaseKeyboardFocus()
+    {
+        if (!_tookKeyboardFocus) return;
+        _tookKeyboardFocus = false;
+        try
+        {
+            InputFocusManager manager = SingletonBehaviour<InputFocusManager>.Instance;
+            if (manager != null && manager.hasKeyboardFocus) manager.ReleaseKeyboardFocus();
+        }
+        catch (Exception)
+        {
+            // Manager died with the scene — nothing to release.
+        }
     }
 
     public Toggle Toggle(RectTransform parent, string label, bool on, Action<bool> changed)
