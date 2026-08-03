@@ -99,6 +99,10 @@ public sealed class TrainSync : IDisposable
         PlayerManager.CarChanged += OnPlayerCarChanged;
         ChainHook.CoupleFilter = FilterChainCouple;
         ChainHook.UncoupleFilter = FilterChainUncouple;
+        // F2: replicas opt out of TrainsOptimizer's sleep management — they are kinematic and
+        // snapshot-driven (no local physics to manage), and forcing state on one mid-teardown
+        // NREs on the destroyed rb/entity (the dematerialize crash).
+        OptimizerHook.IsRemoteCar = _remote.IsRemoteCar;
     }
 
     /// <summary>The remote-car half — exposed for the cab-control mirror (M3.5c).</summary>
@@ -928,6 +932,7 @@ public sealed class TrainSync : IDisposable
     {
         ChainHook.CoupleFilter = null;
         ChainHook.UncoupleFilter = null;
+        OptimizerHook.IsRemoteCar = null;
         JunctionHook.Switched -= OnLocalJunction;
         PlayerManager.CarChanged -= OnPlayerCarChanged;
         if (_carDeleteHooked && CarSpawner.Instance != null)
