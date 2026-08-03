@@ -276,4 +276,14 @@ public enum MessageType : byte
     /// object (cheap re-show on re-enter); a re-enter re-sends the entity's full state (a pose for a
     /// player, TrainsetCreate/ItemSpawned for a world object).</summary>
     InterestHide = 64,
+
+    // ── M5.1: join progress. The join burst (roster → world → career → items) streams as ordinary
+    // reliable-ordered messages with no envelope; the UI's loading interstitial needs a REAL terminal
+    // signal, because its readiness gate may only be cleared by a completion event, never a timer. ──
+
+    /// <summary>server → the newly admitted client, and nothing else: the join burst is fully sent —
+    /// everything before this message IS the burst (reliable-ordered delivery makes this a true
+    /// barrier). Payload: none beyond the type byte. Intermediate phase display is inferred client-side
+    /// from the ordered arrival of each burst family; this sentinel is the only "done" authority.</summary>
+    JoinBurstComplete = 65,
 }

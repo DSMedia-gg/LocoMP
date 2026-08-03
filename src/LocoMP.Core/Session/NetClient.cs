@@ -64,6 +64,19 @@ public sealed class NetClient : IDisposable
     /// <summary>Set if the server refused the join; carries the exact reason (03 §10).</summary>
     public string? RejectReason { get; private set; }
 
+    /// <summary>The structured refusal (M5.1): kind + have/need. Set before <see cref="Rejected"/>
+    /// fires; null until a reject arrives. Against a pre-v13 server the kind reads
+    /// <see cref="RejectKind.Other"/> and only the reason is populated.</summary>
+    public RejectInfo? RejectDetail { get; private set; }
+
+    /// <summary>Where the join burst is (M5.1) — see <see cref="JoinStage"/> for what each stage
+    /// proves. Monotonic while connected; resets to None on disconnect.</summary>
+    public JoinStage Stage { get; private set; }
+
+    /// <summary>The join burst is fully delivered (the server's sentinel arrived). THE completion
+    /// signal for a join readiness gate — gates clear on this, never on a timer or inferred stage.</summary>
+    public bool JoinSettled => Joined && Stage == JoinStage.Complete;
+
     /// <summary>serverNow - localNow (ms). Add to the local clock to estimate server time (03 §5).</summary>
     public long ServerTimeOffsetMs { get; private set; }
 
@@ -74,7 +87,11 @@ public sealed class NetClient : IDisposable
     public IReadOnlyDictionary<int, PlayerState> Players => _players;
 
     public event Action<int>? Accepted;             // arg: local id
-    public event Action<string>? Rejected;          // arg: reason
+    public event Action<string>? Rejected;          // arg: reason (read RejectDetail for structure)
+
+    /// <summary>The join burst progressed (M5.1). Fires on every stage transition, including the
+    /// reset to None on disconnect; drives the loading interstitial's stage display.</summary>
+    public event Action<JoinStage>? JoinStageChanged;
     public event Action<PlayerState>? PlayerJoined;
     public event Action<int>? PlayerLeft;
     public event Action<int, Pose>? PlayerMoved;    // args: id, new pose
@@ -119,8 +136,19 @@ public sealed class NetClient : IDisposable
         _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
     }
 
+    /// <summary>Advance the join stage, forward only — later traffic of an earlier family (ordinary
+    /// in-session career/item messages) must never regress the display, and nothing but the server's
+    /// sentinel may reach Complete.</summary>
+    private void AdvanceStage(JoinStage stage)
+    {
+        if (stage <= Stage) return;
+        Stage = stage;
+        JoinStageChanged?.Invoke(stage);
+    }
+
     private void OnConnected(int serverPeer)
     {
+        AdvanceStage(JoinStage.Connecting);
         byte[] payload = new PacketWriter(64)
             .WriteByte((byte)MessageType.JoinRequest)
             .WriteVarUInt((uint)_identity.ProtocolVersion)
@@ -142,6 +170,11 @@ public sealed class NetClient : IDisposable
         Trains.Reset();
         Career.Reset();
         Items.Reset();
+        if (Stage != JoinStage.None)
+        {
+            Stage = JoinStage.None;               // deliberate regression — the one non-monotonic move
+            JoinStageChanged?.Invoke(JoinStage.None);
+        }
         if (wasJoined) Disconnected?.Invoke();
     }
 
@@ -163,8 +196,14 @@ public sealed class NetClient : IDisposable
                 case MessageType.PlayerPose: HandlePlayerPose(r); break;
                 case MessageType.TimeSync: HandleTimeSync(r); break;
                 case MessageType.InterestHide: HandleInterestHide(r); break;
+                case MessageType.JoinBurstComplete: AdvanceStage(JoinStage.Complete); break;
                 default:
-                    if (!Trains.TryHandle(type, r) && !Career.TryHandle(type, r)) Items.TryHandle(type, r);
+                    // Stage inference (M5.1): the burst is sent world → career → items on one ordered
+                    // channel, so the first message a later family claims proves every earlier family
+                    // fully arrived. AdvanceStage's monotonic guard makes this free after the burst.
+                    if (Trains.TryHandle(type, r)) { }
+                    else if (Career.TryHandle(type, r)) AdvanceStage(JoinStage.Career);
+                    else if (Items.TryHandle(type, r)) AdvanceStage(JoinStage.Items);
                     break;
             }
         }
@@ -191,6 +230,7 @@ public sealed class NetClient : IDisposable
             roster.Add(p);
         }
 
+        AdvanceStage(JoinStage.World);   // admitted — the world burst follows on the same channel
         Accepted?.Invoke(id);
         foreach (PlayerState p in roster) PlayerJoined?.Invoke(p);
     }
@@ -198,7 +238,20 @@ public sealed class NetClient : IDisposable
     private void HandleRejected(PacketReader r)
     {
         string reason = r.ReadString();
+        // v13 appends kind/have/need after the reason; a pre-v13 server's packet ends here. Read the
+        // tail defensively (the HandleJoin playerKey precedent) so both server generations reject legibly.
+        var kind = RejectKind.Other;
+        string? has = null, needs = null;
+        if (!r.AtEnd)
+        {
+            kind = (RejectKind)r.ReadByte();
+            string h = r.ReadString();
+            string n = r.ReadString();
+            has = h.Length > 0 ? h : null;
+            needs = n.Length > 0 ? n : null;
+        }
         RejectReason = reason;
+        RejectDetail = new RejectInfo(kind, reason, has, needs);
         Rejected?.Invoke(reason);
     }
 

@@ -182,26 +182,38 @@ public sealed class NetServer : IDisposable
 
         var client = new HandshakeRequest(protocol, build, modVersion, modListHash);
         HandshakeResult compat = VersionHandshake.Check(client, _config.Expected);
-        if (!compat.Compatible) { Reject(peerId, compat.Reason ?? "incompatible"); return; }
+        if (!compat.Compatible)
+        {
+            Reject(peerId, compat.Kind, compat.Reason ?? "incompatible", compat.ClientHas, compat.ServerNeeds);
+            return;
+        }
 
         if (!string.IsNullOrEmpty(_config.Password) &&
             !string.Equals(password, _config.Password, StringComparison.Ordinal))
         {
-            Reject(peerId, "incorrect password");
+            Reject(peerId, RejectKind.Password, "incorrect password");
             return;
         }
 
-        if (_players.Count >= _config.MaxPlayers) { Reject(peerId, "server full"); return; }
+        if (_players.Count >= _config.MaxPlayers)
+        {
+            Reject(peerId, RejectKind.ServerFull, "server full");
+            return;
+        }
 
         // The stable key is the profile/reconnect identity (M3): it must exist, stay out of the
         // reserved '@' account namespace, and not already be online (a live duplicate would let a
         // second connection hijack the profile mid-session).
         if (playerKey.Length == 0 || playerKey.Length > 64 || playerKey[0] == '@')
         {
-            Reject(peerId, "invalid player key");
+            Reject(peerId, RejectKind.InvalidKey, "invalid player key");
             return;
         }
-        if (Career.IsKeyOnline(playerKey)) { Reject(peerId, "player key already in session"); return; }
+        if (Career.IsKeyOnline(playerKey))
+        {
+            Reject(peerId, RejectKind.DuplicateKey, "player key already in session");
+            return;
+        }
 
         var state = new PlayerState(peerId, name, Pose.Identity);
         _players[peerId] = state;
@@ -212,7 +224,17 @@ public sealed class NetServer : IDisposable
         Trains.OnPlayerAdmitted(peerId);                   // world burst: trainsets/junctions/grants
         Career.OnPlayerAdmitted(peerId, playerKey, name);  // career burst: your career + the board
         Items.OnPlayerAdmitted(peerId);                    // item burst: AFTER career maps peer↔key
+        SendJoinBurstComplete(peerId);                     // MUST be the last send of the burst — the
+                                                           // ordered channel makes it a true barrier
         PlayerAdmitted?.Invoke(state);
+    }
+
+    private void SendJoinBurstComplete(int peerId)
+    {
+        byte[] payload = new PacketWriter(1)
+            .WriteByte((byte)MessageType.JoinBurstComplete)
+            .ToArray();
+        _transport.Send(peerId, payload, DeliveryMethod.ReliableOrdered);
     }
 
     private void SendAccepted(int peerId, PlayerState newcomer)
@@ -233,11 +255,17 @@ public sealed class NetServer : IDisposable
         _transport.Send(peerId, w.ToArray(), DeliveryMethod.ReliableOrdered);
     }
 
-    private void Reject(int peerId, string reason)
+    private void Reject(int peerId, RejectKind kind, string reason, string? clientHas = null, string? serverNeeds = null)
     {
-        byte[] payload = new PacketWriter(32)
+        // The structured fields are APPENDED after the reason (v13): an older client reads the reason
+        // and stops, so the reject stays human-readable across versions — the one message where
+        // cross-version legibility matters, since it exists to explain a version mismatch.
+        byte[] payload = new PacketWriter(48)
             .WriteByte((byte)MessageType.JoinRejected)
             .WriteString(reason)
+            .WriteByte((byte)kind)
+            .WriteString(clientHas ?? string.Empty)
+            .WriteString(serverNeeds ?? string.Empty)
             .ToArray();
         _transport.Send(peerId, payload, DeliveryMethod.ReliableOrdered);
     }

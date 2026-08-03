@@ -46,5 +46,11 @@ public static class ProtocolVersion
     /// <remarks>v12 (M4 orphan cleanup, item half): ItemSpawned gains a provenance byte after the def
     /// (host-native vs LocoMP-minted — the involuntary-release schedule when a holder departs). The
     /// layout change makes this incompatible by construction.</remarks>
-    public const int Current = 12;
+    /// <remarks>v13 (M5.1): the join burst ends with a JoinBurstComplete sentinel (MessageType 65) —
+    /// the real completion signal the join interstitial's readiness gate clears on (a timer may only
+    /// FAIL a gate, never clear it). JoinRejected also gains structured detail (kind/have/need) APPENDED
+    /// after the reason string, so the mismatch screen renders exact have/need without parsing prose;
+    /// the append keeps the reject readable across versions (either side reads the reason, extra fields
+    /// are read defensively). The new sentinel is a deliberate incompatible bump, per v7/v11 precedent.</remarks>
+    public const int Current = 13;
 }
