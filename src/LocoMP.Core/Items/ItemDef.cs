@@ -92,4 +92,13 @@ public sealed class ItemRecord
     /// the holder's session peer id + name instead, like a job's claimant (03 §3, 07 §M3). "" in the
     /// world.</summary>
     public string OwnerScope { get; internal set; }
+
+    /// <summary>Valid when <see cref="Location"/> is Possessed: the player KEY physically carrying
+    /// the item. In per-player careers this mirrors the scope; in SHARED career the communal scope
+    /// cannot attribute possession, and this is what lets a departing holder's HOST-NATIVE items
+    /// release without dumping the whole crew's inventory (Cody's 2026-08-04 call). Deliberately
+    /// TRANSIENT — never persisted: a restart already releases every possessed host-native
+    /// ("restart is everyone's disconnect"), so saved attribution could only ever be stale.
+    /// "" in the world and after a restore.</summary>
+    public string HolderKey { get; internal set; } = string.Empty;
 }

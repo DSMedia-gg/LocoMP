@@ -434,6 +434,51 @@ public class ItemSessionTests
     }
 
     [Fact]
+    public void Shared_career_releases_a_departing_holders_host_native_item_immediately()
+    {
+        // Cody's 2026-08-04 call: shared career is no longer the residual gap — a host-native
+        // carried off by a departing guest releases exactly like per-player. Regression test:
+        // reverting the OnPlayerRemoved shared-career branch fails it.
+        var (_, _, server, a, b) = Session(ProgressionPreset.SharedCareer);
+        a.Items.RegisterWorldItem("crate", At(3, 4), "", token: 1); // a is the world source
+        Pump(server, new[] { a, b });
+        int id = a.Items.Items.Values.Single().Def.Id;
+
+        b.Items.RequestPickup(id);
+        b.SendPose(At(100, 150));
+        Pump(server, new[] { a, b });
+
+        b.Leave();
+        Pump(server, new[] { a, b });
+
+        Assert.Equal(ItemLocationKind.World, a.Items.Items[id].Location);
+        Assert.Equal(At(100, 150), a.Items.Items[id].WorldPose); // where the carrier was last seen
+        Assert.True(server.Items.Registry.ItemConservationHolds);
+    }
+
+    [Fact]
+    public void Shared_career_keeps_a_staying_members_host_native_possession()
+    {
+        // The communal scope matches EVERY member's possessions — HolderKey attribution is what
+        // keeps a departure from releasing natives carried by players still online.
+        var (_, clock, server, a, b) = Session(ProgressionPreset.SharedCareer);
+        a.Items.RegisterWorldItem("crate", At(3, 4), "", token: 1);
+        Pump(server, new[] { a, b });
+        int id = a.Items.Items.Values.Single().Def.Id;
+
+        a.Items.RequestPickup(id); // the HOST carries it (a is a player with a key too)
+        Pump(server, new[] { a, b });
+
+        b.Leave();
+        Pump(server, new[] { a, b });
+        clock.Advance(10_001); // and Bob's grace lapses
+        Pump(server, new[] { a });
+
+        Assert.Equal(ItemLocationKind.Possessed, a.Items.Items[id].Location);
+        Assert.True(server.Items.Registry.ItemConservationHolds);
+    }
+
+    [Fact]
     public void Shared_career_pools_purchased_inventory()
     {
         var (_, _, server, a, b) = Session(ProgressionPreset.SharedCareer);

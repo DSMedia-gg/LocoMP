@@ -107,11 +107,15 @@ public sealed class ServerItems
     /// RETAINED under the holder's reconnect grace (restored exactly on rejoin, like a career
     /// claim); <see cref="OnGraceLapsed"/> releases it if they never return — the room meanwhile
     /// sees it held by an offline player (peer 0, name kept) so nobody addresses a stale id. In
-    /// shared career the scope is communal and outlives any single peer, so nothing releases.</summary>
+    /// shared career MINTED possessions are communal and outlive any single peer — but a
+    /// HOST-NATIVE possession releases here too (Cody, 2026-08-04): the host's hidden real object
+    /// must re-show whoever carried it off, and per-item <see cref="ItemRecord.HolderKey"/>
+    /// attribution is what lets the departing player's natives release without dumping the
+    /// whole crew's inventory.</summary>
     internal void OnPlayerRemoved(int peerId, Pose? lastPose)
     {
         if (_career.KeyOf(peerId) is not string key) return;
-        if (Registry.Policy.LicensesShared) return; // shared inventory isn't tied to a peer
+        bool shared = Registry.Policy.LicensesShared;
         string scope = Registry.Policy.InventoryScopeFor(key);
 
         List<ItemRecord>? natives = null;
@@ -121,9 +125,16 @@ public sealed class ServerItems
             if (rec.Location != ItemLocationKind.Possessed ||
                 !string.Equals(rec.OwnerScope, scope, StringComparison.Ordinal)) continue;
             if (rec.Provenance == ItemProvenance.HostNative)
-                (natives ??= new List<ItemRecord>()).Add(rec);
-            else
-                holdsMinted = true;
+            {
+                // In shared career the communal scope matches EVERY member's possessions — only
+                // the departing player's own carried natives release (HolderKey attribution).
+                if (!shared || string.Equals(rec.HolderKey, key, StringComparison.Ordinal))
+                    (natives ??= new List<ItemRecord>()).Add(rec);
+            }
+            else if (!shared)
+            {
+                holdsMinted = true; // shared-career minted items are the crew's; no offline mirror
+            }
         }
 
         if (natives != null)
@@ -157,18 +168,24 @@ public sealed class ServerItems
     /// lands here through belt-and-braces.</summary>
     internal void OnGraceLapsed(string key)
     {
-        // Shared career pools inventory in the communal scope: one player's lapse must not dump
-        // the whole crew's items into the world (the disconnect path has the same guard).
-        if (Registry.Policy.LicensesShared) return;
+        // Shared career pools MINTED inventory in the communal scope: one player's lapse must not
+        // dump the whole crew's items into the world. Host-natives they carried are attributed
+        // per item (HolderKey) and normally released at disconnect already — the shared-career
+        // branch below is the same belt-and-braces the per-player path carries.
+        bool shared = Registry.Policy.LicensesShared;
         string scope = Registry.Policy.InventoryScopeFor(key);
         Pose? atKey = _releasePoseByKey.TryGetValue(key, out Pose stashed) ? stashed : (Pose?)null;
         _releasePoseByKey.Remove(key);
 
         List<ItemRecord>? held = null;
         foreach (ItemRecord rec in Registry.Items.Values)
-            if (rec.Location == ItemLocationKind.Possessed &&
-                string.Equals(rec.OwnerScope, scope, StringComparison.Ordinal))
-                (held ??= new List<ItemRecord>()).Add(rec);
+        {
+            if (rec.Location != ItemLocationKind.Possessed ||
+                !string.Equals(rec.OwnerScope, scope, StringComparison.Ordinal)) continue;
+            if (shared && !(rec.Provenance == ItemProvenance.HostNative &&
+                            string.Equals(rec.HolderKey, key, StringComparison.Ordinal))) continue;
+            (held ??= new List<ItemRecord>()).Add(rec);
+        }
         if (held == null) return;
 
         foreach (ItemRecord rec in held)

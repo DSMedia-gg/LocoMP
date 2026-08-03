@@ -93,6 +93,7 @@ public sealed class ItemRegistry
         }
         item.Location = ItemLocationKind.Possessed;
         item.OwnerScope = _policy.InventoryScopeFor(playerKey);
+        item.HolderKey = playerKey; // per-item attribution — the communal scope can't say WHO carries it
         // The world pose is deliberately RETAINED (not reset): it is the involuntary-release
         // fallback — if the holder departs and their last position is unknown, the item goes back
         // where it was taken from rather than to the origin. The wire never sends a possessed
@@ -120,6 +121,7 @@ public sealed class ItemRegistry
         }
         item.Location = ItemLocationKind.World;
         item.OwnerScope = string.Empty;
+        item.HolderKey = string.Empty;
         item.WorldPose = pose;
         rec = item;
         reason = null;
@@ -145,6 +147,7 @@ public sealed class ItemRegistry
         }
         item.Location = ItemLocationKind.World;
         item.OwnerScope = string.Empty;
+        item.HolderKey = string.Empty;
         item.WorldPose = pose;
         rec = item;
         reason = null;
