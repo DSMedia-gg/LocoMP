@@ -149,6 +149,9 @@ public sealed class NetClient : IDisposable
     private void OnConnected(int serverPeer)
     {
         AdvanceStage(JoinStage.Connecting);
+        // The JoinRequest PREFIX (type byte + varuint protocol version) is FROZEN across protocol
+        // versions (F3): the connect key is version-free, so a mismatched server must always be
+        // able to read this far and answer with the exact protocol-mismatch reject.
         byte[] payload = new PacketWriter(64)
             .WriteByte((byte)MessageType.JoinRequest)
             .WriteVarUInt((uint)_identity.ProtocolVersion)

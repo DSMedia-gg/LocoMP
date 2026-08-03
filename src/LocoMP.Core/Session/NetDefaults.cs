@@ -1,5 +1,3 @@
-using LocoMP.Core.Protocol;
-
 namespace LocoMP.Core.Session;
 
 /// <summary>
@@ -12,9 +10,16 @@ public static class NetDefaults
     public const int Port = 8877;
 
     /// <summary>
-    /// LiteNetLib connect key. Embeds the protocol version so a client on an old protocol is refused
-    /// at the socket layer — before any handshake traffic — with the app-level handshake (03 §10)
-    /// remaining the authoritative check that names the exact mismatch.
+    /// LiteNetLib connect key — FIXED, deliberately version-free (F3, 2026-08-04 gauntlet). The key
+    /// used to embed the protocol version, which refused cross-protocol peers at the SOCKET: a
+    /// silent 10 s connect timeout, before the handshake could speak — so the structured
+    /// protocol-mismatch reject (and M5.1's have/need MismatchScreen) could never fire for the one
+    /// mismatch it most needed to name. Now every LocoMP peer connects at the socket and the
+    /// app-level handshake (03 §10) names the exact mismatch. One final incompatible hop: peers on
+    /// builds with the old versioned key still time out against this build — accepted, pre-release.
+    /// The version-check authority is <see cref="VersionHandshake"/>; the JoinRequest wire PREFIX
+    /// (varuint protocol first) is frozen so any future server can always read it far enough to
+    /// reject legibly.
     /// </summary>
-    public static string ConnectKey => "LocoMP:" + ProtocolVersion.Current;
+    public const string ConnectKey = "LocoMP";
 }

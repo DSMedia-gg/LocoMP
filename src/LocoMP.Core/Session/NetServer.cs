@@ -172,6 +172,9 @@ public sealed class NetServer : IDisposable
     {
         if (_players.ContainsKey(peerId)) return; // duplicate join on an admitted peer — ignore
 
+        // FROZEN prefix (F3): the connect key no longer embeds the protocol version, so peers on
+        // ANY protocol reach this read. The varuint protocol version must stay the first field
+        // forever — it is what lets a mismatched peer be rejected BY NAME instead of timing out.
         int protocol = (int)r.ReadVarUInt();
         string build = r.ReadString();
         string modVersion = r.ReadString();

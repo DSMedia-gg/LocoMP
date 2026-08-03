@@ -77,6 +77,42 @@ public class LiteNetLibIntegrationTests
             "leave should evict the player and notify the rest");
     }
 
+    /// <summary>
+    /// F3 (2026-08-04 gauntlet): the connect key used to embed the protocol version, so a
+    /// cross-protocol peer died at the SOCKET — a silent 10 s timeout the MismatchScreen could
+    /// never explain. With the fixed key the socket admits the peer and the handshake names the
+    /// mismatch: an exact, structured protocol reject over real UDP. Regression test — reverting
+    /// to a versioned key turns this back into a timeout and fails it.
+    /// </summary>
+    [Fact]
+    public void A_cross_protocol_peer_gets_a_named_reject_not_a_silent_timeout()
+    {
+        // The load-bearing property: the key must not depend on the protocol version. (A versioned
+        // key can't be caught by the UDP half below — in one process both peers share this build's
+        // constant, so the socket agrees regardless; on real builds each side derives its own.)
+        Assert.DoesNotContain(ProtocolVersion.Current.ToString(), NetDefaults.ConnectKey);
+        Assert.DoesNotContain((ProtocolVersion.Current - 1).ToString(), NetDefaults.ConnectKey);
+
+        using var serverT = LiteNetLibTransport.StartServer(0, NetDefaults.ConnectKey);
+        using var server = new NetServer(serverT, new ServerConfig(Identity), new ManualClock());
+
+        var oldIdentity = new HandshakeRequest(ProtocolVersion.Current - 1, "B99.7", "0.0.2");
+        using var oldT = LiteNetLibTransport.ConnectClient("127.0.0.1", serverT.Port, NetDefaults.ConnectKey);
+        using var old = new NetClient(oldT, oldIdentity, "TimeTraveller", new ManualClock());
+
+        Action[] pumps = { server.Poll, old.Poll };
+        string? reason = null;
+        old.Rejected += r => reason = r;
+
+        Assert.True(SpinUntil(() => reason != null, 5000, pumps),
+            "the cross-protocol peer must be rejected by the handshake, not left to time out");
+        Assert.Contains("protocol mismatch", reason);
+        Assert.Equal(RejectKind.Protocol, old.RejectDetail!.Value.Kind);
+        Assert.Equal($"v{ProtocolVersion.Current - 1}", old.RejectDetail!.Value.ClientHas);
+        Assert.Equal($"v{ProtocolVersion.Current}", old.RejectDetail!.Value.ServerNeeds);
+        Assert.False(old.Joined);
+    }
+
     [Fact]
     public void A_wrong_connect_key_is_refused_by_the_transport()
     {
