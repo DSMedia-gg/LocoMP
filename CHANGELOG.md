@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A full server now holds your place in line instead of turning you away.** Joining a server at
+  its player cap used to bounce you with an instant "server full". Now you wait in a real admission
+  queue: the loading cover shows your live position ("waiting for a free slot — position 2 of 3"),
+  the line moves in arrival order as slots free, and your eventual admission is exactly a normal
+  join. Losing your connection while waiting — or reconnecting with a hiccup — keeps your spot
+  rather than sending you to the back. The instant refusal only remains when the waiting line
+  itself is full. (Network protocol bumped — both sides must run this build.)
 - **First-party UI foundation (M5.0).** A MULTIPLAYER button now appears in the game's own main
   menu, and a LocoMP entry in the pause menu — both cloned live from Derail Valley's own buttons,
   so they look, animate and (in VR) point-and-click exactly like the game's, while LocoMP ships
@@ -52,6 +59,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the reconnect-grace flows; with `--count`, each bot gets a distinct derived key.
 
 ### Fixed
+- **Reconnecting quickly after a crash no longer locks you out.** If your game died and you rejoined
+  before the server noticed the dead connection, you were refused with "player key already in
+  session" until a timeout that could take minutes. Your player key is your credential: presenting
+  it (with the server password) now evicts the dead connection on the spot and drops you straight
+  back into your own career — the slot is handed over, never given to someone waiting in the queue.
+- **Consists nobody owns can be coupled and uncoupled again.** A split half whose driver left (or
+  whose owning bot/peer disconnected) was permanently un-recouplable — every couple attempt was
+  refused because there was no simulation owner to carry it out. Chain requests on such "parked"
+  consists are now handled by the server itself: it commits the coupling (or uncoupling) directly,
+  every player sees the chain move, and the result stays parked until someone claims it. Where one
+  side of the coupling DOES have a live owner, the request now routes to that owner instead of
+  being refused outright.
 - **Unhooking another player's train now really unhooks it.** Grabbing a chain on a
   remotely-driven car used to leave the visuals lying: the game's chain animation ran as if the
   act had happened, but the real uncouple was still travelling to the train's owner — so the
