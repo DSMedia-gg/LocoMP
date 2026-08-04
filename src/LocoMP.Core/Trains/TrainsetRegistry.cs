@@ -162,6 +162,96 @@ public sealed class TrainsetRegistry
         return true;
     }
 
+    // ── parked reclaim (v14, F8). A parked set (owner 0) has no simulating owner to route a chain
+    // act to, and the ownership rule above means no proposal could ever touch it — so an ownerless
+    // split-product was permanently un-coupleable. Parked truth is SERVER truth (its baseline is
+    // server-held and replayed on request), so the server itself commits these on a player's routed
+    // physical request. Both methods keep the settle/derail guards; products stay parked (owner 0) —
+    // reclaim changes membership, never who simulates. ──
+
+    /// <summary>Commit a couple between two PARKED sets (F8 reclaim). The requester is the physical
+    /// witness — proximity was checked in their world — so validation here is def-shaped only: both
+    /// sets parked and distinct, both cars end cars. Set ends derive from car position (an end car
+    /// names its set end; Core stays orientation-blind), so single-car sets orient to concatenate.</summary>
+    public bool TryCoupleParked(int carA, int carB, out TrainsetTransaction? txn, out string? reason)
+    {
+        txn = null;
+        if (!TryFindCar(carA, out TrainsetDef a)) { reason = $"unknown car {carA}"; return false; }
+        if (!TryFindCar(carB, out TrainsetDef b)) { reason = $"unknown car {carB}"; return false; }
+        if (a.Id == b.Id) { reason = "cars are already in the same trainset"; return false; }
+        if (a.OwnerId != 0 || b.OwnerId != 0)
+        {
+            reason = $"reclaim couple needs both trainsets parked (owners {a.OwnerId}/{b.OwnerId})";
+            return false;
+        }
+        // Which END of each set the car is — a middle car has no free coupler at the def level.
+        // Single-car sets are both ends; orient A rear-to-front B so the lists concatenate.
+        bool aFront = a.Cars[0].Id == carA, aRear = a.Cars[a.Cars.Count - 1].Id == carA;
+        bool bFront = b.Cars[0].Id == carB, bRear = b.Cars[b.Cars.Count - 1].Id == carB;
+        if (!aFront && !aRear) { reason = $"car {carA} is not an end car of trainset {a.Id}"; return false; }
+        if (!bFront && !bRear) { reason = $"car {carB} is not an end car of trainset {b.Id}"; return false; }
+        if (a.Cars.Concat(b.Cars).Any(c => c.Derailed)) { reason = "cannot couple derailed cars"; return false; }
+
+        long now = _clock.NowMs;
+        if (now - _createdAtMs[a.Id] < SettleMs || now - _createdAtMs[b.Id] < SettleMs)
+        {
+            reason = "trainset still settling";
+            return false;
+        }
+
+        // Order so the two touched cars MEET in the middle: A's list ends at carA, B's begins at carB.
+        IEnumerable<CarDef> left = aRear ? a.Cars : a.Cars.Reverse();
+        IEnumerable<CarDef> right = bFront ? b.Cars : b.Cars.Reverse();
+
+        uint epoch = Math.Max(a.Epoch, b.Epoch) + 1;
+        var product = new TrainsetDef(_nextTrainsetId++, epoch, ownerId: 0, left.Concat(right).ToArray());
+
+        Retire(a.Id);
+        Retire(b.Id);
+        Commit(product);
+
+        txn = new TrainsetTransaction(TrainsetTransactionType.Merge, new[] { a.Id, b.Id }, new[] { product });
+        reason = null;
+        return true;
+    }
+
+    /// <summary>Commit an uncouple inside a PARKED set (F8 reclaim). The car-relative coupler end
+    /// cannot name an interior gap without orientation, so the requester names the PARTNER car the
+    /// chain physically connects to (v14 wire field); the gap is between the two, which the def
+    /// resolves orientation-free.</summary>
+    public bool TryUncoupleParked(int carId, int partnerCarId, out TrainsetTransaction? txn, out string? reason)
+    {
+        txn = null;
+        if (!TryFindCar(carId, out TrainsetDef set)) { reason = $"unknown car {carId}"; return false; }
+        if (set.OwnerId != 0) { reason = $"reclaim uncouple needs a parked trainset (owner {set.OwnerId})"; return false; }
+        if (partnerCarId == 0) { reason = "no partner car named"; return false; }
+
+        int i = -1, j = -1;
+        for (int k = 0; k < set.Cars.Count; k++)
+        {
+            if (set.Cars[k].Id == carId) i = k;
+            else if (set.Cars[k].Id == partnerCarId) j = k;
+        }
+        if (j < 0) { reason = $"car {partnerCarId} is not in trainset {set.Id}"; return false; }
+        if (Math.Abs(i - j) != 1) { reason = $"cars {carId} and {partnerCarId} are not adjacent in trainset {set.Id}"; return false; }
+
+        long now = _clock.NowMs;
+        if (now - _createdAtMs[set.Id] < SettleMs) { reason = "trainset still settling"; return false; }
+
+        int gapIndex = Math.Min(i, j);
+        uint epoch = set.Epoch + 1;
+        var head = new TrainsetDef(_nextTrainsetId++, epoch, ownerId: 0, set.Cars.Take(gapIndex + 1).ToArray());
+        var tail = new TrainsetDef(_nextTrainsetId++, epoch, ownerId: 0, set.Cars.Skip(gapIndex + 1).ToArray());
+
+        Retire(set.Id);
+        Commit(head);
+        Commit(tail);
+
+        txn = new TrainsetTransaction(TrainsetTransactionType.Split, new[] { set.Id }, new[] { head, tail });
+        reason = null;
+        return true;
+    }
+
     /// <summary>Commit a derail reported by the sim owner: flag cars, bump epoch, keep the id.</summary>
     public bool TryDerail(int proposerId, int trainsetId, IReadOnlyList<int> carIds,
         out TrainsetTransaction? txn, out string? reason)

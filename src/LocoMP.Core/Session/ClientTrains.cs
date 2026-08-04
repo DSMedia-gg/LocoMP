@@ -229,14 +229,19 @@ public sealed class ClientTrains
         _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
     }
 
-    /// <summary>Ask the sim owner to uncouple a car's coupler a player physically unhooked.</summary>
-    public void RequestUncouple(int carId, CoupleEnd end)
+    /// <summary>Ask the sim owner to uncouple a car's coupler a player physically unhooked.
+    /// <paramref name="partnerCarId"/> is the car the chain physically connects to (0 = unknown) —
+    /// v14: it is what lets the server resolve the def gap itself when the set is PARKED and there
+    /// is no owner to route to (F8); Core stays orientation-blind, so the car-relative end alone
+    /// cannot name an interior gap.</summary>
+    public void RequestUncouple(int carId, CoupleEnd end, int partnerCarId = 0)
     {
         if (!_joined()) return;
-        byte[] payload = new PacketWriter(8)
+        byte[] payload = new PacketWriter(12)
             .WriteByte((byte)MessageType.UncoupleRequest)
             .WriteVarUInt((uint)carId)
             .WriteByte((byte)end)
+            .WriteVarUInt((uint)partnerCarId)
             .ToArray();
         _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
     }

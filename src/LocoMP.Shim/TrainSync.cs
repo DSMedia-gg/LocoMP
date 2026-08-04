@@ -825,11 +825,17 @@ public sealed class TrainSync : IDisposable
         if (car == null || !_remote.IsRemoteCar(car)) return true;
         if (!TryAnyCarId(car, out int carId)) return true;
 
+        // The partner car id rides the request (v14): it is what lets the server resolve the def
+        // gap and commit the split ITSELF when the set is parked/ownerless (F8 reclaim).
+        int partnerCarId = 0;
         TrainCar? partner = mine.coupledTo != null ? mine.coupledTo.train : null;
         if (partner != null && _remote.IsRemoteCar(partner) && TryAnyCarId(partner, out int partnerId))
+        {
+            partnerCarId = partnerId;
             _remote.SuppressPairAssert(carId, partnerId);
+        }
 
-        _client.Trains.RequestUncouple(carId, CouplerEnd(mine));
+        _client.Trains.RequestUncouple(carId, CouplerEnd(mine), partnerCarId);
         _log($"[trains] chain uncouple on remote-driven car {carId} — applied locally, asked the sim owner");
         return true;
     }

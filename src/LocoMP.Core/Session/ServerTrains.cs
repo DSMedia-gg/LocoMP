@@ -541,9 +541,12 @@ public sealed class ServerTrains
             if (id != peerId) _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);
     }
 
-    /// <summary>Route a physical couple request to carA's sim owner — the owner performs the real
-    /// couple and its native event drives the normal proposal path (one authority chain, no second
-    /// commit path). Any admitted player may ask: chaining cars is world interaction, not a grant.</summary>
+    /// <summary>Route a physical couple request to a sim owner — the owner performs the real couple
+    /// and its native event drives the normal proposal path (one authority chain, no second commit
+    /// path). Any admitted player may ask: chaining cars is world interaction, not a grant. v14 (F8):
+    /// the couple is one physical act, so EITHER side's owner can perform it — a parked setA routes
+    /// to setB's owner; both parked means there is nobody to route to, and the server commits the
+    /// merge itself (parked truth is server truth — see <see cref="TrainsetRegistry.TryCoupleParked"/>).</summary>
     private void HandleCoupleRequest(int peerId, PacketReader r)
     {
         int carA = (int)r.ReadVarUInt();
@@ -552,9 +555,20 @@ public sealed class ServerTrains
         byte endB = r.ReadByte();
 
         if (!Registry.TryFindCar(carA, out TrainsetDef setA)) { ProposalRejected?.Invoke(peerId, $"couple request: unknown car {carA}"); return; }
-        if (!Registry.TryFindCar(carB, out _)) { ProposalRejected?.Invoke(peerId, $"couple request: unknown car {carB}"); return; }
-        if (setA.OwnerId == 0) { ProposalRejected?.Invoke(peerId, $"couple request: trainset {setA.Id} is parked"); return; }
-        if (setA.OwnerId == peerId) return; // requester simulates it — they act locally, nothing to route
+        if (!Registry.TryFindCar(carB, out TrainsetDef setB)) { ProposalRejected?.Invoke(peerId, $"couple request: unknown car {carB}"); return; }
+
+        int routeTo = setA.OwnerId;
+        if (routeTo == 0) routeTo = setB.OwnerId; // parked setA: the other side's owner can act
+        if (routeTo == 0)
+        {
+            // Both parked (F8): server-committed reclaim — no owner exists to route to.
+            if (Registry.TryCoupleParked(carA, carB, out TrainsetTransaction? txn, out string? reason))
+                BroadcastTransaction(txn!);
+            else
+                ProposalRejected?.Invoke(peerId, $"reclaim couple: {reason}");
+            return;
+        }
+        if (routeTo == peerId) return; // requester simulates a side — they act locally, nothing to route
 
         byte[] payload = new PacketWriter(16)
             .WriteByte((byte)MessageType.CoupleRequest)
@@ -563,17 +577,28 @@ public sealed class ServerTrains
             .WriteVarUInt((uint)carB)
             .WriteByte(endB)
             .ToArray();
-        _transport.Send(setA.OwnerId, payload, DeliveryMethod.ReliableOrdered);
+        _transport.Send(routeTo, payload, DeliveryMethod.ReliableOrdered);
     }
 
-    /// <summary>Route a physical uncouple request to the car's sim owner (same shape as couple).</summary>
+    /// <summary>Route a physical uncouple request to the car's sim owner (same shape as couple).
+    /// v14 (F8): a PARKED set has no owner to route to — the server commits the split itself, using
+    /// the request's partner car id to resolve the def gap (the car-relative coupler end cannot name
+    /// an interior gap; Core is orientation-blind).</summary>
     private void HandleUncoupleRequest(int peerId, PacketReader r)
     {
         int carId = (int)r.ReadVarUInt();
         byte end = r.ReadByte();
+        int partnerCarId = r.AtEnd ? 0 : (int)r.ReadVarUInt();
 
         if (!Registry.TryFindCar(carId, out TrainsetDef set)) { ProposalRejected?.Invoke(peerId, $"uncouple request: unknown car {carId}"); return; }
-        if (set.OwnerId == 0) { ProposalRejected?.Invoke(peerId, $"uncouple request: trainset {set.Id} is parked"); return; }
+        if (set.OwnerId == 0)
+        {
+            if (Registry.TryUncoupleParked(carId, partnerCarId, out TrainsetTransaction? txn, out string? reason))
+                BroadcastTransaction(txn!);
+            else
+                ProposalRejected?.Invoke(peerId, $"reclaim uncouple: {reason}");
+            return;
+        }
         if (set.OwnerId == peerId) return;
 
         byte[] payload = new PacketWriter(8)
