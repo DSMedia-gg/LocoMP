@@ -158,16 +158,22 @@ public class CareerSessionTests
     }
 
     [Fact]
-    public void Duplicate_or_invalid_player_keys_are_refused_at_the_door()
+    public void A_duplicate_key_takes_over_and_an_invalid_key_is_refused_at_the_door()
     {
         var (hub, clock, server, a, b) = Session();
 
-        var dup = new NetClient(hub.Connect(out _), Identity, "Mallory", clock, playerKey: "key-alice");
+        // v14 (F7): the key IS the credential — a second connection presenting a live key is the
+        // same player reconnecting past their zombie peer, so it EVICTS the old link and lands in
+        // the same career (the fast-reconnect fix; AdmissionQueueTests pins the slot handover).
+        // The old "player key already in session" lockout survives only for the queue-wait race.
+        var dup = new NetClient(hub.Connect(out _), Identity, "Alice2", clock, playerKey: "key-alice");
         Pump(server, new[] { a, b, dup });
-        Assert.Equal("player key already in session", dup.RejectReason);
+        Assert.True(dup.Joined);
+        Assert.False(a.Joined);                               // the zombie link was force-dropped
+        Assert.Equal(2, server.PlayerCount);
 
         var bad = new NetClient(hub.Connect(out _), Identity, "Eve", clock, playerKey: "@shared");
-        Pump(server, new[] { a, b, bad });
+        Pump(server, new[] { a, b, dup, bad });
         Assert.Equal("invalid player key", bad.RejectReason);
     }
 

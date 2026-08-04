@@ -48,11 +48,14 @@ public enum RejectKind : byte
     ModList = 4,
     /// <summary>Wrong or missing server password.</summary>
     Password = 5,
-    /// <summary>The server is at MaxPlayers.</summary>
+    /// <summary>The server is at MaxPlayers AND its admission queue is full (v14/D18: capacity
+    /// alone now queues a validated joiner instead of rejecting).</summary>
     ServerFull = 6,
     /// <summary>Malformed/reserved player key.</summary>
     InvalidKey = 7,
-    /// <summary>This player key is already online in the session.</summary>
+    /// <summary>This player key is already online in the session. v14 (F7): presenting the key IS
+    /// the credential, so a live duplicate normally EVICTS the old peer (takeover) — this reject
+    /// survives only for the race where the key came online while its holder waited in the queue.</summary>
     DuplicateKey = 8,
 }
 

@@ -52,5 +52,12 @@ public static class ProtocolVersion
     /// after the reason string, so the mismatch screen renders exact have/need without parsing prose;
     /// the append keeps the reject readable across versions (either side reads the reason, extra fields
     /// are read defensively). The new sentinel is a deliberate incompatible bump, per v7/v11 precedent.</remarks>
-    public const int Current = 13;
+    /// <remarks>v14 (D18 + F7/F8): join admission — a full server now QUEUES a validated joiner and
+    /// reports their live position via JoinQueued (MessageType 66) instead of an instant ServerFull
+    /// reject; a v13 peer wouldn't know the message, so this is a deliberate incompatible bump.
+    /// UncoupleRequest (49) also gains the physical PARTNER car id appended after the coupler end —
+    /// the requester's world knows which car the chain connects to, and it is what lets the server
+    /// resolve the def gap for a PARKED set it must reclaim itself (F8: an ownerless set has no owner
+    /// to route to, so the server commits the split/merge directly — parked truth is server truth).</remarks>
+    public const int Current = 14;
 }

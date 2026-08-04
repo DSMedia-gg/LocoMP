@@ -185,8 +185,11 @@ public class JoinProgressTests
     }
 
     [Fact]
-    public void A_full_server_rejects_with_the_server_full_kind()
+    public void A_full_server_holds_the_joiner_at_connecting_until_a_slot_frees()
     {
+        // D18 replaced the instant ServerFull reject with the admission queue; the interstitial
+        // keeps showing Connecting (plus the queue detail line) and the eventual admission is an
+        // ordinary accept whose burst settles the gate exactly as a walk-straight-in join would.
         var hub = new LoopbackNetwork();
         var clock = new ManualClock();
         using var server = new NetServer(hub.Server, new ServerConfig(Identity, maxPlayers: 1), clock);
@@ -199,7 +202,15 @@ public class JoinProgressTests
         Pump(server, new[] { first, second });
 
         Assert.False(second.Joined);
-        Assert.Equal(RejectKind.ServerFull, second.RejectDetail!.Value.Kind);
+        Assert.Null(second.RejectDetail);
+        Assert.Equal(JoinStage.Connecting, second.Stage);
+        Assert.Equal(1, second.QueuePosition);
+
+        first.Leave();
+        Pump(server, new[] { first, second });
+
+        Assert.True(second.JoinSettled);
+        Assert.Equal(0, second.QueuePosition);
     }
 
     [Fact]

@@ -127,8 +127,10 @@ public class PresenceSessionTests
     }
 
     [Fact]
-    public void A_full_server_rejects_further_joins()
+    public void A_full_server_queues_further_joins_instead_of_rejecting()
     {
+        // D18: a validated joiner at capacity WAITS — the instant reject is reserved for a full
+        // queue (AdmissionQueueTests pins the rest of the lifecycle).
         var hub = new LoopbackNetwork();
         var clock = new ManualClock();
         using var server = new NetServer(hub.Server, new ServerConfig(Identity, maxPlayers: 1), clock);
@@ -140,7 +142,9 @@ public class PresenceSessionTests
         Assert.Equal(1, server.PlayerCount);
         Assert.True(a.Joined);
         Assert.False(b.Joined);
-        Assert.Contains("full", b.RejectReason);
+        Assert.Null(b.RejectReason);        // not refused — held
+        Assert.Equal(1, b.QueuePosition);
+        Assert.Equal(1, server.QueuedCount);
     }
 
     [Fact]

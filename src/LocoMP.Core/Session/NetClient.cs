@@ -77,6 +77,14 @@ public sealed class NetClient : IDisposable
     /// signal for a join readiness gate — gates clear on this, never on a timer or inferred stage.</summary>
     public bool JoinSettled => Joined && Stage == JoinStage.Complete;
 
+    /// <summary>Our place in the server's admission queue, 1-based (D18); 0 = not queued. Non-zero
+    /// only while the server is full and we are waiting — the stage stays
+    /// <see cref="JoinStage.Connecting"/> throughout, and admission arrives as an ordinary accept.</summary>
+    public int QueuePosition { get; private set; }
+
+    /// <summary>How many joiners are waiting in total (self included); 0 when not queued.</summary>
+    public int QueueTotal { get; private set; }
+
     /// <summary>serverNow - localNow (ms). Add to the local clock to estimate server time (03 §5).</summary>
     public long ServerTimeOffsetMs { get; private set; }
 
@@ -92,6 +100,10 @@ public sealed class NetClient : IDisposable
     /// <summary>The join burst progressed (M5.1). Fires on every stage transition, including the
     /// reset to None on disconnect; drives the loading interstitial's stage display.</summary>
     public event Action<JoinStage>? JoinStageChanged;
+
+    /// <summary>Queue state changed (D18): (position, total) — position 0 = no longer queued
+    /// (admitted, or the link dropped). Drives the interstitial's "waiting for a slot" line.</summary>
+    public event Action<int, int>? QueueChanged;
     public event Action<PlayerState>? PlayerJoined;
     public event Action<int>? PlayerLeft;
     public event Action<int, Pose>? PlayerMoved;    // args: id, new pose
@@ -169,6 +181,7 @@ public sealed class NetClient : IDisposable
     {
         bool wasJoined = LocalId.HasValue;
         LocalId = null;
+        ClearQueue();
         _players.Clear();
         Trains.Reset();
         Career.Reset();
@@ -194,6 +207,7 @@ public sealed class NetClient : IDisposable
             {
                 case MessageType.JoinAccepted: HandleAccepted(r); break;
                 case MessageType.JoinRejected: HandleRejected(r); break;
+                case MessageType.JoinQueued: HandleQueued(r); break;
                 case MessageType.PlayerJoined: HandlePlayerJoined(r); break;
                 case MessageType.PlayerLeft: HandlePlayerLeft(r); break;
                 case MessageType.PlayerPose: HandlePlayerPose(r); break;
@@ -216,8 +230,28 @@ public sealed class NetClient : IDisposable
         }
     }
 
+    private void HandleQueued(PacketReader r)
+    {
+        int position = (int)r.ReadVarUInt();
+        int total = (int)r.ReadVarUInt();
+        if (position == QueuePosition && total == QueueTotal) return; // restated, nothing moved
+        QueuePosition = position;
+        QueueTotal = total;
+        QueueChanged?.Invoke(position, total);
+    }
+
+    /// <summary>Leave the queue state (admitted / link gone). Fires the 0 event only if we WERE queued.</summary>
+    private void ClearQueue()
+    {
+        if (QueuePosition == 0) return;
+        QueuePosition = 0;
+        QueueTotal = 0;
+        QueueChanged?.Invoke(0, 0);
+    }
+
     private void HandleAccepted(PacketReader r)
     {
+        ClearQueue(); // a queued join resolves into an ordinary admission
         int id = (int)r.ReadVarUInt();
         long serverTime = r.ReadInt64();
         LocalId = id;
@@ -240,6 +274,7 @@ public sealed class NetClient : IDisposable
 
     private void HandleRejected(PacketReader r)
     {
+        ClearQueue(); // a queued join can resolve to a reject (e.g. key taken over while waiting)
         string reason = r.ReadString();
         // v13 appends kind/have/need after the reason; a pre-v13 server's packet ends here. Read the
         // tail defensively (the HandleJoin playerKey precedent) so both server generations reject legibly.

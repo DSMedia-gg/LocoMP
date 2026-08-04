@@ -24,6 +24,28 @@ public sealed class NetServer : IDisposable
     private readonly IClock _clock;
     private readonly Dictionary<int, PlayerState> _players = new();
 
+    // The admission queue (D18): joiners who passed EVERY validation but capacity, in arrival order.
+    // A queued peer is connected but NOT admitted — no roster entry, no subsystem state, its non-join
+    // traffic ignored like any stranger's. Abandon = its transport dropping (or a Leave); admission =
+    // the ordinary admit path when a slot frees. Bounded so a connect-storm can't grow server state
+    // without limit — beyond the cap the instant ServerFull reject remains.
+    private readonly List<QueuedJoin> _queue = new();
+    private const int MaxQueuedJoins = 32;
+
+    private sealed class QueuedJoin
+    {
+        public QueuedJoin(int peerId, string name, string playerKey)
+        {
+            PeerId = peerId;
+            Name = name;
+            PlayerKey = playerKey;
+        }
+
+        public int PeerId { get; set; } // set: a same-key reconnect replaces the peer, keeps the spot
+        public string Name { get; set; }
+        public string PlayerKey { get; }
+    }
+
     // Peers that have sent at least one real pose. Until a peer is here its position is unknown, so
     // interest treats it fail-open (an unposed observer sees everything; an unposed player-entity is
     // never hidden). Cleared on disconnect.
@@ -91,6 +113,9 @@ public sealed class NetServer : IDisposable
     public InterestManager Interest => _interest;
 
     public int PlayerCount => _players.Count;
+
+    /// <summary>How many validated joiners are waiting for a slot (D18) — host UI / test visibility.</summary>
+    public int QueuedCount => _queue.Count;
 
     /// <summary>Raised when a player passes the handshake and is added to the roster.</summary>
     public event Action<PlayerState>? PlayerAdmitted;
@@ -171,6 +196,11 @@ public sealed class NetServer : IDisposable
     private void HandleJoin(int peerId, PacketReader r)
     {
         if (_players.ContainsKey(peerId)) return; // duplicate join on an admitted peer — ignore
+        if (FindQueued(peerId) is QueuedJoin already)
+        {
+            SendQueued(already);                  // duplicate join from a queued peer — restate position
+            return;
+        }
 
         // FROZEN prefix (F3): the connect key no longer embeds the protocol version, so peers on
         // ANY protocol reach this read. The varuint protocol version must stay the first field
@@ -200,26 +230,76 @@ public sealed class NetServer : IDisposable
             return;
         }
 
-        if (_players.Count >= _config.MaxPlayers)
-        {
-            Reject(peerId, RejectKind.ServerFull, "server full");
-            return;
-        }
-
-        // The stable key is the profile/reconnect identity (M3): it must exist, stay out of the
-        // reserved '@' account namespace, and not already be online (a live duplicate would let a
-        // second connection hijack the profile mid-session).
+        // The stable key is the profile/reconnect identity (M3): it must exist and stay out of the
+        // reserved '@' account namespace. Validated BEFORE capacity (D18): a joiner who could never
+        // be admitted deserves the exact reject now, not a queue slot that resolves to it later.
         if (playerKey.Length == 0 || playerKey.Length > 64 || playerKey[0] == '@')
         {
             Reject(peerId, RejectKind.InvalidKey, "invalid player key");
             return;
         }
+
+        // Credentialed takeover (F7): the key is a client-held secret (never shown to other players)
+        // and the password was just checked, so presenting a key that is ALREADY ONLINE is this
+        // player reconnecting past their own zombie peer — evict it through the ordinary removal
+        // path (its state releases exactly as a transport timeout would have, just now) and let the
+        // newcomer take the freed slot. The old lockout ("player key already in session") made a
+        // fast reconnect wait out the transport timeout, 15 s to minutes in the gauntlet.
         if (Career.IsKeyOnline(playerKey))
         {
-            Reject(peerId, RejectKind.DuplicateKey, "player key already in session");
+            int zombie = Career.PeerOf(playerKey);
+            if (zombie == 0)
+            {
+                // Online with no live peer mapping should not happen (grace removes the online
+                // flag) — defensive: nothing to evict, fall through to the normal admit.
+            }
+            else if (zombie == peerId)
+            {
+                return; // raced our own admission — never evict the very connection joining
+            }
+            else
+            {
+                // pump: false — the freed slot is a HANDOVER to this reconnecting player, not a
+                // vacancy for the queue; the capacity check below admits them into it.
+                Remove(zombie, pump: false);
+                _transport.Disconnect(zombie);
+            }
+        }
+        // A same-key entry already WAITING keeps its place in line: replace the dead connection
+        // behind the entry (a flaky joiner should not go to the back for reconnecting).
+        if (FindQueuedByKey(playerKey) is QueuedJoin waiting)
+        {
+            int stale = waiting.PeerId;
+            waiting.PeerId = peerId;
+            waiting.Name = name;
+            _transport.Disconnect(stale);
+            SendQueued(waiting);
             return;
         }
 
+        if (_players.Count >= _config.MaxPlayers)
+        {
+            // The admission queue (D18): validated joiners wait for a slot instead of bouncing off
+            // an instant reject; the loading cover shows the live position. Bounded — past the cap
+            // the old behaviour remains.
+            if (_queue.Count >= MaxQueuedJoins)
+            {
+                Reject(peerId, RejectKind.ServerFull, "server full");
+                return;
+            }
+            var entry = new QueuedJoin(peerId, name, playerKey);
+            _queue.Add(entry);
+            SendQueued(entry);
+            return;
+        }
+
+        Admit(peerId, name, playerKey);
+    }
+
+    /// <summary>The admit path proper — everything after validation: roster, interest, the join
+    /// burst, the sentinel. One code path whether the joiner walked straight in or waited (D18).</summary>
+    private void Admit(int peerId, string name, string playerKey)
+    {
         var state = new PlayerState(peerId, name, Pose.Identity);
         _players[peerId] = state;
         _interest.AddClient(peerId);                       // relevance tracking (fail-open until it moves)
@@ -232,6 +312,53 @@ public sealed class NetServer : IDisposable
         SendJoinBurstComplete(peerId);                     // MUST be the last send of the burst — the
                                                            // ordered channel makes it a true barrier
         PlayerAdmitted?.Invoke(state);
+    }
+
+    private QueuedJoin? FindQueued(int peerId)
+    {
+        foreach (QueuedJoin q in _queue)
+            if (q.PeerId == peerId) return q;
+        return null;
+    }
+
+    private QueuedJoin? FindQueuedByKey(string playerKey)
+    {
+        foreach (QueuedJoin q in _queue)
+            if (string.Equals(q.PlayerKey, playerKey, StringComparison.Ordinal)) return q;
+        return null;
+    }
+
+    private void SendQueued(QueuedJoin entry)
+    {
+        byte[] payload = new PacketWriter(4)
+            .WriteByte((byte)MessageType.JoinQueued)
+            .WriteVarUInt((uint)(_queue.IndexOf(entry) + 1)) // 1-based position
+            .WriteVarUInt((uint)_queue.Count)
+            .ToArray();
+        _transport.Send(entry.PeerId, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>Admit from the head while slots are free, then restate every waiter's position —
+    /// called whenever a slot frees or the line shortens. Admission re-checks only what TIME can
+    /// invalidate: the key coming online while waiting (someone took it over) turns that entry
+    /// into the DuplicateKey reject it would have received at the door.</summary>
+    private void PumpQueue()
+    {
+        bool changed = false;
+        while (_queue.Count > 0 && _players.Count < _config.MaxPlayers)
+        {
+            QueuedJoin head = _queue[0];
+            _queue.RemoveAt(0);
+            changed = true;
+            if (Career.IsKeyOnline(head.PlayerKey) && Career.PeerOf(head.PlayerKey) != 0)
+            {
+                Reject(head.PeerId, RejectKind.DuplicateKey, "player key already in session");
+                continue;
+            }
+            Admit(head.PeerId, head.Name, head.PlayerKey);
+        }
+        if (changed)
+            foreach (QueuedJoin q in _queue) SendQueued(q);
     }
 
     private void SendJoinBurstComplete(int peerId)
@@ -308,8 +435,18 @@ public sealed class NetServer : IDisposable
 
     private void OnPeerDisconnected(int peerId) => Remove(peerId);
 
-    private void Remove(int peerId)
+    private void Remove(int peerId, bool pump = true)
     {
+        // A QUEUED peer leaving (transport drop or Leave) just leaves the line — it was never
+        // admitted, so there is no roster entry or subsystem state to release. Everyone behind
+        // moves up a place and hears about it.
+        if (FindQueued(peerId) is QueuedJoin queued)
+        {
+            _queue.Remove(queued);
+            foreach (QueuedJoin q in _queue) SendQueued(q);
+            return;
+        }
+
         // Capture where they were last seen BEFORE the player record dies — the item release
         // transaction drops a departing holder's possessions at this pose. Gated on _posed so a
         // default (never-streamed) pose is null here, not a phantom position at the origin.
@@ -334,6 +471,8 @@ public sealed class NetServer : IDisposable
         _interest.ForgetEntity(new EntityKey(EntityKind.Player, peerId)); // and drop them from others'
                                                            // scopes (PlayerLeft above already hid them)
         PlayerRemoved?.Invoke(peerId);
+
+        if (pump) PumpQueue(); // a real slot freed — the line advances (D18)
     }
 
     /// <summary>
@@ -406,5 +545,6 @@ public sealed class NetServer : IDisposable
         _transport.PeerDisconnected -= OnPeerDisconnected;
         _players.Clear();
         _posed.Clear();
+        _queue.Clear();
     }
 }

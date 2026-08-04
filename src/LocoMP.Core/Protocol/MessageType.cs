@@ -188,7 +188,10 @@ public enum MessageType : byte
     CoupleRequest = 48,
 
     /// <summary>any client → server → sim owner: a player physically uncoupled a car's coupler —
-    /// the owner performs the real uncouple and its native event proposes the split.</summary>
+    /// the owner performs the real uncouple and its native event proposes the split. v14: the
+    /// client → server leg appends the physical PARTNER car id (0 = unknown), so the server can
+    /// resolve the def gap and commit the split ITSELF when the set is parked/ownerless (F8); the
+    /// routed server → owner leg stays [carId][end] — the owner resolves couplers natively.</summary>
     UncoupleRequest = 49,
 
     // ── items (M4, protocol v6) ──
@@ -286,4 +289,12 @@ public enum MessageType : byte
     /// barrier). Payload: none beyond the type byte. Intermediate phase display is inferred client-side
     /// from the ordered arrival of each burst family; this sentinel is the only "done" authority.</summary>
     JoinBurstComplete = 65,
+
+    // ── D18: join admission at capacity. A full server holds validated joiners in a FIFO queue and
+    // admits as slots free, instead of an instant ServerFull reject. ──
+
+    /// <summary>server → a QUEUED (not yet admitted) client: your live queue state. Wire:
+    /// [position:varuint (1-based)][total:varuint]. Sent on enqueue and re-sent to every queued peer
+    /// whenever the queue changes; admission arrives as an ordinary <see cref="JoinAccepted"/>.</summary>
+    JoinQueued = 66,
 }
