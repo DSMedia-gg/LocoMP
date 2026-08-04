@@ -113,6 +113,44 @@ public class LiteNetLibIntegrationTests
         Assert.False(old.Joined);
     }
 
+    /// <summary>
+    /// Soak-teardown finding (2026-08-04): LiteNetLib 1.3.5 can raise PeerDisconnectedEvent with a
+    /// NULL peer — a connect attempt dying at the socket layer queues a disconnect event that
+    /// carries no peer object. The unguarded Dictionary.TryGetValue(null) crashed the whole bot
+    /// swarm (unhandled ArgumentNullException in the poll loop); a real game client mid connect-
+    /// retry has the same exposure. The null arrives from a socket-level race LiteNetLib won't
+    /// reproduce on demand in-process, so this drives the private handler directly by reflection —
+    /// the crash was in OUR handler, not the library, and this is exactly the call it received.
+    /// Regression test: reverting the null guard fails it with the soak's exact exception.
+    /// </summary>
+    [Fact]
+    public void A_null_peer_disconnect_event_is_ignored_not_a_crash()
+    {
+        using var clientT = LiteNetLibTransport.ConnectClient("127.0.0.1", 1, Key); // nobody listens
+        bool disconnectRaised = false;
+        clientT.PeerDisconnected += _ => disconnectRaised = true;
+
+        System.Reflection.MethodInfo handler = typeof(LiteNetLibTransport).GetMethod(
+            "OnPeerDisconnected",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
+        Assert.NotNull(handler);
+
+        Exception? thrown = Record.Exception(() =>
+        {
+            try
+            {
+                handler.Invoke(clientT, new object?[] { null, default(LiteNetLib.DisconnectInfo) });
+            }
+            catch (System.Reflection.TargetInvocationException e)
+            {
+                throw e.InnerException!; // surface the handler's own exception, as the poll loop would
+            }
+        });
+
+        Assert.Null(thrown);
+        Assert.False(disconnectRaised); // an unmapped non-peer is nothing to announce upward
+    }
+
     [Fact]
     public void A_wrong_connect_key_is_refused_by_the_transport()
     {

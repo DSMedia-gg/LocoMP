@@ -115,6 +115,11 @@ public sealed class LiteNetLibTransport : ITransport
 
     private void OnPeerDisconnected(NetPeer peer, DisconnectInfo disconnectInfo)
     {
+        // LiteNetLib 1.3.5 can raise this with a NULL peer: a connect ATTEMPT that dies at the
+        // socket layer queues a disconnect event carrying no peer object (observed 2026-08-04,
+        // soak teardown — the bot swarm crashed on Dictionary.TryGetValue(null) when the server
+        // vanished mid connect-retry). A peer we never mapped has nothing to clean up either way.
+        if (peer is null) return;
         if (!_idByPeer.TryGetValue(peer, out int id)) return;
         _idByPeer.Remove(peer);
         _peersById.Remove(id);

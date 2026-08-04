@@ -59,6 +59,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the reconnect-grace flows; with `--count`, each bot gets a distinct derived key.
 
 ### Fixed
+- **A failed connection attempt can no longer crash the client.** If the server vanished (or was
+  unreachable) at exactly the wrong moment during a connect attempt, the network library could
+  report the failure without a connection object attached — and LocoMP's handler crashed on it,
+  taking the whole client down (found when the 24 h soak's entire bot swarm died this way at
+  teardown). A failed attempt that was never admitted is now simply ignored; the normal retry and
+  timeout paths carry on.
 - **Reconnecting quickly after a crash no longer locks you out.** If your game died and you rejoined
   before the server noticed the dead connection, you were refused with "player key already in
   session" until a timeout that could take minutes. Your player key is your credential: presenting
