@@ -86,10 +86,18 @@ public sealed class LocoMpUi
             ReleaseCursor();
             WidgetKit.ReleaseKeyboardFocus(); // a field destroyed while selected never fires onDeselect
         }
-        if (IsOpen && Input.GetKeyDown(KeyCode.Escape))
+        if (Input.GetKeyDown(KeyCode.Escape))
         {
-            PauseGuardHook.NoteEscConsumed(); // DV's pause poll may run after us this same frame
-            Close();
+            // UnityEngine.Input read — works even with Rewired's kb+mouse detached (gate lock).
+            if (Gate.Active)
+            {
+                Gate.ShowExplainEarly(); // break-glass: surface the choice, never a raw abort
+            }
+            else if (IsOpen)
+            {
+                PauseGuardHook.NoteEscConsumed(); // DV's pause poll may run after us this same frame
+                Close();
+            }
         }
         EnforcePointer();
         EnforceGateInputLock();

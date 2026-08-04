@@ -38,6 +38,7 @@ public sealed class ReadinessGate
     private Action<GateFailure>? _onFail;
     private Action? _onGiveUp;
     private bool _failed;
+    private bool _explainPinned; // player-summoned explain (ESC) — Nudge must not auto-dismiss it
 
     private GameObject? _coverGo;
     private TMP_Text? _titleText;
@@ -95,6 +96,7 @@ public sealed class ReadinessGate
     public void ExtendFailsafe(double seconds)
     {
         _failsafe += seconds;
+        _explainPinned = false; // the player chose to resume — live signals may dismiss again
         if (_failed)
         {
             _failed = false;
@@ -105,16 +107,33 @@ public sealed class ReadinessGate
 
     /// <summary>Top the failsafe back UP to at least this much remaining — for live server signals
     /// that prove the wait is healthy (a queue position update, D18) without accumulating the way
-    /// repeated <see cref="ExtendFailsafe"/> calls would. Still only ever delays the FAIL path.</summary>
+    /// repeated <see cref="ExtendFailsafe"/> calls would. Still only ever delays the FAIL path.
+    /// A PLAYER-summoned explain screen (<see cref="ShowExplainEarly"/>) is pinned — a healthy
+    /// signal must not slam the break-glass door shut mid-decision.</summary>
     public void Nudge(double minRemainingSeconds)
     {
         _failsafe = Math.Max(_failsafe, minRemainingSeconds);
-        if (_failed)
+        if (_failed && !_explainPinned)
         {
             _failed = false;
             if (_explainGo != null) _explainGo.SetActive(false);
             RefreshStageText();
         }
+    }
+
+    /// <summary>Break-glass (ESC over a cover): surface the explain screen NOW, without waiting
+    /// out the failsafe — a queued/healthy wait otherwise offers NO way to abandon (Round 2
+    /// finding: Q4 was unreachable). Same semantics as a natural failsafe fire: the clock stops,
+    /// keep-waiting resumes, give-up leaves. Never a silent abort, and idempotent — a second ESC
+    /// is a no-op, not a give-up (an accidental double-tap must not Leave).</summary>
+    public void ShowExplainEarly()
+    {
+        if (!Active || _failed) return;
+        _failed = true;
+        _explainPinned = true;
+        var failure = new GateFailure(_detail ?? _stages[Math.Min(_stage, _stages.Count - 1)]);
+        _log("[ui] readiness gate — explain screen summoned by the player (ESC)");
+        ShowExplain(failure);
     }
 
     public void Tick(double dt)
@@ -150,6 +169,7 @@ public sealed class ReadinessGate
         _onFail = null;
         _onGiveUp = null;
         _failed = false;
+        _explainPinned = false;
         if (Active) RequestCursor(false);
         Active = false;
     }
