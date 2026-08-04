@@ -289,7 +289,10 @@ public sealed class NetServer : IDisposable
             }
             var entry = new QueuedJoin(peerId, name, playerKey);
             _queue.Add(entry);
-            SendQueued(entry);
+            // Everyone in line, not just the newcomer: positions are unchanged for the others but
+            // their TOTAL grew, and a queued cover showing "1 of 1" while someone waits behind is
+            // stale UI (Round 2 live finding — the remove/pump paths already re-broadcast all).
+            foreach (QueuedJoin q in _queue) SendQueued(q);
             return;
         }
 

@@ -61,6 +61,31 @@ public class AdmissionQueueTests
     }
 
     [Fact]
+    public void An_existing_queuer_hears_the_total_grow_when_someone_joins_behind()
+    {
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        using var server = new NetServer(hub.Server, new ServerConfig(Identity, maxPlayers: 1), clock);
+
+        using var alice = new NetClient(hub.Connect(out _), Identity, "Alice", clock, playerKey: "kA");
+        Pump(server, new[] { alice });
+
+        using var bob = new NetClient(hub.Connect(out _), Identity, "Bob", clock, playerKey: "kB");
+        Pump(server, new[] { alice, bob });
+        Assert.Equal((1, 1), (bob.QueuePosition, bob.QueueTotal));
+
+        // Carol queues BEHIND Bob: his position is unchanged but his cover's "of M" must not go
+        // stale (Round 2 live finding: the add path notified only the newcomer).
+        var bobUpdates = new List<(int pos, int total)>();
+        bob.QueueChanged += (p, t) => bobUpdates.Add((p, t));
+        using var carol = new NetClient(hub.Connect(out _), Identity, "Carol", clock, playerKey: "kC");
+        Pump(server, new[] { alice, bob, carol });
+
+        Assert.Equal((1, 2), (bob.QueuePosition, bob.QueueTotal));
+        Assert.Contains((1, 2), bobUpdates);
+    }
+
+    [Fact]
     public void A_queued_peer_abandoning_shortens_the_line_without_freeing_a_slot()
     {
         var hub = new LoopbackNetwork();
