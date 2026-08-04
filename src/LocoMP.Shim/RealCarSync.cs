@@ -730,6 +730,62 @@ public sealed class RealCarSync
             // The inverse assertion the old repair never had: def-adjacent neighbours must be
             // coupled. CoupleAdjacent is idempotent (skips held couplers, 8 m proximity guard).
             if (AllPlaced(set)) CoupleAdjacent(set);
+
+            ReconcileChainStates(set);
+        }
+    }
+
+    /// <summary>Chain-VISUAL truth follows coupler truth (the third face of F1, found live
+    /// 2026-08-05). The only bridge from a programmatic <c>CoupleTo</c>/<c>Uncouple</c> into the
+    /// chain FSM is <c>ChainCouplerCouplerAdapter</c>'s Coupled/Uncoupled subscription, and that
+    /// subscription is made by a coroutine that waits FRAMES after spawn — our spawn-tick
+    /// CoupleAdjacent fires the event into a void on fresh cars. The FSM then half-restores from
+    /// the state FIELD on whichever side re-determines, leaving the observed asymmetry: one side
+    /// Attached_Tight (stiff chain, dead hook), the other Parked with a LIVE knob whose single
+    /// grab uncouples without the vanilla loosen step. Healing = disable/enable the chain script:
+    /// OnEnable re-runs DV's own Determine_Next_State → TryRestoreState, which rebuilds the
+    /// correct pair (owner Attached_Tight, partner Other_Attached_Parked) from the fields
+    /// CoupleTo DID stamp. DV's streaming optimizer toggles these scripts routinely, so the
+    /// primitive is vanilla-safe; a script that is inactive-in-hierarchy heals itself on
+    /// activation and is left alone. Being_Dragged is a player's live gesture — never touched.</summary>
+    private void ReconcileChainStates(RemoteSet set)
+    {
+        foreach (Entry entry in set.Cars)
+        {
+            TrainCar? car = entry.Car;
+            if (car == null) continue;
+            foreach (Coupler coupler in car.couplers)
+            {
+                if (coupler == null) continue;
+                ChainCouplerInteraction? chain = coupler.ChainScript;
+                if (chain == null || !chain.isActiveAndEnabled) continue;
+                if (chain.couplerAdapter == null || chain.couplerAdapter.coupler == null) continue;
+
+                ChainCouplerInteraction.State fsm = chain.CurrentState;
+                if (fsm == ChainCouplerInteraction.State.Being_Dragged) continue;
+                bool transient = fsm == ChainCouplerInteraction.State.Enabled
+                    || fsm == ChainCouplerInteraction.State.Determine_Next_State
+                    || fsm == ChainCouplerInteraction.State.Disabled;
+                if (transient) continue;
+
+                bool coupled = coupler.IsCoupled();
+                bool fsmSaysAttached = fsm != ChainCouplerInteraction.State.Parked
+                    && fsm != ChainCouplerInteraction.State.Dangling;
+                if (coupled == fsmSaysAttached) continue;
+
+                try
+                {
+                    chain.enabled = false;
+                    chain.enabled = true;
+                    string end = car.frontCoupler == coupler ? "front" : "rear";
+                    _log($"[trains] reconcile: chain FSM on car {entry.Def.Id} ({end}) was {fsm} " +
+                         $"while {(coupled ? "coupled" : "uncoupled")} — re-determined to {chain.CurrentState}");
+                }
+                catch (Exception e)
+                {
+                    _log($"[trains] reconcile: chain FSM heal on car {entry.Def.Id} FAILED ({e.Message})");
+                }
+            }
         }
     }
 
