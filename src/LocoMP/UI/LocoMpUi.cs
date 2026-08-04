@@ -1,4 +1,5 @@
 using System;
+using DV.Interaction.Inputs;
 using DV.UI;
 using DV.Utils;
 using LocoMP.Core.Protocol;
@@ -63,6 +64,12 @@ public sealed class LocoMpUi
     public void Tick(double dt)
     {
         MenuHook.Tick();
+        // A STATIC queue re-broadcasts nothing (positions only go out on queue CHANGES), so the
+        // event-driven Nudge alone lets the failsafe call a healthy wait "stalled" after 30 s
+        // (Round 2 finding: position 1 of 1, nobody moving → explain screen). While the client
+        // says we are queued, keep the failsafe topped up every tick — liveness stays delegated
+        // to the transport, whose disconnect path tears the gate down through phase changes.
+        if (Gate.Active && _vm.QueuePosition > 0) Gate.Nudge(30.0);
         Gate.Tick(dt);
         if (_pendingLeave)
         {
@@ -85,10 +92,28 @@ public sealed class LocoMpUi
             Close();
         }
         EnforcePointer();
+        EnforceGateInputLock();
     }
 
     /// <summary>True while a LocoMP surface owns interaction — the pause guard's probe.</summary>
     public bool ModalActive => IsOpen || Gate.Active;
+
+    // The readiness gate is a coherence boundary: while its cover is up the player must not be
+    // able to walk/interact underneath it (Round 2: "you can still walk around while covers are
+    // up"). Same mechanism as the typing guard — detach Rewired's kb+mouse; the cover's own
+    // buttons read Unity input and keep working. The OVERLAY deliberately does not do this
+    // (M5.0 doctrine: screens never freeze the sim; only the modal cover owns the player).
+    private static readonly object GateInputToken = new object();
+    private bool _gateInputDetached;
+
+    private void EnforceGateInputLock()
+    {
+        bool gateUp = Gate.Active;
+        if (gateUp == _gateInputDetached) return;
+        _gateInputDetached = gateUp;
+        try { InputManager.SetKeyboardAndMouseEnabled(GateInputToken, enabled: !gateUp); }
+        catch (Exception) { /* Rewired not initialized (menu scene edge) — nothing to lock */ }
+    }
 
     /// <summary>The CursorManager request (held for the overlay/gate lifetime) states our intent,
     /// but it is EDGE-triggered: RequestSystem raises ValueChanged only when the aggregate value
