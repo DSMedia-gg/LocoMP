@@ -143,7 +143,12 @@ public sealed class LocoMpUi
         SessionPhase phase = _vm.Phase;
         if (phase == _lastPhase) return;
         // Cover only uGUI-initiated joins — the dev panel keeps its legacy flow (Cody, 2026-08-04).
-        if (phase == SessionPhase.Connecting && _vm.JoinInitiatedFromUi) BeginJoinGate();
+        // And only on the Idle→Connecting EDGE: a transport loss also reads as Connecting for the
+        // 3 s lost-countdown (Joined flips false before _sessionLost is set), and the UI latch
+        // outlives the join — Round 2 finding: killing the host popped a spurious "Joining
+        // session" cover that then stalled over the SESSION LOST banner.
+        if (phase == SessionPhase.Connecting && _lastPhase == SessionPhase.Idle
+            && _vm.JoinInitiatedFromUi) BeginJoinGate();
         else if (phase == SessionPhase.Idle && Gate.Active) Gate.Clear();
         // Joined/Hosting do NOT clear the gate — admission precedes the burst's end; only the
         // sentinel (via done()) or Idle may take the cover down.
