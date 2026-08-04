@@ -3,6 +3,7 @@ using DV.UI;
 using DV.Utils;
 using LocoMP.Core.Protocol;
 using LocoMP.Core.Session;
+using LocoMP.Shim;
 using UnityEngine;
 
 namespace LocoMP.UI;
@@ -31,6 +32,7 @@ public sealed class LocoMpUi
     private LocoMpCanvas? _canvas;
     private ScreenRouter? _router;
     private bool _cursorRequested;
+    private bool _pointerEnforced;
     private SessionPhase _lastPhase = SessionPhase.Idle;
     private bool _pendingLeave;
 
@@ -76,7 +78,60 @@ public sealed class LocoMpUi
             _canvas = null;
             ReleaseCursor();
         }
-        if (IsOpen && Input.GetKeyDown(KeyCode.Escape)) Close();
+        if (IsOpen && Input.GetKeyDown(KeyCode.Escape))
+        {
+            PauseGuardHook.NoteEscConsumed(); // DV's pause poll may run after us this same frame
+            Close();
+        }
+        EnforcePointer();
+    }
+
+    /// <summary>True while a LocoMP surface owns interaction — the pause guard's probe.</summary>
+    public bool ModalActive => IsOpen || Gate.Active;
+
+    /// <summary>The CursorManager request (held for the overlay/gate lifetime) states our intent,
+    /// but it is EDGE-triggered: RequestSystem raises ValueChanged only when the aggregate value
+    /// changes, and CursorManager only writes Cursor state from that event — so a direct external
+    /// write (UMM re-locks the cursor when its window closes) is never reconciled, and the 8 s
+    /// explain screen becomes a softlock (full-screen raycast blocker, no pointer — Round 2
+    /// finding). While a modal surface is up we therefore re-assert per frame: DV's own
+    /// RequirePointer aggregate (cursor + mouse-look freeze + VR pointer; idempotent dictionary
+    /// write, so re-calling is free) plus a divergence-only direct heal for writers that bypass
+    /// CursorManager entirely. On modal end DV's computed truth is restored, not blind "off".</summary>
+    private void EnforcePointer()
+    {
+        bool modal = ModalActive;
+        if (modal)
+        {
+            try
+            {
+                if (PresenceShim.WorldAlive)
+                {
+                    var controller = SingletonBehaviour<ACanvasController<CanvasController.ElementType>>.Instance;
+                    controller.provider.RequirePointer(true);
+                }
+            }
+            catch (Exception) { /* no canvas controller (menu scene, teardown) — direct heal below still applies */ }
+            if (Cursor.lockState != CursorLockMode.None || !Cursor.visible)
+            {
+                Cursor.lockState = CursorLockMode.None;
+                Cursor.visible = true;
+            }
+            _pointerEnforced = true;
+        }
+        else if (_pointerEnforced)
+        {
+            _pointerEnforced = false;
+            try
+            {
+                if (PresenceShim.WorldAlive)
+                {
+                    var controller = SingletonBehaviour<ACanvasController<CanvasController.ElementType>>.Instance;
+                    controller.provider.RequirePointer(controller.IsPointerRequired());
+                }
+            }
+            catch (Exception) { /* nothing to restore without a controller */ }
+        }
     }
 
     /// <summary>Phase-edge reactions: the join gate begins when a join goes in flight and is

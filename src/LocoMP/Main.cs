@@ -67,6 +67,8 @@ public static class Main
         _ui = new LocoMpUi(_viewModel, log);
         MenuHook.Install(log);
         MenuHook.OpenRequested += origin => { if (_active) _ui?.Open(origin); };
+        PauseGuardHook.ModalProbe = () => _active && _ui is { ModalActive: true };
+        PauseGuardHook.Install(harmony, log);
 
         modEntry.OnToggle = (_, value) =>
         {
