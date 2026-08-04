@@ -124,6 +124,10 @@
       <HintPath>$(DvManaged)\DV.UIFramework.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="DV.Interaction">
+      <HintPath>$(DvManaged)\DV.Interaction.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
 </Project>

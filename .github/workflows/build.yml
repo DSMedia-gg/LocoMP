@@ -127,6 +127,7 @@ jobs:
               <Reference Include="UnityEngine.InputLegacyModule"><HintPath>$(DvManaged)/UnityEngine.InputLegacyModule.dll</HintPath><Private>false</Private></Reference>
               <Reference Include="DV.UI"><HintPath>$(DvManaged)/DV.UI.dll</HintPath><Private>false</Private></Reference>
               <Reference Include="DV.UIFramework"><HintPath>$(DvManaged)/DV.UIFramework.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="DV.Interaction"><HintPath>$(DvManaged)/DV.Interaction.dll</HintPath><Private>false</Private></Reference>
             </ItemGroup>
           </Project>
           EOF

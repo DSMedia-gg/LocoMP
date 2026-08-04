@@ -77,6 +77,7 @@ public sealed class LocoMpUi
             _router = null;
             _canvas = null;
             ReleaseCursor();
+            WidgetKit.ReleaseKeyboardFocus(); // a field destroyed while selected never fires onDeselect
         }
         if (IsOpen && Input.GetKeyDown(KeyCode.Escape))
         {
@@ -229,6 +230,7 @@ public sealed class LocoMpUi
         _canvas?.Destroy();
         _canvas = null;
         ReleaseCursor();
+        WidgetKit.ReleaseKeyboardFocus(); // failsafe — destroy skips onDeselect (input-lockout hazard)
     }
 
     /// <summary>Full teardown (mod toggle-off).</summary>

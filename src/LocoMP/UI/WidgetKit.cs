@@ -1,4 +1,5 @@
 using System;
+using DV.Interaction.Inputs;
 using DV.Utils;
 using TMPro;
 using UnityEngine;
@@ -195,7 +196,15 @@ public sealed class WidgetKit
 
     // DV's InputFocusManager error-logs on a double take/release, and focus we did not take is not
     // ours to release (DV's own fields use the same manager) — hence the guard + ownership latch.
+    //
+    // The flag alone is NOT the guard (Round 2 finding): only the cab-control keyboard handlers
+    // consult hasKeyboardFocus — movement, hotbar, F-keys read Rewired directly. The layer that
+    // actually silences them is InputManager.SetKeyboardAndMouseEnabled: a refcounted request that
+    // detaches the keyboard+mouse controllers from Rewired's player. uGUI/TMP typing reads
+    // UnityEngine.Input, so the field keeps working while every game action goes quiet.
+    private static readonly object KbmFocusToken = new object();
     private static bool _tookKeyboardFocus;
+    private static bool _detachedKbm;
 
     private static void TakeKeyboardFocus()
     {
@@ -212,20 +221,43 @@ public sealed class WidgetKit
         {
             // Main menu / teardown: no manager alive — game hotkeys are inert there anyway.
         }
+        if (!_detachedKbm)
+        {
+            try
+            {
+                InputManager.SetKeyboardAndMouseEnabled(KbmFocusToken, enabled: false);
+                _detachedKbm = true;
+            }
+            catch (Exception)
+            {
+                // Rewired not initialized (main menu edge) — nothing to silence there.
+            }
+        }
     }
 
-    private static void ReleaseKeyboardFocus()
+    /// <summary>Latch-guarded and idempotent — also the FAILSAFE: LocoMpUi calls this on overlay
+    /// close/scene death, because a field destroyed while selected never fires onDeselect, and a
+    /// keyboard+mouse detach nobody releases is a total input lockout.</summary>
+    internal static void ReleaseKeyboardFocus()
     {
-        if (!_tookKeyboardFocus) return;
-        _tookKeyboardFocus = false;
-        try
+        if (_tookKeyboardFocus)
         {
-            InputFocusManager manager = SingletonBehaviour<InputFocusManager>.Instance;
-            if (manager != null && manager.hasKeyboardFocus) manager.ReleaseKeyboardFocus();
+            _tookKeyboardFocus = false;
+            try
+            {
+                InputFocusManager manager = SingletonBehaviour<InputFocusManager>.Instance;
+                if (manager != null && manager.hasKeyboardFocus) manager.ReleaseKeyboardFocus();
+            }
+            catch (Exception)
+            {
+                // Manager died with the scene — nothing to release.
+            }
         }
-        catch (Exception)
+        if (_detachedKbm)
         {
-            // Manager died with the scene — nothing to release.
+            _detachedKbm = false;
+            try { InputManager.SetKeyboardAndMouseEnabled(KbmFocusToken, enabled: true); }
+            catch (Exception) { /* Rewired torn down — the detach died with it */ }
         }
     }
 
