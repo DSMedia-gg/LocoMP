@@ -51,6 +51,10 @@ public sealed class LoopbackTransport : ITransport
         }
     }
 
+    /// <summary>The 1:1 pair models a permanently-established link with no lifecycle — no-op, matching
+    /// how this transport never raises connect/disconnect either. Eviction tests use LoopbackNetwork.</summary>
+    public void Disconnect(int peerId) { }
+
     public void Dispose()
     {
         _inbox.Clear();

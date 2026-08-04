@@ -56,6 +56,8 @@ public sealed class CountingTransport : ITransport
 
     public void Poll() => _inner.Poll();
 
+    public void Disconnect(int peerId) => _inner.Disconnect(peerId);
+
     /// <summary>Zero every counter — call immediately before the interval you want to weigh.</summary>
     public void Reset()
     {

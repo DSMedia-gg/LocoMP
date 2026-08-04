@@ -36,6 +36,14 @@ public interface ITransport : IDisposable
     /// <summary>Send a payload to a peer with the given delivery guarantee.</summary>
     void Send(int peerId, byte[] payload, DeliveryMethod delivery);
 
+    /// <summary>
+    /// Force-drop a peer link (v14, F7: the server evicts a zombie peer when its player key is
+    /// credentially taken over — waiting out the transport timeout locked reconnects for minutes).
+    /// Both sides observe the ordinary <see cref="PeerDisconnected"/>; unknown ids are a silent
+    /// no-op, like a Send to a departed peer.
+    /// </summary>
+    void Disconnect(int peerId);
+
     /// <summary>Pump queued network events (Received / PeerConnected / PeerDisconnected). Once per tick.</summary>
     void Poll();
 }

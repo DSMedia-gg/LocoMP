@@ -90,6 +90,14 @@ public sealed class LoopbackNetwork
             for (int i = 0; i < n; i++) _events.Dequeue().Invoke();
         }
 
+        /// <summary>Server endpoint: kick that client off the hub. Client endpoint: drop own link
+        /// (only the server is a valid target). Both sides get the queued PeerDisconnected.</summary>
+        public void Disconnect(int peerId)
+        {
+            if (_id == ServerPeer) _net.Disconnect(peerId);
+            else if (peerId == ServerPeer) _net.Disconnect(_id);
+        }
+
         internal void QueueReceive(int fromId, byte[] payload) => _events.Enqueue(() => Received?.Invoke(fromId, payload));
         internal void QueueConnect(int peerId) => _events.Enqueue(() => PeerConnected?.Invoke(peerId));
         internal void QueueDisconnect(int peerId) => _events.Enqueue(() => PeerDisconnected?.Invoke(peerId));

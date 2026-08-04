@@ -91,6 +91,13 @@ public sealed class LiteNetLibTransport : ITransport
 
     public void Poll() => _net.PollEvents();
 
+    /// <summary>Force-drop a peer (F7 eviction). LiteNetLib sends the disconnect packet and raises
+    /// PeerDisconnectedEvent locally, so the id maps clean up through the ordinary handler.</summary>
+    public void Disconnect(int peerId)
+    {
+        if (_peersById.TryGetValue(peerId, out NetPeer? peer)) peer.Disconnect();
+    }
+
     private void OnConnectionRequest(ConnectionRequest request)
     {
         // Only the server admits connections, and only with the right key. Clients reject any inbound.

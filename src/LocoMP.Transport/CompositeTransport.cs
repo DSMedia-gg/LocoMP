@@ -58,6 +58,13 @@ public sealed class CompositeTransport : ITransport
         foreach (ITransport inner in _inners) inner.Poll();
     }
 
+    public void Disconnect(int peerId)
+    {
+        if (_byOuter.TryGetValue(peerId, out var route))
+            _inners[route.inner].Disconnect(route.innerId);
+        // Unknown outer id (peer already gone): no-op, like Send.
+    }
+
     private void OnInnerConnected(int inner, int innerId)
     {
         int outer = _nextOuterId++;
