@@ -23,7 +23,14 @@ public sealed class ConsistDriver
     private const double CarSeparation = 0.3;
     private const double BogieInset = 3.5;
 
-    private static int _nextToken = 1000; // distinct per driver so parallel bots correlate cleanly
+    // Distinct per driver within a process AND across processes/restarts: the token names the
+    // consist's car ids/guids ("locomp-bot-<token>-<n>"), and a fixed base poisons the well — an
+    // orphaned registration that ever real-spawned leaves cars with those guids in the HOST'S
+    // WORLD SAVE, and every later bot with the same token then fails spawn ("same key already
+    // added") into ghost boxes, permanently (found live 2026-08-05, G3 rig). Millisecond launch
+    // time keeps tokens unique across restarts; per-driver increments keep parallel bots distinct.
+    private static int _nextToken =
+        1000 + (int)(DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond % 1_000_000);
 
     private readonly TopologyWalker _walker;
     private readonly int _carCount;
