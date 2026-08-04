@@ -32,6 +32,7 @@ public sealed class ReadinessGate
     private readonly LocoMpTheme _theme;
     private readonly List<string> _stages = new();
     private int _stage;
+    private string? _detail;
     private Func<bool>? _done;
     private double _failsafe;
     private Action<GateFailure>? _onFail;
@@ -72,10 +73,21 @@ public sealed class ReadinessGate
         RequestCursor(true);
     }
 
-    /// <summary>Advance the staged progress display (never gates completion — display only).</summary>
+    /// <summary>Advance the staged progress display (never gates completion — display only).
+    /// Clears any <see cref="SetDetail"/> line — real stage progress supersedes it.</summary>
     public void SetStage(int index)
     {
         _stage = Mathf.Clamp(index, 0, _stages.Count - 1);
+        _detail = null;
+        RefreshStageText();
+    }
+
+    /// <summary>Replace the stage line with a live detail ("waiting for a free slot — position 2
+    /// of 3", D18). Display only, like SetStage; the next real stage transition clears it, and a
+    /// failsafe fired over a detail names IT as the stalled stage — honest either way.</summary>
+    public void SetDetail(string text)
+    {
+        _detail = text;
         RefreshStageText();
     }
 
@@ -83,6 +95,20 @@ public sealed class ReadinessGate
     public void ExtendFailsafe(double seconds)
     {
         _failsafe += seconds;
+        if (_failed)
+        {
+            _failed = false;
+            if (_explainGo != null) _explainGo.SetActive(false);
+            RefreshStageText();
+        }
+    }
+
+    /// <summary>Top the failsafe back UP to at least this much remaining — for live server signals
+    /// that prove the wait is healthy (a queue position update, D18) without accumulating the way
+    /// repeated <see cref="ExtendFailsafe"/> calls would. Still only ever delays the FAIL path.</summary>
+    public void Nudge(double minRemainingSeconds)
+    {
+        _failsafe = Math.Max(_failsafe, minRemainingSeconds);
         if (_failed)
         {
             _failed = false;
@@ -104,7 +130,7 @@ public sealed class ReadinessGate
         if ((_failsafe -= dt) <= 0)
         {
             _failed = true;
-            var failure = new GateFailure(_stages[Math.Min(_stage, _stages.Count - 1)]);
+            var failure = new GateFailure(_detail ?? _stages[Math.Min(_stage, _stages.Count - 1)]);
             _log($"[ui] readiness gate stalled at '{failure.StalledStage}' — showing the explain screen");
             ShowExplain(failure);
             _onFail?.Invoke(failure);
@@ -119,6 +145,7 @@ public sealed class ReadinessGate
         _titleText = null;
         _stageText = null;
         _stages.Clear();
+        _detail = null;
         _done = null;
         _onFail = null;
         _onGiveUp = null;
@@ -210,6 +237,7 @@ public sealed class ReadinessGate
     private void RefreshStageText()
     {
         if (_stageText == null || _stages.Count == 0) return;
-        _stageText.text = $"{_stages[Math.Min(_stage, _stages.Count - 1)]}  ({_stage + 1}/{_stages.Count})";
+        _stageText.text = _detail
+            ?? $"{_stages[Math.Min(_stage, _stages.Count - 1)]}  ({_stage + 1}/{_stages.Count})";
     }
 }

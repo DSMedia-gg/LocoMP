@@ -107,6 +107,13 @@ public sealed class BotClient : IDisposable
                 _nextAttemptMs = now + 500; // brief pause, then rejoin
             }
         }
+        else if (_client.QueuePosition > 0)
+        {
+            // Queued for a slot (D18): the server is actively holding us — a healthy wait, not a
+            // dead connect. Keep the attempt clock pinned so the timeout below never fires on it;
+            // each position update logs via QueueChanged (see StartAttempt).
+            _attemptStartedMs = now;
+        }
         else if (now - _attemptStartedMs > ConnectTimeoutMs)
         {
             _log($"[{_name}] connect timed out after {ConnectTimeoutMs / 1000}s; retrying in {RetryBackoffMs / 1000}s");
@@ -127,6 +134,10 @@ public sealed class BotClient : IDisposable
             RejectReason = reason;
             _log($"[{_name}] REJECTED: {reason} — stopping (fix the mismatch and rerun)");
         };
+        _client.QueueChanged += (position, total) =>
+            _log(position > 0
+                ? $"[{_name}] server full — queued at position {position} of {total}"
+                : $"[{_name}] left the admission queue");
         _client.PlayerJoined += p => _log($"[{_name}] sees player join: {p.Name} (id {p.Id})");
         _client.PlayerLeft += id => _log($"[{_name}] sees player leave: id {id}");
         // Subscribed unconditionally, for every mode: "the replica vanishes on the OTHER peer" is the entire

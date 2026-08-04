@@ -131,6 +131,14 @@ public sealed class SessionController
     /// <summary>Join-burst stage transitions, re-raised from the client on the main thread.</summary>
     public event Action<JoinStage>? JoinStageChanged;
 
+    /// <summary>Our admission-queue place (D18): 1-based while the server holds us for a slot,
+    /// 0 otherwise. The stage stays Connecting throughout — admission is an ordinary accept.</summary>
+    public int QueuePosition => _client?.QueuePosition ?? 0;
+
+    /// <summary>Queue state transitions, re-raised from the client: (position, total); (0, 0) =
+    /// no longer queued. Feeds the interstitial's "waiting for a free slot" line.</summary>
+    public event Action<int, int>? QueueChanged;
+
     /// <summary>A join was refused, with structure. Fires after <see cref="ErrorRaised"/> (which
     /// still carries the prose reason for the panel/status line).</summary>
     public event Action<RejectInfo>? JoinRejected;
@@ -760,6 +768,13 @@ public sealed class SessionController
             if (client.RejectDetail is { } detail) JoinRejected?.Invoke(detail);
         };
         client.JoinStageChanged += stage => JoinStageChanged?.Invoke(stage);
+        client.QueueChanged += (position, total) =>
+        {
+            _log(position > 0
+                ? $"[session] server full — queued for a slot at position {position} of {total}"
+                : "[session] left the admission queue");
+            QueueChanged?.Invoke(position, total);
+        };
         // Only meaningful for JOINED sessions: the host's own loopback link can't drop. The
         // countdown (not an immediate declare) lets a transport re-handshake absorb load freezes.
         client.Disconnected += () => { if (_mode == Mode.Joined && _lostCountdown <= 0 && !_sessionLost) _lostCountdown = 3.0; };

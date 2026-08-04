@@ -44,6 +44,7 @@ public sealed class LocoMpUi
         _vm.Changed += OnVmChanged;
         _vm.JoinStageChanged += OnJoinStage;
         _vm.JoinRejected += OnJoinRejected;
+        _vm.QueueChanged += OnQueueChanged;
     }
 
     /// <summary>The readiness-gate primitive (plan §5) — later slices Begin() it around their
@@ -101,6 +102,18 @@ public sealed class LocoMpUi
         if (Gate.Active) return;
         Gate.Begin("Joining session", JoinStages, () => _vm.JoinSettled,
             failsafeSeconds: 30.0, onGiveUp: () => _vm.Leave());
+    }
+
+    /// <summary>The server is holding us for a slot (D18). Each update is live proof the wait is
+    /// healthy: show the place in line and top the failsafe back up, so an ACTIVE queue never nags —
+    /// a STALLED one (no movement for 30 s) still reaches the explain screen, whose keep-waiting /
+    /// give-up pair is exactly the right surface for a long queue. Position 0 needs nothing: the
+    /// accept or reject that caused it drives the normal stage/reject flow.</summary>
+    private void OnQueueChanged(int position, int total)
+    {
+        if (!Gate.Active || position <= 0) return;
+        Gate.SetDetail($"server full — waiting for a free slot (position {position} of {total})");
+        Gate.Nudge(30.0);
     }
 
     private void OnJoinStage(JoinStage stage)
@@ -169,6 +182,7 @@ public sealed class LocoMpUi
         _vm.Changed -= OnVmChanged;
         _vm.JoinStageChanged -= OnJoinStage;
         _vm.JoinRejected -= OnJoinRejected;
+        _vm.QueueChanged -= OnQueueChanged;
         Close();
         Gate.Clear();
         Hud.Destroy();

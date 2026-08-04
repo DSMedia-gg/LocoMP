@@ -30,6 +30,7 @@ public sealed class SessionViewModel
         c.CareerToast += t => { Toast = t; Raise(); };
         c.JoinStageChanged += s => { JoinStageChanged?.Invoke(s); Raise(); };
         c.JoinRejected += r => { JoinRejected?.Invoke(r); Raise(); };
+        c.QueueChanged += (position, total) => { QueueChanged?.Invoke(position, total); Raise(); };
     }
 
     public SessionPhase Phase => _c.Phase;
@@ -69,8 +70,15 @@ public sealed class SessionViewModel
     /// Host/Join command (the controller owns that lifecycle).</summary>
     public RejectInfo? Reject => _c.LastReject;
 
+    /// <summary>Our admission-queue place (D18): 1-based while waiting for a slot, 0 otherwise.</summary>
+    public int QueuePosition => _c.QueuePosition;
+
     /// <summary>Stage transitions for the loading interstitial (also coalesced into Changed).</summary>
     public event Action<JoinStage>? JoinStageChanged;
+
+    /// <summary>Queue transitions (D18): (position, total); (0, 0) = no longer queued. The
+    /// interstitial shows the live place in line and treats each update as server progress.</summary>
+    public event Action<int, int>? QueueChanged;
 
     /// <summary>A join was refused; the mismatch screen decides how to render it.</summary>
     public event Action<RejectInfo>? JoinRejected;
