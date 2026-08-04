@@ -80,7 +80,7 @@ for (int i = 0; i < opts.Count; i++)
         var derailPose = new Pose(opts.Center.Px + 6, opts.Center.Py, opts.Center.Pz + 6, 0f, 0f, 0f, 1f);
         driver = new ConsistDriver(world, opts.ConsistCars, opts.ConsistSpeed, opts.Seed + i, name, Console.WriteLine,
             startEdge, opts.Liveries, opts.CargoId, opts.CargoAmount,
-            derailCarIndex: opts.DerailCar - 1, derailPose: derailPose);
+            derailCarIndex: opts.DerailCar - 1, derailPose: derailPose, carLengths: opts.CarLengths);
     }
     ClaimDriver? claimDriver = (opts.ClaimServerTrain && world != null)
         ? new ClaimDriver(world, opts.ConsistSpeed, opts.DriveSeconds, opts.Seed + i, name, Console.WriteLine, startEdge)

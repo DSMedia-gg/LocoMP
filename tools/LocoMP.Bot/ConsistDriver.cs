@@ -13,15 +13,22 @@ namespace LocoMP.Bot;
 /// </summary>
 public sealed class ConsistDriver
 {
-    // Ghost geometry: DV cars are 10–25 m; one uniform size is fine for a test rig. The bogie sits
-    // inset from each car end, and consecutive cars queue nose-to-tail along the same path.
-    private const double CarLength = 16.0;
+    // Ghost geometry: DV cars are 10–25 m; a uniform pitch is fine for ghost BOXES, but real cars
+    // (--livery) keep their real sizes — a wrong pitch leaves them floating apart (or overlapping),
+    // and the forced couple across the gap wedges DV's chain FSM into a half-dead state (G3′,
+    // 2026-08-04). --car-lengths streams each car at its real coupler pitch (the host logs a
+    // measured paste-me hint); consecutive cars queue nose-to-tail plus DV's own 0.3 m separation
+    // (CarSpawner.SEPARATION_BETWEEN_TRAIN_CARS). The bogie sits inset from each car end.
+    private const double DefaultCarLength = 16.0;
+    private const double CarSeparation = 0.3;
     private const double BogieInset = 3.5;
 
     private static int _nextToken = 1000; // distinct per driver so parallel bots correlate cleanly
 
     private readonly TopologyWalker _walker;
     private readonly int _carCount;
+    private readonly double[] _offsets; // head-of-consist → nose of car i, along the walker's path
+    private readonly double[] _lengths; // coupler pitch of car i
     private double _speed; // mutable: a granted player's throttle input scales it (M3.5c)
     private readonly double _baseSpeed;
     private readonly Action<string> _log;
@@ -43,10 +50,20 @@ public sealed class ConsistDriver
 
     public ConsistDriver(WorldTopology topology, int carCount, double speed, int seed, string name, Action<string> log,
                          uint? startEdgeId = null, string[]? liveries = null, string cargoId = "", float cargoAmount = 0f,
-                         int derailCarIndex = -1, Pose derailPose = default)
+                         int derailCarIndex = -1, Pose derailPose = default, double[]? carLengths = null)
     {
-        _walker = new TopologyWalker(topology, seed, tailCapacityM: carCount * CarLength + 100, startEdgeId);
         _carCount = Math.Max(1, carCount);
+        _offsets = new double[_carCount];
+        _lengths = new double[_carCount];
+        for (int i = 0; i < _carCount; i++)
+        {
+            _lengths[i] = carLengths is { Length: > 0 }
+                ? carLengths[Math.Min(i, carLengths.Length - 1)]
+                : DefaultCarLength;
+            if (i > 0) _offsets[i] = _offsets[i - 1] + _lengths[i - 1] + CarSeparation;
+        }
+        double totalLength = _offsets[_carCount - 1] + _lengths[_carCount - 1];
+        _walker = new TopologyWalker(topology, seed, tailCapacityM: totalLength + 100, startEdgeId);
         _speed = speed;
         _baseSpeed = speed;
         _name = name;
@@ -122,9 +139,14 @@ public sealed class ConsistDriver
                 cars[i] = CarSnapshot.OffRail(_derailPose);
                 continue;
             }
-            double offset = i * CarLength;
-            BogieState? front = _walker.Behind(offset + BogieInset, (float)_speed);
-            BogieState? rear = _walker.Behind(offset + CarLength - BogieInset, (float)_speed);
+            // A split product keeps streaming with the head cars' geometry — same approximation
+            // the uniform pitch made, and products stop streaming once the bot re-registers.
+            int gi = Math.Min(i, _carCount - 1);
+            double offset = _offsets[gi];
+            double len = _lengths[gi];
+            double inset = Math.Min(BogieInset, len / 4); // short cars: keep both bogies inside
+            BogieState? front = _walker.Behind(offset + inset, (float)_speed);
+            BogieState? rear = _walker.Behind(offset + len - inset, (float)_speed);
             if (front is null || rear is null) return; // trail history still building — wait
             cars[i] = CarSnapshot.Railed(front.Value, rear.Value);
         }

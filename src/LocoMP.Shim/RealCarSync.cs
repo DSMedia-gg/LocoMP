@@ -542,6 +542,15 @@ public sealed class RealCarSync
             where = $", ~{Vector3.Distance(player.position, set.Cars[0].Car!.transform.position):F0} m from you";
         _log($"[trains] remote consist {set.Def.Id}: {set.Cars.Length} real car(s) on the rails " +
              $"(edge {(snap.Cars[0].Derailed ? "-" : snap.Cars[0].Front.EdgeId.ToString())}{where})");
+        // Paste-me hint (livery/start-edge pattern): a bot streams its own car positions and only
+        // the game knows real coupler pitches — its uniform 16 m guess leaves real cars floating
+        // apart, and the forced couple across the gap wedges DV's chain FSM half-dead (G3′
+        // 2026-08-04). Measured off the cars just spawned; invariant "." so the line always pastes.
+        var pitches = new string[set.Cars.Length];
+        for (int i = 0; i < set.Cars.Length; i++)
+            pitches[i] = (set.Cars[i].Car?.InterCouplerDistance ?? 16f)
+                .ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+        _log($"[trains] bot spacing hint: --car-lengths {string.Join(",", pitches)}  (real coupler pitch per car)");
         return true;
     }
 

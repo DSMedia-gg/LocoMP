@@ -38,6 +38,7 @@ public sealed class BotOptions
     public long StartEdge = -1;         // ghost start edge (host logs the nearest one); -1 = walker's pick
     public bool Listen;                 // M3.5b: HOST the session (bot = server + world source)
     public string[] Liveries = Array.Empty<string>(); // real livery ids for the consist (host logs a hint)
+    public double[] CarLengths = Array.Empty<double>(); // real coupler pitch per car (host logs a hint)
     public string CargoId = "";         // cargo id loaded onto the consist's wagons
     public float CargoAmount = 0f;      // 0 = the car's capacity
     public int DerailCar = 0;           // 1-based consist car streamed as DERAILED at --at (0 = none)
@@ -110,6 +111,10 @@ public sealed class BotOptions
                     case "--start-edge": o.StartEdge = long.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--listen": o.Listen = true; break;
                     case "--livery": o.Liveries = Next().Split(',', StringSplitOptions.RemoveEmptyEntries); break;
+                    case "--car-lengths":
+                        o.CarLengths = Next().Split(',', StringSplitOptions.RemoveEmptyEntries)
+                            .Select(s => double.Parse(s, CultureInfo.InvariantCulture)).ToArray();
+                        break;
                     case "--cargo":
                     {
                         string[] parts = Next().Split(':');
@@ -204,6 +209,10 @@ Usage: LocoMP.Bot [options]
   --livery <a,b,c>       real livery ids for the consist (first = car 1, rest cycle) —
                          paste the host log's 'bot livery hint' so the consist spawns
                          as REAL cars in the game instead of ghost boxes
+  --car-lengths <a,b,c>  real coupler pitch per car in metres (fewer values than cars:
+                         last repeats) — paste the host log's 'bot spacing hint' so real
+                         cars sit buffer-to-buffer instead of the uniform 16 m pitch
+                         (a gap wedges DV's chain FSM into a half-dead coupled state)
   --cargo <id[:amt]>     load this cargo onto the consist's wagons (amt default: full)
   --derail-car <n>       stream consist car n (1-based) as DERAILED at the --at point —
                          a joining client then exercises the null-track spawn path
