@@ -48,6 +48,14 @@ public class ParkedAuthorityTests
         Pump(server, owner, guest);
         TrainsetDef whole = Assert.Single(server.Trains.Registry.Sets.Values);
 
+        // Stream a baseline so the split PRODUCTS inherit real car positions — a physically-driven
+        // consist, the gauntlet's actual shape. A set that never streams a position now RETIRES on
+        // owner-leave (the phantom-orphan fix), which is NOT what this family is about.
+        owner.Trains.SendSnapshot(new TrainsetSnapshot(whole.Id, whole.Epoch, clock.NowMs, whole.Cars
+            .Select((_, i) => CarSnapshot.Railed(new BogieState(1, 100f + i * 20f, 5f),
+                                                 new BogieState(1, 100f + i * 20f - 8f, 5f))).ToArray()));
+        Pump(server, owner, guest);
+
         owner.Trains.ProposeUncouple(whole.Id, gapIndex: 1);
         Pump(server, owner, guest);
         Assert.Equal(2, server.Trains.Registry.Sets.Count);

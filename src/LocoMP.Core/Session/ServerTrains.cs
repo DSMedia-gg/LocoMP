@@ -116,6 +116,48 @@ public sealed class ServerTrains
         foreach (int id in carIds) _latestByCar.Remove(id);
     }
 
+    /// <summary>Has the server ever held a position for this set — as a whole-set baseline OR as any
+    /// member car's last-known state? False only for a set that registered and was never streamed by
+    /// anyone (the phantom-orphan case). A partial set (some cars known) counts as baselined: it once
+    /// existed physically and must PARK, not be retired.</summary>
+    private bool EverBaselined(TrainsetDef def)
+    {
+        if (_latest.ContainsKey(def.Id)) return true;
+        foreach (CarDef car in def.Cars)
+            if (_latestByCar.ContainsKey(car.Id)) return true;
+        return false;
+    }
+
+    /// <summary>The still-connected control-grant holder driving a car of this set, if any — the
+    /// seamless heir when the set's owner leaves. First granted car in def order wins (a consist has
+    /// one active cab in practice). The connectedness guard matters: a just-departed holder's grants
+    /// are already gone, but same-tick double departures are processed one peer at a time, so a
+    /// lingering grant to a ghost must never inherit a set (that would strand it under a dead id).</summary>
+    private bool TryGrantHeir(TrainsetDef def, out int heir)
+    {
+        foreach (CarDef car in def.Cars)
+            if (_grants.TryGetValue(car.Id, out heir) && IsConnected(heir))
+                return true;
+        heir = 0;
+        return false;
+    }
+
+    private bool IsConnected(int peerId)
+    {
+        foreach (int id in _connectedIds())
+            if (id == peerId) return true;
+        return false;
+    }
+
+    /// <summary>Drop every control grant on a set's cars (broadcasting the release) — used when the
+    /// set changes hands to a grant heir, whose ownership makes the grant redundant.</summary>
+    private void ClearGrants(TrainsetDef def)
+    {
+        foreach (CarDef car in def.Cars)
+            if (_grants.Remove(car.Id))
+                Broadcast(BuildGrantState(car.Id, 0), DeliveryMethod.ReliableOrdered);
+    }
+
     /// <summary>The authoritative consist record. Exposed for the host UI, admin, and tests.</summary>
     public TrainsetRegistry Registry { get; }
 
@@ -203,6 +245,40 @@ public sealed class ServerTrains
             {
                 Registry.SetOwner(trainsetId, ServerOwnerId);
                 Broadcast(BuildOwner(trainsetId, ServerOwnerId), DeliveryMethod.ReliableOrdered);
+                continue;
+            }
+            if (!Registry.Sets.TryGetValue(trainsetId, out TrainsetDef? def)) continue; // vanished mid-park
+
+            if (!EverBaselined(def))
+            {
+                // Phantom orphan (2026-08-05 finding): the set was REGISTERED but never streamed a
+                // single position — no client ever materialised it (a replica spawns on its FIRST
+                // snapshot), and now the owner is gone, so nobody ever will. Parking it at owner 0
+                // leaves an un-adoptable ghost that every host resyncs FOREVER — the def replays, the
+                // missing baseline never can (ReplayTrainset has nothing in _latest to send). It
+                // represents nothing physical, so retire it: conservation holds (there was never a car
+                // to lose — the possession/ledger sides track items and money, not empty defs) and the
+                // host's eternal resync stops on the TrainsetRemove. The player-pose side already draws
+                // this exact line with _posed (a never-streamed pose is null, not an origin phantom).
+                Registry.Remove(trainsetId);
+                _latest.Remove(trainsetId);   // defensive — a phantom has none by definition
+                ForgetInterest(trainsetId);
+                Broadcast(BuildRemove(trainsetId), DeliveryMethod.ReliableOrdered);
+            }
+            else if (TryGrantHeir(def, out int heir))
+            {
+                // A player was actively driving this set via a control grant when the owner left
+                // (2026-08-05 finding: the hand-off was not seamless — the grant went dead, controls
+                // died, and the driver had to re-enter the cab to re-claim). Hand them the whole set
+                // as a CLAIM instead of parking it dead, so their drive continues uninterrupted. Their
+                // Shim adopts the replicas on the owner flip (OnOwnerChanged → TryAdopt) — and releases
+                // straight back to parked if it cannot simulate them, so the worst case is exactly the
+                // old park. No new authority: they could already re-claim by re-entering; this only
+                // removes the round-trip. The grant is now redundant — an owner drives their own cab —
+                // so clear it.
+                Registry.SetOwner(trainsetId, heir);
+                ClearGrants(def);
+                Broadcast(BuildOwner(trainsetId, heir), DeliveryMethod.ReliableOrdered);
             }
             else
             {

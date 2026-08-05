@@ -31,6 +31,14 @@ public class ParkedReclaimTests
         for (int i = 0; i < 8; i++) { server.Poll(); foreach (NetClient c in clients) c.Poll(); }
     }
 
+    /// <summary>Stream one railed baseline for a set so it (and any split products) are BASELINED —
+    /// a physically-driven consist. A set that never streams a position retires on owner-leave now
+    /// (the phantom-orphan fix), which is not the shape this F8 family exercises.</summary>
+    private static void SendBaseline(NetClient owner, TrainsetDef set, ManualClock clock) =>
+        owner.Trains.SendSnapshot(new TrainsetSnapshot(set.Id, set.Epoch, clock.NowMs, set.Cars
+            .Select((_, i) => CarSnapshot.Railed(new BogieState(1, 100f + i * 20f, 5f),
+                                                 new BogieState(1, 100f + i * 20f - 8f, 5f))).ToArray()));
+
     /// <summary>Register a consist, split it, then let the owner leave — the exact shape that
     /// produced the gauntlet's un-recouplable orphans (both products parked, owner 0).</summary>
     private static (TrainsetDef head, TrainsetDef tail) ParkedSplit(
@@ -44,6 +52,9 @@ public class ParkedReclaimTests
         owner.Trains.RegisterTrainset(token: 1, Cars(4));
         Pump(server, owner, guest);
         TrainsetDef whole = Assert.Single(server.Trains.Registry.Sets.Values);
+
+        SendBaseline(owner, whole, clock); // the products inherit real car positions
+        Pump(server, owner, guest);
 
         owner.Trains.ProposeUncouple(whole.Id, gapIndex: 1);
         Pump(server, owner, guest);
@@ -141,6 +152,8 @@ public class ParkedReclaimTests
         owner.Trains.RegisterTrainset(token: 1, Cars(4));
         Pump(server, owner, guest);
         TrainsetDef whole = Assert.Single(server.Trains.Registry.Sets.Values);
+        SendBaseline(owner, whole, clock); // baselined → products park (not phantom-retire)
+        Pump(server, owner, guest);
         owner.Trains.ProposeUncouple(whole.Id, gapIndex: 1);
         Pump(server, owner, guest);
         owner.Leave();
@@ -176,6 +189,9 @@ public class ParkedReclaimTests
 
         parker.Trains.RegisterTrainset(token: 1, Cars(2));
         driver.Trains.RegisterTrainset(token: 2, Cars(2));
+        Pump(server, parker, driver, guest);
+        // Baseline parker's set so it PARKS (not phantom-retires) when parker leaves.
+        SendBaseline(parker, server.Trains.Registry.Sets.Values.Single(s => s.OwnerId == parker.LocalId), clock);
         Pump(server, parker, driver, guest);
         parker.Leave();
         Pump(server, parker, driver, guest);

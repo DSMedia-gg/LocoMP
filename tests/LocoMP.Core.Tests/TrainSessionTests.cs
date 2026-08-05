@@ -306,6 +306,9 @@ public class TrainSessionTests
         var (_, _, server, a, b, set) = SessionWithOneTrainset();
         int aId = a.LocalId!.Value;
 
+        a.Trains.SendSnapshot(RailedSnapshot(set)); // A materialised it — a REAL parkable consist,
+        Pump(server, new[] { a, b });               // not a never-streamed phantom (which retires)
+
         a.Trains.RequestControlGrant(set.Cars[0].Id);
         Pump(server, new[] { a, b });
 
@@ -327,5 +330,69 @@ public class TrainSessionTests
         Pump(server, new[] { a, b });
         Assert.Equal(b.LocalId, b.Trains.View.Sets[set.Id].OwnerId);
         Assert.Equal(b.LocalId, server.Trains.Registry.Sets[set.Id].OwnerId);
+    }
+
+    [Fact]
+    public void When_the_owner_leaves_an_active_grant_holder_inherits_the_set_as_a_claim()
+    {
+        // 2026-08-05 finding: a player driving another's consist via a control grant lost control the
+        // instant the owner left (the set parked at owner 0, the grant went dead, they had to re-enter
+        // the cab to re-claim). The set now transfers to the live grant holder as a seamless claim.
+        var (_, _, server, a, b, set) = SessionWithOneTrainset(); // A owns the consist
+        a.Trains.SendSnapshot(RailedSnapshot(set));               // materialised — a real, parkable set
+        Pump(server, new[] { a, b });
+
+        int cab = set.Cars[0].Id;
+        b.Trains.RequestControlGrant(cab); // B is driving A's loco via a grant
+        Pump(server, new[] { a, b });
+        Assert.Equal(b.LocalId, server.Trains.Grants[cab]);
+
+        a.Leave(); // the owner vanishes mid-drive
+        Pump(server, new[] { a, b });
+
+        // B inherits the whole set as its owner — not parked at 0 — and the now-redundant grant clears.
+        Assert.Equal(b.LocalId, server.Trains.Registry.Sets[set.Id].OwnerId);
+        Assert.Equal(b.LocalId, b.Trains.View.Sets[set.Id].OwnerId);
+        Assert.False(server.Trains.Grants.ContainsKey(cab));
+    }
+
+    [Fact]
+    public void A_parked_set_with_no_grant_holder_still_just_parks_when_its_owner_leaves()
+    {
+        // The heir path must not fire without a driver: a streamed consist nobody was granted parks at
+        // owner 0 (claimable), exactly as before. (Guards the TryGrantHeir gate against over-reach.)
+        var (_, _, server, a, b, set) = SessionWithOneTrainset();
+        a.Trains.SendSnapshot(RailedSnapshot(set));
+        Pump(server, new[] { a, b });
+
+        a.Leave();
+        Pump(server, new[] { a, b });
+
+        Assert.True(server.Trains.Registry.Sets.ContainsKey(set.Id));
+        Assert.Equal(0, server.Trains.Registry.Sets[set.Id].OwnerId);
+    }
+
+    [Fact]
+    public void A_never_streamed_consist_is_retired_when_its_owner_leaves_not_left_as_a_phantom()
+    {
+        // The 2026-08-05 phantom-orphan finding: a set that REGISTERED but never streamed a single
+        // position (a bot that never drove far enough, or --consist-speed 0). No client ever
+        // materialised it — a replica spawns on its FIRST snapshot — so parking it at owner 0 when
+        // the owner leaves leaves an un-adoptable ghost that every host resyncs FOREVER (the def
+        // replays; the missing baseline never can). Nothing physical exists, so it must retire.
+        var (_, _, server, a, b, set) = SessionWithOneTrainset(); // registered, NEVER streamed
+        Assert.True(b.Trains.View.Sets.ContainsKey(set.Id));                 // the def mirrored, but
+        Assert.False(b.Trains.View.LatestSnapshots.ContainsKey(set.Id));     // no position ever did
+
+        bool removedOnB = false;
+        b.Trains.View.TrainsetRemoved += id => { if (id == set.Id) removedOnB = true; };
+
+        a.Leave();
+        Pump(server, new[] { a, b });
+
+        // Retired outright — not parked at owner 0 — everywhere.
+        Assert.False(server.Trains.Registry.Sets.ContainsKey(set.Id));
+        Assert.False(b.Trains.View.Sets.ContainsKey(set.Id));
+        Assert.True(removedOnB);
     }
 }
