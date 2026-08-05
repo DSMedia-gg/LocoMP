@@ -72,6 +72,15 @@ public sealed class RealCarSync
         public bool HasTarget;
         public uint LastFrontEdge = uint.MaxValue;
         public uint LastRearEdge = uint.MaxValue;
+
+        // Dead reckoning (03 §5): the last railed snapshot's two bogie states + when it landed, so the
+        // smoothing target can be re-extrapolated along the rail every frame. Railed is set ONLY by
+        // snapshot application (true = railed branch, false = derailed); every other target-setter
+        // (spawn, pool-adopt) leaves it false so a reused entry never coasts on stale bogie state.
+        public BogieState FrontState;
+        public BogieState RearState;
+        public float SnapAt;
+        public bool Railed;
     }
 
     private sealed class RemoteSet
@@ -343,15 +352,18 @@ public sealed class RealCarSync
                 entry.TargetPos = PresenceShim.ToLocalPosition(state.Pose);
                 entry.TargetRot = new Quaternion(state.Pose.Rx, state.Pose.Ry, state.Pose.Rz, state.Pose.Rw);
                 entry.HasTarget = true;
+                entry.Railed = false; // off the rail — nothing to extrapolate along
             }
             else
             {
-                if (!map.TryGetLocalPoint(state.Front.EdgeId, state.Front.S, out Vector3 front, out Vector3 fwd) ||
-                    !map.TryGetLocalPoint(state.Rear.EdgeId, state.Rear.S, out Vector3 rear, out _))
-                    continue;
-                Vector3 axis = front - rear;
-                entry.TargetPos = (front + rear) * 0.5f;
-                entry.TargetRot = Quaternion.LookRotation(axis.sqrMagnitude > 0.01f ? axis : fwd);
+                // Dead reckoning (03 §5): store the bogie states + arrival time and let the smoother
+                // re-extrapolate the target every frame (ResolveRailTarget in Tick). The zero-elapsed
+                // resolve here gives an immediate target and validates the spline points.
+                entry.FrontState = state.Front;
+                entry.RearState = state.Rear;
+                entry.SnapAt = Time.unscaledTime;
+                entry.Railed = true;
+                if (!ResolveRailTarget(entry, map, 0f)) continue; // unresolvable — keep the last target
                 entry.HasTarget = true;
                 UpdateBogieTracks(entry, state, map);
             }
@@ -364,10 +376,29 @@ public sealed class RealCarSync
         }
     }
 
+    /// <summary>Recompute a railed entry's smoothing target from its stored bogie states, extrapolated
+    /// forward by <paramref name="elapsed"/> seconds along the rail (03 §5 dead reckoning) — so the
+    /// target the smoother chases tracks a constant-speed car instead of the last snapshot. Returns
+    /// false and leaves the previous target untouched if either spline point is unresolvable. DV's
+    /// TryGetLocalPoint clamps an over-run S into its edge, so extrapolation past an edge end just
+    /// holds at the boundary and never leaves the rail.</summary>
+    private bool ResolveRailTarget(Entry entry, TrackIndexMap map, float elapsed)
+    {
+        float sFront = DeadReckoning.ExtrapolateS(entry.FrontState.S, entry.FrontState.V, elapsed);
+        float sRear = DeadReckoning.ExtrapolateS(entry.RearState.S, entry.RearState.V, elapsed);
+        if (!map.TryGetLocalPoint(entry.FrontState.EdgeId, sFront, out Vector3 front, out Vector3 fwd) ||
+            !map.TryGetLocalPoint(entry.RearState.EdgeId, sRear, out Vector3 rear, out _))
+            return false;
+        Vector3 axis = front - rear;
+        entry.TargetPos = (front + rear) * 0.5f;
+        entry.TargetRot = Quaternion.LookRotation(axis.sqrMagnitude > 0.01f ? axis : fwd);
+        return true;
+    }
+
     /// <summary>Advance smoothing + keep the hardening honest while components finish initializing.
     /// Call once per frame. Also pumps the mechanism-B reconcile (coupler truth + baseline replay)
     /// on its own slower cadence.</summary>
-    public void Tick(float dt)
+    public void Tick(float dt, TrackIndexMap map)
     {
         _ghosts.Tick(dt);
         float t = Mathf.Clamp01(LerpRate * dt);
@@ -387,6 +418,7 @@ public sealed class RealCarSync
             {
                 if (entry.Car == null || !entry.HasTarget) continue;
                 if (harden) HardenCar(entry.Car);
+                if (entry.Railed) ResolveRailTarget(entry, map, now - entry.SnapAt); // 03 §5 dead reckoning
                 Transform tr = entry.Car.transform;
                 if ((entry.TargetPos - tr.position).sqrMagnitude > SnapDistance * SnapDistance)
                 {
@@ -429,6 +461,7 @@ public sealed class RealCarSync
                 entries[i].HasTarget = true; // keep the current transform as target until the next snapshot
                 entries[i].TargetPos = pooled.transform.position;
                 entries[i].TargetRot = pooled.transform.rotation;
+                entries[i].Railed = false; // hold static until the next snapshot re-establishes bogie states
                 Map(pooled, def.Cars[i].Id);
                 claimed++;
             }
@@ -551,6 +584,7 @@ public sealed class RealCarSync
                 entry.TargetPos = pos;
                 entry.TargetRot = rot;
                 entry.HasTarget = true;
+                entry.Railed = false; // this Apply's snapshot loop (railed branch) sets it true next
                 Map(spawned, entry.Def.Id);
                 HardenCar(spawned);
                 MirrorCargo(spawned, entry.Def);

@@ -214,7 +214,7 @@ public sealed class TrainSync : IDisposable
             CaptureAndStream();
         }
 
-        _remote.Tick((float)dt);
+        _remote.Tick((float)dt, _map);
     }
 
     /// <summary>M3.5b, joined clients only: the local SP world's own cars are NOT the session's
