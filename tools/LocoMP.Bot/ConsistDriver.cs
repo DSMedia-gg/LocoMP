@@ -19,11 +19,20 @@ public sealed class ConsistDriver
     // 2026-08-04). --car-geometry streams each car at its real coupler pitch AND seats its bogies
     // at their real insets (the host logs a measured paste-me hint) — DV places the spawned body
     // from the bogie track points, so a guessed inset shifts the body within its span (G3′ round 2:
-    // rear joint wide). Consecutive cars queue nose-to-tail plus DV's own 0.3 m separation
-    // (CarSpawner.SEPARATION_BETWEEN_TRAIN_CARS). --car-lengths (pitch only) keeps the old
-    // min(3.5, len/4) inset guess.
+    // rear joint wide). --car-lengths (pitch only) keeps the old min(3.5, len/4) inset guess.
+    //
+    // Inter-car gap = the COMPRESSED coupled rest, NOT DV's spawn separation. DV lays fresh cars
+    // SEPARATION_BETWEEN_TRAIN_CARS (0.3 m; CarSpawner) apart and THEN couples them; the coupler
+    // joint (Coupler.CoupleTo sets each anchor = couplerPos − forward·0.1) pulls the pair to a
+    // ~0.2 m coupled rest. A real host streams its physically-coupled, already-compressed bogies,
+    // but the bot SYNTHESISES positions — stream the 0.3 m spawn gap and the replicas sit ~0.1 m
+    // too wide, so DV's chain-hook proximity check (check position 0.25 m inward per coupler,
+    // ~1.4 m range) loses its curvature margin and never hooks: the pair renders gapped + unlinked
+    // until claimed (Cody's G3 tuning find, 2026-08-05 — a DE2 pair gapped at its 7.49 m rest pitch,
+    // hooked flush only when hand-tightened). 0.2 m is the joint's OWN rest, so it is both correct
+    // and collision-safe (never overlaps).
     private const double DefaultCarLength = 16.0;
-    private const double CarSeparation = 0.3;
+    private const double CoupledCouplerGap = 0.2;
     private const double BogieInset = 3.5;
 
     // Distinct per driver within a process AND across processes/restarts: the token names the
@@ -80,7 +89,7 @@ public sealed class ConsistDriver
             _lengths[i] = len;
             _frontInsets[i] = double.IsNaN(g.FrontInset) ? Math.Min(BogieInset, len / 4) : g.FrontInset;
             _rearInsets[i] = double.IsNaN(g.RearInset) ? Math.Min(BogieInset, len / 4) : g.RearInset;
-            if (i > 0) _offsets[i] = _offsets[i - 1] + _lengths[i - 1] + CarSeparation;
+            if (i > 0) _offsets[i] = _offsets[i - 1] + _lengths[i - 1] + CoupledCouplerGap;
         }
         double totalLength = _offsets[_carCount - 1] + _lengths[_carCount - 1];
         _walker = new TopologyWalker(topology, seed, tailCapacityM: totalLength + 100, startEdgeId);

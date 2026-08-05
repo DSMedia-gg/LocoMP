@@ -16,7 +16,10 @@ namespace LocoMP.Core.Tests;
 /// car BY ITS BOGIES, so the bot must stream bogie points at each car's REAL coupler pitch and
 /// REAL per-end bogie insets — the min(3.5, len/4) inset guess left the rear joint wide even with
 /// a measured pitch. --car-geometry carries all three per car; --car-lengths (pitch only) keeps
-/// the guess for older hosts' hints.
+/// the guess for older hosts' hints. The bot separates consecutive cars by the COMPRESSED coupled
+/// rest (0.2 m — the coupler joint's own rest), not DV's 0.3 m spawn gap: a synthesised replica
+/// streamed at the spawn gap sits too wide for DV's chain-hook proximity check and renders gapped
+/// + unlinked (Cody's live catch, 2026-08-05).
 /// </summary>
 public class CarGeometryTests
 {
@@ -80,8 +83,9 @@ public class CarGeometryTests
 
         AssertNear(20.0 - 2.0 - 6.0, Span(cars[0]), "car 0 bogie span");
         AssertNear(12.0 - 2.5 - 2.6, Span(cars[1]), "car 1 bogie span");
-        // The joint: car 0's rear coupler meets car 1's nose across DV's 0.3 m separation.
-        AssertNear(6.0 + 0.3 + 2.5, Math.Abs(cars[0].Rear.S - cars[1].Front.S), "coupler joint");
+        // The joint: car 0's rear coupler meets car 1's nose across the COMPRESSED coupled gap
+        // (0.2 m — the coupler joint's rest, not DV's 0.3 m spawn separation; 2026-08-05 tuning).
+        AssertNear(6.0 + 0.2 + 2.5, Math.Abs(cars[0].Rear.S - cars[1].Front.S), "coupler joint");
     }
 
     [Fact]
@@ -91,7 +95,23 @@ public class CarGeometryTests
         CarSnapshot[] cars = Sample(new[] { new CarGeometry(16.0), new CarGeometry(16.0) });
 
         AssertNear(16.0 - 3.5 - 3.5, Span(cars[0]), "car 0 bogie span");
-        AssertNear(3.5 + 0.3 + 3.5, Math.Abs(cars[0].Rear.S - cars[1].Front.S), "coupler joint");
+        AssertNear(3.5 + 0.2 + 3.5, Math.Abs(cars[0].Rear.S - cars[1].Front.S), "coupler joint");
+    }
+
+    [Fact]
+    public void Consecutive_cars_stream_at_the_compressed_coupled_gap_not_the_spawn_gap()
+    {
+        // Coupler-anchor to coupler-anchor across the joint is the gap ALONE once the insets are
+        // subtracted off each side — pin it at DV's coupled joint rest (0.2 m), never the 0.3 m
+        // spawn separation. Reverting the constant fails here (and the two joint asserts above).
+        CarSnapshot[] cars = Sample(new[]
+        {
+            new CarGeometry(18.0, 2.0, 3.0),
+            new CarGeometry(14.0, 4.0, 2.5),
+        });
+        double couplerToCoupler =
+            Math.Abs(cars[0].Rear.S - cars[1].Front.S) - 3.0 /* car0 rear inset */ - 4.0 /* car1 front inset */;
+        AssertNear(0.2, couplerToCoupler, "compressed coupled gap");
     }
 
     private static double Span(CarSnapshot car) => Math.Abs(car.Front.S - car.Rear.S);
