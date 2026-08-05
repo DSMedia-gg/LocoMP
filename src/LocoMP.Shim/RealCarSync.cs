@@ -756,15 +756,28 @@ public sealed class RealCarSync
     /// 2026-08-05). The only bridge from a programmatic <c>CoupleTo</c>/<c>Uncouple</c> into the
     /// chain FSM is <c>ChainCouplerCouplerAdapter</c>'s Coupled/Uncoupled subscription, and that
     /// subscription is made by a coroutine that waits FRAMES after spawn — our spawn-tick
-    /// CoupleAdjacent fires the event into a void on fresh cars. The FSM then half-restores from
-    /// the state FIELD on whichever side re-determines, leaving the observed asymmetry: one side
-    /// Attached_Tight (stiff chain, dead hook), the other Parked with a LIVE knob whose single
-    /// grab uncouples without the vanilla loosen step. Healing = disable/enable the chain script:
-    /// OnEnable re-runs DV's own Determine_Next_State → TryRestoreState, which rebuilds the
-    /// correct pair (owner Attached_Tight, partner Other_Attached_Parked) from the fields
-    /// CoupleTo DID stamp. DV's streaming optimizer toggles these scripts routinely, so the
-    /// primitive is vanilla-safe; a script that is inactive-in-hierarchy heals itself on
-    /// activation and is left alone. Being_Dragged is a player's live gesture — never touched.</summary>
+    /// CoupleAdjacent fires the event into a void on fresh cars. Healing = disable/enable the
+    /// chain script: OnEnable re-runs DV's own Determine_Next_State → TryRestoreState, which
+    /// rebuilds the pair from the <c>Coupler.state</c> fields. DV's streaming optimizer toggles
+    /// these scripts routinely, so the primitive is vanilla-safe.
+    ///
+    /// Predicate (refined 2026-08-05 after the S060 wedge survived the original heal): a coupled
+    /// pair is healthy only when (1) top-level FSM agrees it is attached, (2) the OWNER side has a
+    /// live screw + intact mutual <c>attachedTo</c> link (Entry_Attached's own postconditions —
+    /// the S060 wedge read consistent top-level but had a dead tensioner AND a dead hook), and
+    /// (3) the pair has EXACTLY ONE owner (Attached_* on one side, Other_Attached_* on the
+    /// other — DV's asymmetric-by-design invariant; two owners or zero is a wedge). Pair-level
+    /// heals stamp DV's own programmatic-couple fields first (mine Attached_Tight, partner
+    /// Parked, joint tight via <c>SetChainTight</c>) so the re-determine is DETERMINISTIC and
+    /// restores TIGHT — forced couples restoring loose was the G3′ nit; tight is the vanilla
+    /// default for a committed couple, and a loose restore hands out single-grab uncouples.
+    ///
+    /// Never touched: Being_Dragged (a live player gesture), the screw animations while coupled
+    /// (Attached_Tightening/Loosening — the F1 uncouple flow is loosen THEN grab; re-tightening
+    /// on the sweep cadence would race the player's hand), a healthy Attached_Loose pair (a
+    /// player loosened it deliberately; the screw is live and vanilla gives them that), scripts
+    /// inactive-in-hierarchy (they re-determine on activation), and pairs inside the F1
+    /// suppression window (an in-flight request holds them).</summary>
     private void ReconcileChainStates(RemoteSet set)
     {
         foreach (Entry entry in set.Cars)
@@ -786,23 +799,105 @@ public sealed class RealCarSync
                 if (transient) continue;
 
                 bool coupled = coupler.IsCoupled();
-                bool fsmSaysAttached = fsm != ChainCouplerInteraction.State.Parked
-                    && fsm != ChainCouplerInteraction.State.Dangling;
-                if (coupled == fsmSaysAttached) continue;
+                if (!coupled)
+                {
+                    // The original (proven) half: an attached-looking FSM on an uncoupled coupler
+                    // re-determines from truth. No fields to stamp — there is no pair.
+                    bool fsmSaysAttached = fsm != ChainCouplerInteraction.State.Parked
+                        && fsm != ChainCouplerInteraction.State.Dangling;
+                    if (fsmSaysAttached)
+                        HealChain(chain, null, entry, car, coupler, $"was {fsm} while uncoupled");
+                    continue;
+                }
 
-                try
+                // Coupled from here. The screw animations are sub-second live gestures.
+                if (fsm == ChainCouplerInteraction.State.Attached_Tightening_Couple
+                    || fsm == ChainCouplerInteraction.State.Attached_Loosening_Uncouple) continue;
+
+                // An in-flight request holds this pair (F1) — same rule as the coupler sweep.
+                if (coupler.coupledTo != null && coupler.coupledTo.train != null
+                    && _serverIdByCar.TryGetValue(coupler.coupledTo.train, out int partnerId)
+                    && IsPairAssertSuppressed(entry.Def.Id, partnerId)) continue;
+
+                ChainCouplerInteraction? partner = coupler.coupledTo?.ChainScript;
+                bool iOwn = IsChainOwnerState(fsm);
+                bool partnerOwns = partner != null && IsChainOwnerState(partner.CurrentState);
+
+                if (fsm == ChainCouplerInteraction.State.Parked
+                    || fsm == ChainCouplerInteraction.State.Dangling)
                 {
-                    chain.enabled = false;
-                    chain.enabled = true;
-                    string end = car.frontCoupler == coupler ? "front" : "rear";
-                    _log($"[trains] reconcile: chain FSM on car {entry.Def.Id} ({end}) was {fsm} " +
-                         $"while {(coupled ? "coupled" : "uncoupled")} — re-determined to {chain.CurrentState}");
+                    // Detached-looking while coupled (the original heal, proven in G3′): toggle
+                    // WITHOUT stamping — if the partner is a healthy owner, TryRestoreState maps
+                    // us to Other_Attached_Parked from the fields CoupleTo already stamped;
+                    // stamping ourselves tight here would steal a healthy partner's ownership.
+                    HealChain(chain, null, entry, car, coupler, $"was {fsm} while coupled");
+                    continue;
                 }
-                catch (Exception e)
-                {
-                    _log($"[trains] reconcile: chain FSM heal on car {entry.Def.Id} FAILED ({e.Message})");
-                }
+
+                // S060: the owner's screw and link are Entry_Attached postconditions — a dead
+                // tensioner (inactive screwButton) or a broken mutual link is the sub-state wedge
+                // the top-level check cannot see.
+                bool deadOwner = iOwn &&
+                    (chain.screwButton == null || !chain.screwButton.activeSelf
+                     || chain.attachedTo == null || chain.attachedTo.attachedTo != chain);
+
+                // Exactly one owner per pair (asymmetric by design). Both-own or neither-owns
+                // can settle visually "coupled" while every interactable on it is dead.
+                bool ownerCountWrong = partner != null && iOwn == partnerOwns;
+
+                if (!deadOwner && !ownerCountWrong) continue;
+
+                string why = deadOwner
+                    ? $"owner {fsm} with dead screw/link"
+                    : iOwn ? $"two owners ({fsm} both sides)" : "no owner on either side";
+                HealChain(chain, partner, entry, car, coupler, why);
             }
+        }
+    }
+
+    /// <summary>Attached_* = this side owns the chain visual; Other_Attached_* = the partner
+    /// does. CurrentState never reports the abstract Attached/Enabled superstates.</summary>
+    private static bool IsChainOwnerState(ChainCouplerInteraction.State s) =>
+        s == ChainCouplerInteraction.State.Attached_Loose
+        || s == ChainCouplerInteraction.State.Attached_Tight
+        || s == ChainCouplerInteraction.State.Attached_Tightening_Couple
+        || s == ChainCouplerInteraction.State.Attached_Loosening_Uncouple;
+
+    /// <summary>The heal primitive. With a partner (pair-level wedge) it first stamps DV's own
+    /// programmatic-couple fields — mine Attached_Tight, partner Parked, joint tight — exactly
+    /// what <c>CoupleTo(viaChainInteraction: false)</c> writes, so the re-determine on both sides
+    /// deterministically rebuilds owner Attached_Tight / partner Other_Attached_Parked (TIGHT
+    /// restore). Without a partner it only toggles; TryRestoreState reads the existing fields.</summary>
+    private void HealChain(ChainCouplerInteraction chain, ChainCouplerInteraction? partner,
+        Entry entry, TrainCar car, Coupler coupler, string why)
+    {
+        try
+        {
+            ChainCouplerInteraction.State before = chain.CurrentState;
+            if (partner != null)
+            {
+                coupler.state = ChainCouplerInteraction.State.Attached_Tight;
+                if (coupler.coupledTo != null)
+                    coupler.coupledTo.state = ChainCouplerInteraction.State.Parked;
+                coupler.SetChainTight(tight: true); // joint + field; no-ops if the joint is gone
+            }
+            chain.enabled = false;
+            chain.enabled = true;
+            if (partner != null && partner.isActiveAndEnabled)
+            {
+                // Partner second: its Determine sees us already in Attached and yields to
+                // Other_Attached_Parked (the Parked field is not restorable, by DV's own list).
+                partner.enabled = false;
+                partner.enabled = true;
+            }
+            string end = car.frontCoupler == coupler ? "front" : "rear";
+            _log($"[trains] reconcile: chain FSM on car {entry.Def.Id} ({end}) {why} — " +
+                 $"re-determined {before}→{chain.CurrentState}" +
+                 (partner != null ? $" (partner {partner.CurrentState})" : ""));
+        }
+        catch (Exception e)
+        {
+            _log($"[trains] reconcile: chain FSM heal on car {entry.Def.Id} FAILED ({e.Message})");
         }
     }
 
