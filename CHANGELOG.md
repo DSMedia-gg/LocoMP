@@ -75,8 +75,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   makes every livery line up with vanilla-perfect gaps at both ends of every car. (The game
   places a spawned car by its bogie positions, so guessed bogie offsets shifted car bodies even
   when the overall spacing was right. The older pitch-only `--car-lengths` hint still works.)
+  Coupled cars in a bot consist are now streamed at their COMPRESSED coupled spacing (the coupler
+  joint's own rest, tighter than the game's fresh-spawn gap) rather than the wider spawn gap, so
+  the chain visual hooks flush on sight instead of rendering gapped and unlinked until the consist
+  is claimed. (Real player hosts already stream their physically-coupled bogie positions, so this
+  only ever affected synthesised bot consists.)
+- **Remote trains ride smoother at speed.** Between position updates, a remote consist's smoothing
+  target is now dead-reckoned FORWARD along the rail from the last update's speed (bounded so a
+  stalled stream never runs a train away, and clamped to the track so it can't drift off a curve),
+  instead of always chasing the last-known — and already slightly stale — position. A constant-speed
+  train's visible lag collapses toward zero, with no protocol change.
 
 ### Fixed
+- **Keep driving a train whose owner disconnects.** If you were driving another player's consist on
+  a granted cab and its owner left the session, your controls used to go dead and you had to leave
+  and re-enter the cab to take it back. The set now transfers to you as its owner the moment the
+  previous owner leaves, so your drive continues uninterrupted. (You could always re-claim it by
+  re-entering; this just removes the interruption. If you can't actually simulate the cars at that
+  moment, it falls back to parking the set exactly as before.)
+- **A train that never moved no longer lingers as an un-removable ghost.** A consist that was
+  registered but never reported a single position — then lost its owner — used to sit forever as a
+  set nobody could see, adopt, or clear, with hosts quietly re-requesting it on a loop. Since it
+  never physically existed anywhere, it is now retired when its owner leaves; the money and item
+  books are unaffected (there was never a car to account for).
 - **Join churn can no longer grow a server's memory and save file forever.** Every player key the
   server ever saw used to keep a career profile and wallet for good — deliberate for real players
   (careers persist across disconnects), but join spam or ordinary public-server traffic with
