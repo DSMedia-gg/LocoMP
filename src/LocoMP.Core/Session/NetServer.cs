@@ -123,6 +123,10 @@ public sealed class NetServer : IDisposable
     /// <summary>Raised (with the player id) after a player is removed and PlayerLeft has been broadcast.</summary>
     public event Action<int>? PlayerRemoved;
 
+    /// <summary>Raised with the player key when a pristine profile is evicted at grace lapse (D20) —
+    /// host UI / server-console visibility; the eviction itself is invisible to the player.</summary>
+    public event Action<string>? ProfileEvicted;
+
     /// <summary>Pump the transport, then advance time-driven career state (claim TTLs, grace
     /// expiries, board refill) — cheap when nothing is due.</summary>
     public void Poll()
@@ -130,9 +134,17 @@ public sealed class NetServer : IDisposable
         _transport.Poll();
         CareerTick tick = Career.Tick();
         // Grace has ONE clock (the career's); a lapse fans out to every subsystem holding state
-        // for the departed player — their minted item possessions release to the world.
+        // for the departed player — their minted item possessions release to the world. The
+        // possession check runs BEFORE the release (D20: a holder of anything is not pristine;
+        // afterwards everyone holds nothing), then a pristine profile evicts — invisible to the
+        // player, and the only thing standing between join churn and unbounded heap + save growth.
         foreach (string key in tick.LapsedPlayers)
+        {
+            bool possessed = Items.HasPossessions(key);
             Items.OnGraceLapsed(key);
+            if (!possessed && Career.Registry.TryEvictPristine(key))
+                ProfileEvicted?.Invoke(key);
+        }
 
         // Re-evaluate spatial relevance as players move (D10) — throttled, and a no-op while disabled.
         // The hot relay reads the cached relevance set, so recomputing a few times a second is ample.

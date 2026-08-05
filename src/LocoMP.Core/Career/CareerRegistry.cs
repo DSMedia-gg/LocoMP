@@ -140,6 +140,50 @@ public sealed class CareerRegistry
         _graceUntilMs[playerKey] = _clock.NowMs + _config.ReconnectGraceMs;
     }
 
+    /// <summary>
+    /// Evict a PRISTINE profile whose grace just lapsed (D20). Pristine = balance still exactly the
+    /// starting grant, licenses exactly the starting floor, and no job naming the key — a profile
+    /// indistinguishable from the fresh one <see cref="Connect"/> would mint on return, so eviction
+    /// is invisible to real players while D3's "careers persist" holds for anyone who ever earned
+    /// or spent. The ledger burns the evicted grant (conservation stays one invariant); the profile
+    /// simply stops existing (absent from the next <see cref="Capture"/> — no schema change).
+    /// The caller (NetServer) is responsible for the item half of pristine: a key still possessing
+    /// items must not reach here. Shared career: the wallet and licenses are communal, so a member
+    /// profile is pristine when it carries nothing personal — nothing burns (their grant went to
+    /// the shared wallet, which stays).
+    /// </summary>
+    public bool TryEvictPristine(string playerKey)
+    {
+        if (_online.Contains(playerKey)) return false;
+        if (!_profiles.TryGetValue(playerKey, out PlayerProfile? profile)) return false;
+
+        // No job may still name the key, in any state — lapse released their live claims already,
+        // so anything left naming them (an in-flight external retire, a future state) is history
+        // worth keeping the profile for.
+        foreach (JobRecord job in _jobs.Values)
+            if (string.Equals(job.ClaimantKey, playerKey, StringComparison.Ordinal)) return false;
+
+        if (Policy.LicensesShared)
+        {
+            if (profile.Licenses.Count != 0) return false;   // personal licenses never exist here
+            if (Ledger.BalanceOf(playerKey) != 0) return false; // defense: no personal account either
+        }
+        else
+        {
+            if (Ledger.BalanceOf(playerKey) != _config.StartingBalanceCents) return false;
+            // Set-wise floor equality (the config is a list and may repeat; the profile is a set):
+            // nothing beyond the floor, nothing from the floor missing.
+            foreach (string lic in profile.Licenses)
+                if (!_config.StartingLicenses.Contains(lic)) return false;
+            foreach (string lic in _config.StartingLicenses)
+                if (!profile.Licenses.Contains(lic)) return false;
+        }
+
+        Ledger.EvictAccount(playerKey);
+        _profiles.Remove(playerKey);
+        return true;
+    }
+
     // ── the tick: expiries + deterministic board refill ──
 
     /// <summary>Advance time-driven career state. Cheap when nothing is due; call every poll.</summary>
@@ -476,6 +520,14 @@ public sealed class CareerRegistry
             if (!_graceUntilMs.ContainsKey(job.ClaimantKey))
                 _graceUntilMs[job.ClaimantKey] = now + _config.ReconnectGraceMs;
         }
+
+        // D20: every restored profile starts OFFLINE (a restart is everyone's disconnect), so each
+        // gets a grace hold — respecting any tighter one restored above. Non-pristine profiles just
+        // see a harmless lapse tick; pristine ones evict, which is how a save bloated by pre-D20
+        // join churn drains on its first load instead of carrying the dead weight forever.
+        foreach (PlayerProfile p in _profiles.Values)
+            if (!_graceUntilMs.ContainsKey(p.Key))
+                _graceUntilMs[p.Key] = now + _config.ReconnectGraceMs;
 
         _nextJobId = save.NextJobId;
         _rng = save.RngState == 0 ? 1u : save.RngState;

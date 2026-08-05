@@ -62,6 +62,18 @@ public sealed class EconomyLedger
 
     public bool ConservationHolds => SumOfBalances == TotalMinted - TotalBurned;
 
+    /// <summary>An account leaves the world entirely (D20 burn-on-evict): its whole balance burns
+    /// and the entry is removed, so conservation stays a single invariant — sum drops by exactly
+    /// what TotalBurned gains, and no zero-balance entry lingers to leak. Returns the burned
+    /// amount (0 for an account that never existed).</summary>
+    internal long EvictAccount(string account)
+    {
+        if (!_accounts.TryGetValue(account, out long balance)) return 0;
+        _accounts.Remove(account);
+        TotalBurned += balance;
+        return balance;
+    }
+
     /// <summary>Replace all state from a save (persistence v1).</summary>
     internal void Restore(IReadOnlyDictionary<string, long> accounts, long minted, long burned)
     {

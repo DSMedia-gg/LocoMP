@@ -161,6 +161,25 @@ public sealed class ServerItems
         }
     }
 
+    /// <summary>Whether this key still possesses anything, by the same attribution
+    /// <see cref="OnGraceLapsed"/> releases by: the key's scope in per-player mode, only items the
+    /// key physically carries (HolderKey) in shared career. NetServer consults this BEFORE the
+    /// lapse release when judging a profile pristine for D20 eviction — a holder of anything is
+    /// not pristine, and checking after the release would never see it.</summary>
+    internal bool HasPossessions(string key)
+    {
+        bool shared = Registry.Policy.LicensesShared;
+        string scope = Registry.Policy.InventoryScopeFor(key);
+        foreach (ItemRecord rec in Registry.Items.Values)
+        {
+            if (rec.Location != ItemLocationKind.Possessed ||
+                !string.Equals(rec.OwnerScope, scope, StringComparison.Ordinal)) continue;
+            if (shared && !string.Equals(rec.HolderKey, key, StringComparison.Ordinal)) continue;
+            return true;
+        }
+        return false;
+    }
+
     /// <summary>A player's reconnect grace lapsed (the career's clock — fanned out by NetServer.Poll):
     /// they are not coming back, so every possession still in their scope releases to the world at
     /// their disconnect pose (or the item's own last world pose when that was never known). This is

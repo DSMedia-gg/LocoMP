@@ -133,6 +133,7 @@ WorldTopology? interestTopology = topology is not null && topology.GameBuild == 
 using var server = new NetServer(udp, config, clock, restore, interestTopology);
 server.PlayerAdmitted += p => Console.WriteLine($"[server] admitted {p.Name} (id {p.Id}) — {server.PlayerCount} player(s)");
 server.PlayerRemoved += id => Console.WriteLine($"[server] removed id {id} — {server.PlayerCount} player(s)");
+server.ProfileEvicted += key => Console.WriteLine($"[career] evicted pristine profile {key} at grace lapse");
 
 var autosaver = new Autosaver(clock, opts.AutosaveSeconds * 1000L, storage, () => SaveCodec.Write(server.CaptureSave()));
 autosaver.SaveFailed += e => Console.WriteLine(
