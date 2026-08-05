@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using DV.LocoRestoration;
 using DV.OriginShift;
 using LocoMP.Core.Session;
 using LocoMP.Core.Trains;
@@ -223,6 +224,7 @@ public sealed class TrainSync : IDisposable
 
         if (PlayerManager.Car != null)
             _log("[trains] WARNING: you are inside one of your own cars — it is part of the world being cleared");
+        DetachLocoRestoration(mine);
         try
         {
             spawner.DeleteTrainCarsInstant(mine);
@@ -232,6 +234,43 @@ public sealed class TrainSync : IDisposable
         catch (Exception e)
         {
             _log($"[trains] local world clear failed: {e.Message}");
+        }
+    }
+
+    /// <summary>A restoration-tracked loco subscribes <c>OnDestroyCar → OnUnexpectedDestroy</c>,
+    /// which FIGHTS deletion: the handler re-entrantly <c>DeleteCar</c>s the partner car (NRE in
+    /// <c>PrepareTrainCarForDeleting</c> once our own loop already gutted it — the 2026-08-05
+    /// session-entry finding) and then starts a "Last resort" respawn coroutine that would
+    /// repopulate the world this clear just emptied. Detach the tracking first: stop coroutines,
+    /// disable the controller, unsubscribe the handler from cars about to die. Session-dormant is
+    /// correct — leaving the session reloads the local save (SaveSuppressor kept it untouched),
+    /// which rebuilds restoration state wholesale.</summary>
+    private void DetachLocoRestoration(List<TrainCar> doomed)
+    {
+        try
+        {
+            var doomedSet = new HashSet<TrainCar>(doomed);
+            int detached = 0;
+            foreach (LocoRestorationController ctrl in LocoRestorationController.allLocoRestorationControllers)
+            {
+                if (ctrl == null) continue;
+                bool tracksDoomed = (ctrl.loco != null && doomedSet.Contains(ctrl.loco))
+                                 || (ctrl.secondCar != null && doomedSet.Contains(ctrl.secondCar));
+                if (!tracksDoomed) continue;
+                ctrl.StopAllCoroutines();
+                ctrl.enabled = false;
+                if (ctrl.loco != null) ctrl.loco.OnDestroyCar -= ctrl.OnUnexpectedDestroy;
+                if (ctrl.secondCar != null) ctrl.secondCar.OnDestroyCar -= ctrl.OnUnexpectedDestroy;
+                detached++;
+            }
+            if (detached > 0)
+                _log($"[trains] detached {detached} loco-restoration controller(s) before the clear " +
+                     "(dormant this session; your save reload restores them)");
+        }
+        catch (Exception e)
+        {
+            // Best-effort: a failed detach reverts to the pre-fix behavior (DV self-heals loudly).
+            _log($"[trains] loco-restoration detach failed ({e.Message}) — clearing anyway");
         }
     }
 
