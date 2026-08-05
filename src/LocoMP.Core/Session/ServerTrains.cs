@@ -126,10 +126,10 @@ public sealed class ServerTrains
     public IReadOnlyDictionary<int, int> Grants => _grants;
 
     /// <summary>Owner id for consists the SERVER itself drives (the dedicated server's kinematic
-    /// coaster, M6-B.2) — never a real peer (peer ids start at 1) and never 0 (parked), so
-    /// <see cref="TrainsetRegistry.TryClaim"/> refuses to hand one to a player and the server stays
-    /// their sole authority. A player interacting with one (couple/comms) routes to this dead id and is
-    /// a harmless no-op — server trains are ambient; full player-takeover is a later refinement.</summary>
+    /// coaster, M6-B.2) — never a real peer (peer ids start at 1) and never 0 (parked). Since M6-B.3
+    /// a server-owned set IS claimable (<see cref="TrainsetRegistry.TryClaim"/> — a player may take
+    /// one over and drive it; release hands it back). A couple/comms interaction on an UNclaimed one
+    /// routes to this dead id and is a harmless no-op — server trains are ambient.</summary>
     public const int ServerOwnerId = int.MaxValue;
 
     /// <summary>Owner snapshots refused by the 03 §4 admission check (stale epoch, retired id, or
@@ -612,7 +612,9 @@ public sealed class ServerTrains
     /// <summary>Route a remote player's comms-radio action (rerail/delete) to the target car's sim
     /// owner — the owner performs the real action, its native event drives the normal path, and the
     /// owner charges the initiator via FeeExternal (M4, the CoupleRequest pattern). The command
-    /// carries the initiator peer so the fee lands on the RIGHT wallet.</summary>
+    /// carries the initiator peer so the fee lands on the RIGHT wallet. A PARKED target (owner 0)
+    /// no longer dead-ends here — the server acts itself (D21, see
+    /// <see cref="HandleParkedCommsAction"/>).</summary>
     private void HandleCommsActionRequest(int peerId, PacketReader r)
     {
         byte kind = r.ReadByte();
@@ -620,7 +622,7 @@ public sealed class ServerTrains
         Pose dest = PresenceCodec.ReadPose(r);
 
         if (!Registry.TryFindCar(carId, out TrainsetDef set)) { ProposalRejected?.Invoke(peerId, $"comms: unknown car {carId}"); return; }
-        if (set.OwnerId == 0) { ProposalRejected?.Invoke(peerId, $"comms: trainset {set.Id} is parked — nobody can act on it"); return; }
+        if (set.OwnerId == 0) { HandleParkedCommsAction(peerId, (CommsActionKind)kind, carId, set, dest); return; }
         if (set.OwnerId == peerId) return; // the requester simulates it — they act locally, nothing to route
 
         var w = new PacketWriter(32)
@@ -630,6 +632,55 @@ public sealed class ServerTrains
         PresenceCodec.WritePose(w, dest);
         w.WriteVarUInt((uint)peerId); // initiator — whose wallet the owner charges
         _transport.Send(set.OwnerId, w.ToArray(), DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>D21 — host/player authority over parked sets (the Round 2 Part 4 finding family:
+    /// once a driver disconnects after a split, NO verb worked on the leftovers). A parked target
+    /// has no owner to route to, so the server acts itself:
+    ///
+    /// <para>DELETE commits as a retire transaction through the same path as an owner's
+    /// CarDeleteNotice — def-shaped, no position needed. Free in this slice: no native price
+    /// exists without an executor, and a client-supplied price would be a client-named economy
+    /// delta (03 §9). A server-side price table is the banked follow-up.</para>
+    ///
+    /// <para>RERAIL is CLAIM-THEN-EXECUTE: a railed placement is bogie-track-point-shaped, which
+    /// only a live simulation can produce — a server-guessed pose would need topology it may not
+    /// have loaded and physics it never runs. So the server transfers ownership to the requester
+    /// (the D21 claim verb — the same TryClaim commit as HandleOwnership) and routes the command
+    /// BACK to them, now the owner-executor: their native rerail places the car on real track and
+    /// their snapshots stream the truth. The owner flip broadcasts BEFORE the command on the same
+    /// reliable-ordered channel, so the requester's Shim has adopted the cars by the time the
+    /// command lands. Rerailing a wreck adopts it — deliberate: you recover it, then drive or
+    /// release it.</para></summary>
+    private void HandleParkedCommsAction(int peerId, CommsActionKind kind, int carId, TrainsetDef set, Pose dest)
+    {
+        switch (kind)
+        {
+            case CommsActionKind.Delete:
+                if (!CommitCarDelete(carId, out string? reason))
+                    ProposalRejected?.Invoke(peerId, $"retire: {reason}");
+                return;
+
+            case CommsActionKind.Rerail:
+                if (!Registry.TryClaim(peerId, set.Id, out _, out string? claimReason))
+                {
+                    ProposalRejected?.Invoke(peerId, $"rerail claim: {claimReason}");
+                    return;
+                }
+                Broadcast(BuildOwner(set.Id, peerId), DeliveryMethod.ReliableOrdered);
+                var w = new PacketWriter(32)
+                    .WriteByte((byte)MessageType.CommsActionCommand)
+                    .WriteByte((byte)kind)
+                    .WriteVarUInt((uint)carId);
+                PresenceCodec.WritePose(w, dest);
+                w.WriteVarUInt((uint)peerId); // initiator == executor — the fee lands on themselves
+                _transport.Send(peerId, w.ToArray(), DeliveryMethod.ReliableOrdered);
+                return;
+
+            default:
+                ProposalRejected?.Invoke(peerId, $"comms: unsupported action {(byte)kind} on a parked trainset");
+                return;
+        }
     }
 
     /// <summary>The world source deleted a car natively (comms-radio Clear) — remove it everywhere so
@@ -643,26 +694,30 @@ public sealed class ServerTrains
             ProposalRejected?.Invoke(peerId, $"delete: only the owner of car {carId} may remove it");
             return;
         }
-        if (Registry.TryDeleteCar(carId, out TrainsetTransaction? txn, out int removedSetId, out string? reason))
+        if (!CommitCarDelete(carId, out string? reason))
+            ProposalRejected?.Invoke(peerId, $"delete: {reason}");
+    }
+
+    /// <summary>Commit a single-car delete plus its removal broadcasts — shared by the owner's
+    /// CarDeleteNotice and the D21 parked retire.</summary>
+    private bool CommitCarDelete(int carId, out string? reason)
+    {
+        if (!Registry.TryDeleteCar(carId, out TrainsetTransaction? txn, out int removedSetId, out reason))
+            return false;
+        // The car is gone for good, so its kinematic state must not linger and be inherited by a
+        // later set that happens to reuse the id.
+        ForgetCars(new[] { carId });
+        if (txn != null)
         {
-            // The car is gone for good, so its kinematic state must not linger and be inherited by a
-            // later set that happens to reuse the id.
-            ForgetCars(new[] { carId });
-            if (txn != null)
-            {
-                BroadcastTransaction(txn);
-            }
-            else
-            {
-                _latest.Remove(removedSetId);
-                ForgetInterest(removedSetId);
-                Broadcast(BuildRemove(removedSetId), DeliveryMethod.ReliableOrdered);
-            }
+            BroadcastTransaction(txn);
         }
         else
         {
-            ProposalRejected?.Invoke(peerId, $"delete: {reason}");
+            _latest.Remove(removedSetId);
+            ForgetInterest(removedSetId);
+            Broadcast(BuildRemove(removedSetId), DeliveryMethod.ReliableOrdered);
         }
+        return true;
     }
 
     // ── packet builders ──
