@@ -545,12 +545,29 @@ public sealed class RealCarSync
         // Paste-me hint (livery/start-edge pattern): a bot streams its own car positions and only
         // the game knows real coupler pitches — its uniform 16 m guess leaves real cars floating
         // apart, and the forced couple across the gap wedges DV's chain FSM half-dead (G3′
-        // 2026-08-04). Measured off the cars just spawned; invariant "." so the line always pastes.
-        var pitches = new string[set.Cars.Length];
+        // 2026-08-04). Pitch alone is not enough: DV seats the spawned body from the streamed
+        // BOGIE track points, so the bot's inset guess shifted each car within its span and left
+        // the rear joint wide (G3′ round 2). Everything measures in the car's LOCAL frame — the
+        // coupler anchors and bogie pivots are direct children of the pivot, so local Z is the
+        // along-car axis by construction (PivotTo*CouplerZOffset is DV's own accessor for it).
+        // Measured off the cars just spawned; invariant "." so the line always pastes.
+        var geom = new string[set.Cars.Length];
         for (int i = 0; i < set.Cars.Length; i++)
-            pitches[i] = (set.Cars[i].Car?.InterCouplerDistance ?? 16f)
-                .ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
-        _log($"[trains] bot spacing hint: --car-lengths {string.Join(",", pitches)}  (real coupler pitch per car)");
+        {
+            TrainCar? car = set.Cars[i].Car;
+            float len = car?.InterCouplerDistance ?? 16f;
+            float frontInset = Mathf.Min(3.5f, len / 4f); // mirror the bot's guess if unmeasurable
+            float rearInset = frontInset;
+            if (car != null && car.FrontBogie != null && car.RearBogie != null)
+            {
+                frontInset = car.PivotToFrontCouplerZOffset - car.FrontBogie.transform.localPosition.z;
+                rearInset = car.RearBogie.transform.localPosition.z - car.PivotToRearCouplerZOffset;
+            }
+            geom[i] = string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "{0:F2}:{1:F2}:{2:F2}", len, frontInset, rearInset);
+        }
+        _log($"[trains] bot spacing hint: --car-geometry {string.Join(",", geom)}  " +
+             "(coupler pitch : front bogie inset : rear bogie inset, per car)");
         return true;
     }
 

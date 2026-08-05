@@ -38,7 +38,8 @@ public sealed class BotOptions
     public long StartEdge = -1;         // ghost start edge (host logs the nearest one); -1 = walker's pick
     public bool Listen;                 // M3.5b: HOST the session (bot = server + world source)
     public string[] Liveries = Array.Empty<string>(); // real livery ids for the consist (host logs a hint)
-    public double[] CarLengths = Array.Empty<double>(); // real coupler pitch per car (host logs a hint)
+    public double[] CarLengths = Array.Empty<double>(); // real coupler pitch per car (legacy hint; insets guessed)
+    public CarGeometry[] CarGeometries = Array.Empty<CarGeometry>(); // pitch + real bogie insets per car (host logs the hint)
     public string CargoId = "";         // cargo id loaded onto the consist's wagons
     public float CargoAmount = 0f;      // 0 = the car's capacity
     public int DerailCar = 0;           // 1-based consist car streamed as DERAILED at --at (0 = none)
@@ -64,6 +65,12 @@ public sealed class BotOptions
     public string ClearCar = "";        // game plate to delete (clear) once joined
 
     public HandshakeRequest ToIdentity() => new(ProtocolVersion.Current, GameBuild, ModVersion, ModListHash);
+
+    /// <summary>The consist geometry the driver should stream: --car-geometry wins outright;
+    /// bare --car-lengths keeps its pitch with NaN insets (driver falls back to its guess).</summary>
+    public CarGeometry[] ConsistGeometry() => CarGeometries.Length > 0
+        ? CarGeometries
+        : CarLengths.Select(l => new CarGeometry(l)).ToArray();
 
     /// <summary>The bot ships in the same tree as the mod, so the single version source
     /// (Directory.Build.props) already stamps this assembly — strip the SDK's "+sha" suffix.</summary>
@@ -115,6 +122,10 @@ public sealed class BotOptions
                         o.CarLengths = Next().Split(',', StringSplitOptions.RemoveEmptyEntries)
                             .Select(s => double.Parse(s, CultureInfo.InvariantCulture)).ToArray();
                         break;
+                    case "--car-geometry":
+                        o.CarGeometries = Next().Split(',', StringSplitOptions.RemoveEmptyEntries)
+                            .Select(ParseCarGeometry).ToArray();
+                        break;
                     case "--cargo":
                     {
                         string[] parts = Next().Split(':');
@@ -154,6 +165,17 @@ public sealed class BotOptions
             return null;
         }
         return o;
+    }
+
+    private static CarGeometry ParseCarGeometry(string s)
+    {
+        string[] parts = s.Split(':');
+        if (parts.Length != 3)
+            throw new ArgumentException($"'{s}' — expected len:frontInset:rearInset (paste the host's hint)");
+        return new CarGeometry(
+            double.Parse(parts[0], CultureInfo.InvariantCulture),
+            double.Parse(parts[1], CultureInfo.InvariantCulture),
+            double.Parse(parts[2], CultureInfo.InvariantCulture));
     }
 
     private static Pose ParsePoint(string s)
@@ -209,10 +231,14 @@ Usage: LocoMP.Bot [options]
   --livery <a,b,c>       real livery ids for the consist (first = car 1, rest cycle) —
                          paste the host log's 'bot livery hint' so the consist spawns
                          as REAL cars in the game instead of ghost boxes
-  --car-lengths <a,b,c>  real coupler pitch per car in metres (fewer values than cars:
-                         last repeats) — paste the host log's 'bot spacing hint' so real
-                         cars sit buffer-to-buffer instead of the uniform 16 m pitch
-                         (a gap wedges DV's chain FSM into a half-dead coupled state)
+  --car-geometry <l:f:r,...>  real geometry per car (coupler pitch : front bogie inset :
+                         rear bogie inset, metres; fewer entries than cars: last repeats) —
+                         paste the host log's 'bot spacing hint' so real cars sit
+                         buffer-to-buffer for every livery (a gap wedges DV's chain FSM
+                         into a half-dead coupled state; DV seats cars by their BOGIES,
+                         so guessed insets shift the body and leave a joint wide)
+  --car-lengths <a,b,c>  pitch-only spacing (older hosts' hint format) — bogie insets
+                         fall back to the min(3.5, len/4) guess
   --cargo <id[:amt]>     load this cargo onto the consist's wagons (amt default: full)
   --derail-car <n>       stream consist car n (1-based) as DERAILED at the --at point —
                          a joining client then exercises the null-track spawn path

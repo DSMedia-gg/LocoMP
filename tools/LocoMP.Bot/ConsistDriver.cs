@@ -16,9 +16,12 @@ public sealed class ConsistDriver
     // Ghost geometry: DV cars are 10–25 m; a uniform pitch is fine for ghost BOXES, but real cars
     // (--livery) keep their real sizes — a wrong pitch leaves them floating apart (or overlapping),
     // and the forced couple across the gap wedges DV's chain FSM into a half-dead state (G3′,
-    // 2026-08-04). --car-lengths streams each car at its real coupler pitch (the host logs a
-    // measured paste-me hint); consecutive cars queue nose-to-tail plus DV's own 0.3 m separation
-    // (CarSpawner.SEPARATION_BETWEEN_TRAIN_CARS). The bogie sits inset from each car end.
+    // 2026-08-04). --car-geometry streams each car at its real coupler pitch AND seats its bogies
+    // at their real insets (the host logs a measured paste-me hint) — DV places the spawned body
+    // from the bogie track points, so a guessed inset shifts the body within its span (G3′ round 2:
+    // rear joint wide). Consecutive cars queue nose-to-tail plus DV's own 0.3 m separation
+    // (CarSpawner.SEPARATION_BETWEEN_TRAIN_CARS). --car-lengths (pitch only) keeps the old
+    // min(3.5, len/4) inset guess.
     private const double DefaultCarLength = 16.0;
     private const double CarSeparation = 0.3;
     private const double BogieInset = 3.5;
@@ -36,6 +39,8 @@ public sealed class ConsistDriver
     private readonly int _carCount;
     private readonly double[] _offsets; // head-of-consist → nose of car i, along the walker's path
     private readonly double[] _lengths; // coupler pitch of car i
+    private readonly double[] _frontInsets; // nose → front bogie pivot of car i
+    private readonly double[] _rearInsets;  // rear coupler → rear bogie pivot of car i
     private double _speed; // mutable: a granted player's throttle input scales it (M3.5c)
     private readonly double _baseSpeed;
     private readonly Action<string> _log;
@@ -57,16 +62,24 @@ public sealed class ConsistDriver
 
     public ConsistDriver(WorldTopology topology, int carCount, double speed, int seed, string name, Action<string> log,
                          uint? startEdgeId = null, string[]? liveries = null, string cargoId = "", float cargoAmount = 0f,
-                         int derailCarIndex = -1, Pose derailPose = default, double[]? carLengths = null)
+                         int derailCarIndex = -1, Pose derailPose = default, CarGeometry[]? carGeometry = null)
     {
         _carCount = Math.Max(1, carCount);
         _offsets = new double[_carCount];
         _lengths = new double[_carCount];
+        _frontInsets = new double[_carCount];
+        _rearInsets = new double[_carCount];
         for (int i = 0; i < _carCount; i++)
         {
-            _lengths[i] = carLengths is { Length: > 0 }
-                ? carLengths[Math.Min(i, carLengths.Length - 1)]
-                : DefaultCarLength;
+            // Fewer entries than cars: last repeats (the --car-lengths convention). A default
+            // struct (no geometry at all) has Length 0 → the uniform ghost-box pitch.
+            CarGeometry g = carGeometry is { Length: > 0 }
+                ? carGeometry[Math.Min(i, carGeometry.Length - 1)]
+                : default;
+            double len = g.Length > 0 ? g.Length : DefaultCarLength;
+            _lengths[i] = len;
+            _frontInsets[i] = double.IsNaN(g.FrontInset) ? Math.Min(BogieInset, len / 4) : g.FrontInset;
+            _rearInsets[i] = double.IsNaN(g.RearInset) ? Math.Min(BogieInset, len / 4) : g.RearInset;
             if (i > 0) _offsets[i] = _offsets[i - 1] + _lengths[i - 1] + CarSeparation;
         }
         double totalLength = _offsets[_carCount - 1] + _lengths[_carCount - 1];
@@ -151,9 +164,8 @@ public sealed class ConsistDriver
             int gi = Math.Min(i, _carCount - 1);
             double offset = _offsets[gi];
             double len = _lengths[gi];
-            double inset = Math.Min(BogieInset, len / 4); // short cars: keep both bogies inside
-            BogieState? front = _walker.Behind(offset + inset, (float)_speed);
-            BogieState? rear = _walker.Behind(offset + len - inset, (float)_speed);
+            BogieState? front = _walker.Behind(offset + _frontInsets[gi], (float)_speed);
+            BogieState? rear = _walker.Behind(offset + len - _rearInsets[gi], (float)_speed);
             if (front is null || rear is null) return; // trail history still building — wait
             cars[i] = CarSnapshot.Railed(front.Value, rear.Value);
         }
