@@ -57,8 +57,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   crew and never dump on anyone's departure.
 - **Bots can keep a stable identity across reconnects** (`--player-key`): required for testing
   the reconnect-grace flows; with `--count`, each bot gets a distinct derived key.
+- **Bot consists now sit buffer-to-buffer like real trains** (`--car-geometry`). When a host
+  renders a bot's consist as real cars, the host log prints a measured spacing hint — each car's
+  real coupler pitch plus where its bogies actually sit — and pasting that line onto the bot
+  makes every livery line up with vanilla-perfect gaps at both ends of every car. (The game
+  places a spawned car by its bogie positions, so guessed bogie offsets shifted car bodies even
+  when the overall spacing was right. The older pitch-only `--car-lengths` hint still works.)
 
 ### Fixed
+- **Chain couplers on remote consists can no longer wedge half-dead.** The once-a-second truth
+  sweep now heals the chain VISUALS as well as the couplings: a chain whose animation state
+  contradicts its coupler re-runs the game's own state restore, and two deeper wedges are now
+  caught too — a "coupled" chain whose hook AND tensioner had both gone dead (it looked attached
+  while refusing all interaction, and could lie about being coupled after a split), and pairs
+  where both sides (or neither side) claimed to own the chain. Healed and programmatically
+  coupled pairs restore SCREWED TIGHT, matching what the game does for its own committed
+  couplings — a loose restore let a single grab uncouple a train that should have needed the
+  screw loosened first. Deliberate loosening by a player is left alone.
+- **Joining a session no longer trips the game's loco-restoration system.** Entering another
+  player's session clears your own world's trains (your save is untouched and returns when you
+  reload it). If one of those trains was a restoration-project loco, the game's restoration
+  tracker fought the clear: an error mid-delete, then a "last resort" respawn that dropped its
+  loco back into the session's world. Restoration tracking is now put to sleep for the session
+  before the clear — your restoration progress is unaffected and everything returns with your
+  save.
+- **A restarted bot can no longer poison the host's world save.** Bot consists used a fixed
+  identity, so a bot re-run after an unclean exit could collide with cars an earlier run left in
+  the host's save — real-car spawning then failed permanently ("same key already added") and the
+  consist fell back to ghost boxes forever. Bot identities are now unique per launch.
 - **A failed connection attempt can no longer crash the client.** If the server vanished (or was
   unreachable) at exactly the wrong moment during a connect attempt, the network library could
   report the failure without a connection object attached — and LocoMP's handler crashed on it,
