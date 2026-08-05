@@ -48,6 +48,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   field no longer triggers game hotkeys. (Network protocol bumped — both sides must run this build,
   and older/newer mixes still refuse with a readable reason in both directions.)
 
+- **Abandoned trains can finally be claimed, cleaned up, and recovered.** When a player
+  disconnects, their trains stay parked where they stood — but until now nobody could do anything
+  with them: no verb worked, and a consist split near your yard throat was stranded forever.
+  Three verbs now exist. CLAIM: step into the cab of a parked train and it becomes yours — you
+  simulate it, drive it, couple it, exactly as if you had spawned it. DELETE: the comms radio's
+  Clear mode works on parked cars now (the host's radio too — it used to refuse on any car another
+  player had brought); the server retires the car for everyone. RERAIL: pointing the radio's
+  rerail mode at a parked derailed car claims the wreck for you and your game performs the real
+  rerail — recover it, then drive it or walk away and it parks again when you leave. Parked-car
+  deletes and non-host rerails are free for now; proper billing arrives with the server-side
+  price table. (No protocol change — older clients coexist, they just lack the new verbs.)
+
 ### Changed
 - **Shared careers now release a departing player's carried host items.** When a guest carrying
   one of the host's real items disconnected from a shared-career session, the item used to stay
@@ -65,6 +77,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the overall spacing was right. The older pitch-only `--car-lengths` hint still works.)
 
 ### Fixed
+- **Join churn can no longer grow a server's memory and save file forever.** Every player key the
+  server ever saw used to keep a career profile and wallet for good — deliberate for real players
+  (careers persist across disconnects), but join spam or ordinary public-server traffic with
+  throwaway identities accumulated dead profiles without bound (a 24-hour churn soak grew the
+  save to 3.6 MB of ghosts). Now, when a departed player's reconnect grace runs out and their
+  career is completely untouched — starting money to the cent, starting licenses, no jobs, no
+  items — the profile is evicted and its starting grant is burned back out of the economy, so the
+  money books still balance exactly. Anyone who ever earned, spent, or held anything keeps their
+  career forever, exactly as before; a returning evicted player just gets the identical fresh
+  start they would have found anyway. Old bloated saves drain automatically the first time they
+  are loaded.
 - **Chain couplers on remote consists can no longer wedge half-dead.** The once-a-second truth
   sweep now heals the chain VISUALS as well as the couplings: a chain whose animation state
   contradicts its coupler re-runs the game's own state restore, and two deeper wedges are now
