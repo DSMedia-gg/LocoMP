@@ -238,6 +238,45 @@ public sealed class RealCarSync
         DespawnEntries(set);
     }
 
+    /// <summary>D21 adoption: the server just made US the sim owner of this set (a claimed parked
+    /// wreck), so its replicas stop being replicas — hand every live TrainCar over to local
+    /// simulation, in the order of <paramref name="def"/>'s cars, softened back to ordinary
+    /// physics. ATOMIC: fails with nothing changed unless EVERY car of the def is live here — a
+    /// ghost, unspawned, or dematerialized set has no physical cars to adopt (the caller releases
+    /// the claim instead of simulating what it cannot see).</summary>
+    public bool TryAdopt(TrainsetDef def, out TrainCar[] cars)
+    {
+        cars = Array.Empty<TrainCar>();
+        if (_ghostSets.Contains(def.Id)) return false;
+        if (!_sets.TryGetValue(def.Id, out RemoteSet? set) || !set.Spawned) return false;
+
+        var byId = new Dictionary<int, TrainCar>();
+        foreach (Entry entry in set.Cars)
+            if (entry.Car != null) byId[entry.Def.Id] = entry.Car;
+
+        var adopted = new TrainCar[def.Cars.Count];
+        for (int i = 0; i < adopted.Length; i++)
+        {
+            if (!byId.TryGetValue(def.Cars[i].Id, out TrainCar car)) return false;
+            adopted[i] = car;
+        }
+
+        _sets.Remove(def.Id);
+        _respawns.Remove(def.Id);
+        foreach (TrainCar car in adopted)
+        {
+            if (_destroyHooks.TryGetValue(car, out Action onGone))
+            {
+                car.OnCarAboutToBeDestroyed -= onGone;
+                _destroyHooks.Remove(car);
+            }
+            Unmap(car);
+            SoftenCar(car);
+        }
+        cars = adopted;
+        return true;
+    }
+
     public void Clear()
     {
         foreach (RemoteSet set in _sets.Values) DespawnEntries(set);
@@ -591,6 +630,26 @@ public sealed class RealCarSync
         // local-simulation concern this car doesn't have.
         if (car.FrontBogie != null) car.FrontBogie.DistanceTrackingEnabled = false;
         if (car.RearBogie != null) car.RearBogie.DistanceTrackingEnabled = false;
+    }
+
+    /// <summary>The inverse of <see cref="HardenCar"/>, for adoption (D21): everything local
+    /// simulation needs comes back. The rigidbody sweep un-kinematics everything the harden swept —
+    /// on the exterior shell (body + bogies) every rb is dynamic natively, and interiors live on a
+    /// separate loaded object this sweep never reaches. A parked car wakes stationary (zeroed
+    /// velocities), which is exactly what parked means.</summary>
+    private static void SoftenCar(TrainCar car)
+    {
+        car.preventDelete = false;
+        foreach (Coupler coupler in car.couplers)
+        {
+            if (coupler != null) coupler.preventAutoCouple = false;
+        }
+        foreach (Rigidbody rb in car.GetComponentsInChildren<Rigidbody>(true))
+        {
+            if (rb.isKinematic) rb.isKinematic = false;
+        }
+        if (car.FrontBogie != null) car.FrontBogie.DistanceTrackingEnabled = true;
+        if (car.RearBogie != null) car.RearBogie.DistanceTrackingEnabled = true;
     }
 
     /// <summary>Registration-time cargo, mirrored onto the logic car so the load is visible and

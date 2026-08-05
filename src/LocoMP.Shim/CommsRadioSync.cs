@@ -27,11 +27,17 @@ namespace LocoMP.Shim;
 ///    host sends <c>NotifyCarDeleted</c> with the id snapshotted before the destroy, and the server
 ///    removes it everywhere.
 ///
-/// 3. REMOTE initiation. On a joined client the target is a host-owned replica; the confirm prefix
+/// 3. REMOTE initiation. When the target is a REPLICA (not locally simulated — the predicate is
+///    per-car since D21, not per-role: the host's radio on a parked replica used to run straight
+///    into its own hardening, which was the "radio delete refused" finding), the confirm prefix
 ///    SUPPRESSES the local mutation and sends a <c>CommsActionRequest</c> (the ChainHook pattern).
-///    The server routes it to the car's owner (the host), which runs this handler's command executor:
-///    it performs the real rerail/delete and charges the INITIATOR via <c>FeeExternal</c> with their
-///    peer id. Remote summon is banked (spawning a new car at a remote location is a later slice).
+///    The server routes it to the car's owner — or, for a PARKED target, acts itself (D21):
+///    delete commits as a server retire, rerail claims the set for the initiator and routes the
+///    command back to them (their adoption has landed first, same ordered channel). EVERY client
+///    subscribes to the command executor now, guarded to own cars — a routed command must never
+///    act on a replica. Fees still burn only through the world source (the host); a non-host
+///    executor waives them with a log line — the server-side price table is banked follow-up
+///    work. Remote summon is banked (spawning a new car at a remote location is a later slice).
 /// </summary>
 public sealed class CommsRadioSync : IDisposable
 {
@@ -72,8 +78,10 @@ public sealed class CommsRadioSync : IDisposable
         CommsRadioHook.DeleteConfirm = OnDeleteConfirm;
         CommsRadioHook.SummonConfirm = OnSummonConfirm;
 
-        // The host executes comms actions remote players routed to it.
-        if (_isHost) _client.Trains.CommsActionCommanded += OnCommanded;
+        // Every client executes comms actions the server routes to it for cars it simulates —
+        // the host for its world, and any claimer for an adopted set (D21). OnCommanded guards
+        // to own cars, so a stray command can never act on a replica.
+        _client.Trains.CommsActionCommanded += OnCommanded;
     }
 
     /// <summary>Pump from the session loop: once the comms radio exists (world loaded), subscribe to
@@ -89,7 +97,10 @@ public sealed class CommsRadioSync : IDisposable
     /// poll again — the event subscriptions survive the modes going inactive.</summary>
     public void Tick(double dt)
     {
-        if (!_isHost || _eventsHooked || !_client.Joined) return;
+        // Success events hook for EVERY role since D21: a guest deleting an ADOPTED own car must
+        // send the same CarDeleteNotice the host does, or the room keeps a ghost. Fee capture
+        // inside stays world-source-gated (ChargeSelf no-ops off-host).
+        if (_eventsHooked || !_client.Joined) return;
         _discoverAccum += dt;
         if (_discoverAccum < DiscoverIntervalSeconds) return;
         _discoverAccum = 0;
@@ -106,43 +117,43 @@ public sealed class CommsRadioSync : IDisposable
         if (_deleter != null) _deleter.CarDeleted += OnHostDeleted;
         if (_summoner != null) _summoner.CarSummoned += OnHostSummoned;
         _eventsHooked = true;
-        _log("[comms] host comms-radio fee capture installed (rerail/delete/summon)");
+        _log("[comms] comms-radio success capture installed (rerail/delete/summon)");
     }
 
     // ── confirm-state filters (return true to let the native action proceed) ──
 
     private bool OnRerailConfirm(RerailController ctrl)
     {
-        if (_isHost)
+        TrainCar car = ctrl.carToRerail;
+        // The native path runs for cars WE simulate (and for unmapped pure-local cars — not our
+        // concern). D21: the predicate is per-CAR, not per-role — the host's radio on a parked
+        // replica routes exactly like a client's, instead of failing against its own hardening.
+        if (car == null || _trains.IsLocallySimulated(car) || !_trains.TryResolveCarId(car, out int carId))
         {
             _pendingRerailPrice = ctrl.rerailPrice; // read before the deduction clears it
-            _pendingRerailLabel = PlateOf(ctrl.carToRerail);
+            _pendingRerailLabel = PlateOf(car);
             return true;
         }
-        // Client: the car is a host-owned replica — route the rerail to its owner, suppress locally.
-        TrainCar car = ctrl.carToRerail;
-        if (car == null || !_trains.TryResolveCarId(car, out int carId)) return true;
         var rot = Quaternion.LookRotation(ctrl.rerailPointWorldForward);
         Vector3 abs = ctrl.rerailPointWorldAbsPosition; // already absolute (origin-shift-corrected)
         _client.Trains.RequestCommsAction(CommsActionKind.Rerail, carId,
             new Pose(abs.x, abs.y, abs.z, rot.x, rot.y, rot.z, rot.w));
-        _log($"[comms] rerail of car {carId} routed to its owner (you pay the fee)");
+        _log($"[comms] rerail of car {carId} routed (a parked target claims the set for you)");
         return false;
     }
 
     private bool OnDeleteConfirm(CommsRadioCarDeleter ctrl)
     {
-        if (_isHost)
+        TrainCar car = ctrl.carToDelete;
+        if (car == null || _trains.IsLocallySimulated(car) || !_trains.TryResolveCarId(car, out int carId))
         {
             _pendingDeletePrice = ctrl.removePrice;
-            _pendingDeleteCarId = _trains.TryResolveCarId(ctrl.carToDelete, out int id) ? id : 0;
-            _pendingDeleteLabel = PlateOf(ctrl.carToDelete);
+            _pendingDeleteCarId = car != null && _trains.TryResolveCarId(car, out int id) ? id : 0;
+            _pendingDeleteLabel = PlateOf(car);
             return true;
         }
-        TrainCar car = ctrl.carToDelete;
-        if (car == null || !_trains.TryResolveCarId(car, out int carId)) return true;
         _client.Trains.RequestCommsAction(CommsActionKind.Delete, carId, Pose.Identity);
-        _log($"[comms] delete of car {carId} routed to its owner (you pay the fee)");
+        _log($"[comms] delete of car {carId} routed (a parked target retires server-side)");
         return false;
     }
 
@@ -174,23 +185,34 @@ public sealed class CommsRadioSync : IDisposable
     private void OnHostSummoned(TrainCar car) =>
         ChargeSelf(_pendingSummonPrice, $"summon {Label(car, "")}");
 
-    /// <summary>Burn a comms-radio fee from the host's OWN wallet (target 0). Skips free actions
-    /// (handcar rerail, player-spawned delete, non-garage summon are all priced 0 by the game).</summary>
+    /// <summary>Burn a comms-radio fee from the executor's OWN wallet (target 0). Skips free
+    /// actions (handcar rerail, player-spawned delete, non-garage summon are all priced 0 by the
+    /// game). Only the world source may report external fees (D14) — a non-host executor (a
+    /// claimer acting on an adopted set, D21) waives the fee with a log line rather than spam the
+    /// server with a doomed report; the server-side price table is the banked follow-up.</summary>
     private void ChargeSelf(float priceDollars, string label)
     {
         long cents = (long)Math.Round(priceDollars * 100.0);
         if (cents <= 0) return;
+        if (!_isHost)
+        {
+            _log($"[comms] {label}: fee waived (${priceDollars:F2} — billing for non-host actions rides the server price table)");
+            return;
+        }
         _client.Career.ReportExternalFee(cents, label, 0);
         _log($"[comms] {label}: ${priceDollars:F2} charged to your wallet");
     }
 
-    // ── host: execute a comms action a remote player routed here ──
+    // ── execute a comms action the server routed here (we simulate the target car) ──
 
     private void OnCommanded(CommsActionKind kind, int carId, Pose dest, int initiator)
     {
-        if (!_trains.TryGetLiveCar(carId, out TrainCar car) || car == null)
+        // Own cars ONLY: the server routes commands to the sim owner, and for the D21 rerail claim
+        // the adoption landed on the same ordered channel just before this — a car that is still a
+        // replica here means a stray or a mis-route, and acting on a replica is never correct.
+        if (!_trains.TryGetOwnCar(carId, out TrainCar car) || car == null)
         {
-            _log($"[comms] remote {kind} for car {carId}: no live car here (streamed out?) — ignored");
+            _log($"[comms] remote {kind} for car {carId}: not simulated here (streamed out / not adopted) — ignored");
             return;
         }
         switch (kind)
@@ -239,11 +261,17 @@ public sealed class CommsRadioSync : IDisposable
         _log($"[comms] deleted car {carId} for player {initiator} — removed from the session");
     }
 
-    /// <summary>Bill a REMOTE-initiated action to the initiator (FeeExternal with their peer id).</summary>
+    /// <summary>Bill a REMOTE-initiated action to the initiator (FeeExternal with their peer id).
+    /// World-source-gated like <see cref="ChargeSelf"/> — a non-host executor waives it.</summary>
     private void ChargeInitiator(float priceDollars, string label, int initiator)
     {
         long cents = (long)Math.Round(priceDollars * 100.0);
         if (cents <= 0) return;
+        if (!_isHost)
+        {
+            _log($"[comms] {label}: fee waived (${priceDollars:F2} — billing for non-host actions rides the server price table)");
+            return;
+        }
         _client.Career.ReportExternalFee(cents, label, initiator);
     }
 
@@ -288,7 +316,7 @@ public sealed class CommsRadioSync : IDisposable
     /// <summary>The car's plate (e.g. <c>L-013</c>), or "" when it cannot be read. <c>ID</c> reads through to
     /// the logic car, which is already unregistered by the time <c>CarDeleted</c> fires — so this throws
     /// precisely when we most want the name, which is why the plate is also snapshotted at confirm time.</summary>
-    private static string PlateOf(TrainCar car)
+    private static string PlateOf(TrainCar? car)
     {
         if (car == null) return "";
         try { return car.ID ?? ""; }
@@ -324,7 +352,7 @@ public sealed class CommsRadioSync : IDisposable
         CommsRadioHook.RerailConfirm = null;
         CommsRadioHook.DeleteConfirm = null;
         CommsRadioHook.SummonConfirm = null;
-        if (_isHost) _client.Trains.CommsActionCommanded -= OnCommanded;
+        _client.Trains.CommsActionCommanded -= OnCommanded;
         if (_eventsHooked)
         {
             if (_rerail != null) _rerail.CarRerailed -= OnHostRerailed;

@@ -88,6 +88,7 @@ public sealed class TrainSync : IDisposable
         client.Trains.View.TrainsetAdded += OnTrainsetAdded;
         client.Trains.View.TransactionApplied += OnTransaction;
         client.Trains.View.TrainsetRemoved += OnTrainsetRemoved;
+        client.Trains.View.OwnerChanged += OnOwnerChanged;
         client.TrainsetHidden += OnTrainsetHidden;
         client.Trains.View.SnapshotApplied += OnSnapshot;
         client.Trains.TrainsetRegistered += OnRegistered;
@@ -129,6 +130,17 @@ public sealed class TrainSync : IDisposable
         if (_carById.TryGetValue(carId, out car!) && car != null) return true;
         return _remote.TryGetCarByServerId(carId, out car);
     }
+
+    /// <summary>True when WE simulate this live car (self-registered or adopted). The comms radio
+    /// acts natively exactly on these; anything else mapped is a replica and ROUTES (D21 — the old
+    /// host-means-native shortcut let the host's radio run into its own hardening on parked
+    /// replicas, which is what "radio delete refused" was).</summary>
+    public bool IsLocallySimulated(TrainCar car) => _idByCar.ContainsKey(car);
+
+    /// <summary>A live car by server id ONLY if we simulate it — the comms command executor's
+    /// guard: a routed command must never act on a replica.</summary>
+    public bool TryGetOwnCar(int carId, out TrainCar car) =>
+        _carById.TryGetValue(carId, out car!) && car != null;
 
     /// <summary>Fired once when the game world this session was built on is unloaded (quit to
     /// menu, save load). The session controller closes the session — a fresh host in the new world
@@ -553,6 +565,46 @@ public sealed class TrainSync : IDisposable
         RebuildCarSetIndex();
     }
 
+    /// <summary>D21 — the ownership commit. When the server makes US the owner (a claimed parked
+    /// set: cab entry, or the rerail claim-then-execute), the replica cars ADOPT into local
+    /// simulation: softened physics, own-car bookkeeping (the same quad every bind path stamps),
+    /// coupler/destroy hooks, and a Binding so CaptureAndStream starts streaming them. The server
+    /// broadcasts the owner flip BEFORE any follow-up command on the same ordered channel, so by
+    /// the time a routed rerail lands the car is already ours. A claim that finds no live cars
+    /// here (unspawned/ghost/dematerialized) releases straight back — we never own what we cannot
+    /// simulate. Owner changes between OTHER peers need nothing: replicas follow whoever streams.</summary>
+    private void OnOwnerChanged(int trainsetId, int ownerId)
+    {
+        if (ownerId != _client.LocalId)
+        {
+            // A set we simulate being reassigned under us has no legitimate path today (park/release
+            // are our own acts) — log it rather than fight it; the server is authoritative.
+            if (_bindings.ContainsKey(trainsetId))
+                _log($"[trains] WARNING: set {trainsetId} reassigned to owner {ownerId} while bound here — keeping local cars, no longer streaming");
+            return;
+        }
+        if (_bindings.ContainsKey(trainsetId)) return; // already ours (our own claim echo)
+        if (!_client.Trains.View.Sets.TryGetValue(trainsetId, out TrainsetDef def)) return;
+
+        if (_remote.TryAdopt(def, out TrainCar[] cars))
+        {
+            for (int i = 0; i < cars.Length; i++)
+            {
+                _carById[def.Cars[i].Id] = cars[i];
+                _idByCar[cars[i]] = def.Cars[i].Id;
+                _wasDerailed[def.Cars[i].Id] = cars[i].derailed;
+                HookCar(cars[i]);
+            }
+            Bind(def, cars);
+            _log($"[trains] adopted set {trainsetId} ({cars.Length} car(s)) — simulating it locally now");
+        }
+        else
+        {
+            _log($"[trains] claimed set {trainsetId} has no live cars here — releasing it back");
+            _client.Trains.ReleaseOwnership(trainsetId);
+        }
+    }
+
     /// <summary>
     /// The server stopped streaming a distant consist to us (D10 Burst 2 interest management). Tear
     /// down its REPLICA so it doesn't stand frozen in the world forever, but leave the server-side
@@ -952,9 +1004,37 @@ public sealed class TrainSync : IDisposable
         _grantCar = car;
         if (car != null && TryAnyCarId(car, out int carId))
         {
+            // D21 claim surface: entering the cab of a PARKED set claims it — F8's "stays parked
+            // until someone claims it" finally has its claimer. A grant would be useless here
+            // (there is no sim owner to execute inputs); the ownership commit comes back as
+            // TrainsetOwner and the adoption in OnOwnerChanged makes the cars natively drivable.
+            // Sets owned by other players (and ambient server trains) keep the grant flow.
+            if (TryFindViewSet(carId, out TrainsetDef parked) && parked.OwnerId == 0)
+            {
+                _log($"[trains] entered car {carId} of parked set {parked.Id} — claiming it");
+                _client.Trains.RequestOwnership(parked.Id);
+                return;
+            }
             _log($"[trains] entered car {carId} — requesting control grant");
             _client.Trains.RequestControlGrant(carId);
         }
+    }
+
+    /// <summary>The View-side set a server car id belongs to (the client's authoritative mirror
+    /// of membership + ownership).</summary>
+    private bool TryFindViewSet(int carId, out TrainsetDef set)
+    {
+        foreach (TrainsetDef s in _client.Trains.View.Sets.Values)
+        {
+            foreach (CarDef c in s.Cars)
+            {
+                if (c.Id != carId) continue;
+                set = s;
+                return true;
+            }
+        }
+        set = null!;
+        return false;
     }
 
     /// <summary>Server car id for OWN bound cars and remotely-spawned cars alike — entering a
