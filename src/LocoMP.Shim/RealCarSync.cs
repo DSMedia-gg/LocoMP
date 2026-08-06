@@ -49,10 +49,12 @@ public sealed class RealCarSync
     // smoke finding. Coupler truth is swept every interval; a set with no live snapshot stream
     // asks the server to replay its baseline (03 §4's ResyncRequest — the server replays def AND
     // position since the orphan fix), which also re-runs the materialize distance check, healing
-    // the parked-far-consist case (Apply only ever runs on an arriving snapshot).
+    // the parked-far-consist case (Apply only ever runs on an arriving snapshot). The
+    // request/log/cadence decision lives in game-free Core (BaselineReplayPolicy) so finding #3's
+    // parked-set resync loop is pinned by tests: a baselined set polls quietly, only a set with no
+    // data yet recovers at the fast cadence and logs.
     private const float ReconcileIntervalSeconds = 1f;
     private const float StaleSnapshotSeconds = 5f;  // stream quiet this long + unspawned → replay
-    private const float ResyncRetrySeconds = 10f;   // per-set floor between baseline requests
 
     // F1 (2026-08-04 gauntlet): chain gestures on remote cars apply NATIVELY now (the gesture FSM
     // assumes a synchronous act) while the request travels to the sim owner — so until the commit
@@ -100,7 +102,8 @@ public sealed class RealCarSync
         public bool FarLogged;
         public float LastSnapshotAt;    // when Apply last saw this set (seeded at creation)
         public float NextResyncAllowed; // reconcile's per-set request throttle
-        public bool ResyncLogged;       // first request logs; retries stay quiet
+        public bool ResyncLogged;       // first fresh request logs; retries stay quiet
+        public bool EverBaselined;      // ≥1 real snapshot applied — position data in hand (finding #3)
     }
 
     private readonly Dictionary<int, RemoteSet> _sets = new();
@@ -311,6 +314,7 @@ public sealed class RealCarSync
         if (!_sets.TryGetValue(snap.TrainsetId, out RemoteSet? set) || set.Cars.Length != snap.Cars.Length) return;
 
         set.LastSnapshotAt = Time.unscaledTime;
+        set.EverBaselined = true;  // we now hold real position data for this set (finding #3)
         set.ResyncLogged = false; // the stream answered — a future silence is a new event
 
         if (!set.Spawned)
@@ -766,7 +770,10 @@ public sealed class RealCarSync
     /// not only when a transaction happens to arrive. Two directions: coupler state follows the
     /// def (below), and an unspawned set whose stream has gone quiet asks the server to replay its
     /// baseline. Scope is deliberately _sets, not the whole client view: a set absent from _sets
-    /// is ghost-delegated or interest-hidden, and both of those are decisions, not drift.</summary>
+    /// is ghost-delegated or interest-hidden, and both of those are decisions, not drift.
+    /// <para>The request/log/cadence call is <see cref="BaselineReplayPolicy"/> (game-free, tested):
+    /// a set with no data yet recovers fast and logs once; a baselined-but-parked set (finding #3)
+    /// polls quietly at the slow keep-alive cadence rather than re-logging and re-pulling forever.</para></summary>
     private void Reconcile(float now)
     {
         ReconcileCouplings();
@@ -775,11 +782,12 @@ public sealed class RealCarSync
         foreach (KeyValuePair<int, RemoteSet> kv in _sets)
         {
             RemoteSet set = kv.Value;
-            if (set.Spawned) continue;                                  // live and placed — nothing to heal
-            if (now - set.LastSnapshotAt < StaleSnapshotSeconds) continue; // stream is alive; Apply decides
-            if (now < set.NextResyncAllowed) continue;
-            set.NextResyncAllowed = now + ResyncRetrySeconds;
-            if (!set.ResyncLogged)
+            BaselineReplayPolicy.Decision d = BaselineReplayPolicy.Evaluate(
+                set.Spawned, set.EverBaselined, now - set.LastSnapshotAt,
+                StaleSnapshotSeconds, now, set.NextResyncAllowed, set.ResyncLogged);
+            if (!d.Request) continue;
+            set.NextResyncAllowed = d.NextAllowed;
+            if (d.Log)
             {
                 set.ResyncLogged = true;
                 _log($"[trains] remote consist {kv.Key} has no live stream and is not materialized — " +

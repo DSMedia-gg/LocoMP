@@ -108,6 +108,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   set nobody could see, adopt, or clear, with hosts quietly re-requesting it on a loop. Since it
   never physically existed anywhere, it is now retired when its owner leaves; the money and item
   books are unaffected (there was never a car to account for).
+- **A parked train nearby no longer spams the log with endless "re-syncing" messages.** When a train
+  is left parked with no one driving it (its owner drove off or disconnected), your game periodically
+  re-checks it so it appears the moment you walk up to it. That check used to re-announce itself and
+  re-pull the train's full data every ten seconds forever, filling the log. Now, once your game has
+  the train's position, the re-check is quiet and much less frequent — you still see the train appear
+  as you approach, without the noise. (Only a train your game has never received any data for still
+  asks for it promptly, as before.)
 - **Join churn can no longer grow a server's memory and save file forever.** Every player key the
   server ever saw used to keep a career profile and wallet for good — deliberate for real players
   (careers persist across disconnects), but join spam or ordinary public-server traffic with
