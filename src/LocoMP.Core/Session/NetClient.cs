@@ -131,6 +131,12 @@ public sealed class NetClient : IDisposable
     /// a role change, or an action rejection. Args: kind, string argument (meaning depends on kind).</summary>
     public event Action<AdminNoticeKind, string>? AdminNotice;
 
+    /// <summary>server → admin: a diagnostics snapshot, in reply to <see cref="RequestDiagnostics"/> (M5.2).</summary>
+    public event Action<ServerDiagnostics>? DiagnosticsReceived;
+
+    /// <summary>server → admin: the session ban list, in reply to <see cref="RequestBanList"/> (M5.2).</summary>
+    public event Action<IReadOnlyList<string>>? BanListReceived;
+
     public void Poll() => _transport.Poll();
 
     /// <summary>Announce the local player's pose to the server (sequenced-unreliable — latest wins).</summary>
@@ -188,6 +194,12 @@ public sealed class NetClient : IDisposable
 
     /// <summary>Lift a session ban on a key (from the ban-list view).</summary>
     public void Unban(string targetKey) => SendAdminAction(AdminActionKind.Unban, 0, targetKey);
+
+    /// <summary>Ask the server for a fresh diagnostics snapshot (reply via <see cref="DiagnosticsReceived"/>).</summary>
+    public void RequestDiagnostics() => SendAdminAction(AdminActionKind.RequestDiagnostics);
+
+    /// <summary>Ask the server for the current session ban list (reply via <see cref="BanListReceived"/>).</summary>
+    public void RequestBanList() => SendAdminAction(AdminActionKind.RequestBanList);
 
     /// <summary>Advance the join stage, forward only — later traffic of an earlier family (ordinary
     /// in-session career/item messages) must never regress the display, and nothing but the server's
@@ -256,6 +268,8 @@ public sealed class NetClient : IDisposable
                 case MessageType.InterestHide: HandleInterestHide(r); break;
                 case MessageType.JoinBurstComplete: AdvanceStage(JoinStage.Complete); break;
                 case MessageType.AdminNotice: HandleAdminNotice(r); break;
+                case MessageType.AdminDiagnostics: DiagnosticsReceived?.Invoke(AdminCodec.ReadDiagnostics(r)); break;
+                case MessageType.AdminBanList: BanListReceived?.Invoke(AdminCodec.ReadBanList(r)); break;
                 default:
                     // Stage inference (M5.1): the burst is sent world → career → items on one ordered
                     // channel, so the first message a later family claims proves every earlier family

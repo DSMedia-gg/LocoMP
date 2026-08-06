@@ -528,7 +528,29 @@ public sealed class NetServer : IDisposable
                 // host UI re-reads Moderation.BannedKeys, so no notice is needed for success.
                 _moderation.Unban(targetKey);
                 break;
+
+            case AdminActionKind.RequestDiagnostics:
+                SendAdminDiagnostics(peerId);
+                break;
+
+            case AdminActionKind.RequestBanList:
+                SendAdminBanList(peerId);
+                break;
         }
+    }
+
+    private void SendAdminDiagnostics(int peerId)
+    {
+        var w = new PacketWriter(48).WriteByte((byte)MessageType.AdminDiagnostics);
+        AdminCodec.WriteDiagnostics(w, CaptureDiagnostics());
+        _transport.Send(peerId, w.ToArray(), DeliveryMethod.ReliableOrdered);
+    }
+
+    private void SendAdminBanList(int peerId)
+    {
+        var w = new PacketWriter(48).WriteByte((byte)MessageType.AdminBanList);
+        AdminCodec.WriteBanList(w, _moderation.BannedKeys);
+        _transport.Send(peerId, w.ToArray(), DeliveryMethod.ReliableOrdered);
     }
 
     private void SendAdminNotice(int peerId, AdminNoticeKind kind, string arg)

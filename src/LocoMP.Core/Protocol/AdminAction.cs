@@ -29,6 +29,13 @@ public enum AdminActionKind : byte
 
     /// <summary>Lift a session ban on a key.</summary>
     Unban = 6,
+
+    /// <summary>Ask the server for a fresh diagnostics snapshot (reply: AdminDiagnostics). Admin-only, so
+    /// it rides the same authorised channel as the mutating verbs.</summary>
+    RequestDiagnostics = 7,
+
+    /// <summary>Ask the server for the current session ban list (reply: AdminBanList).</summary>
+    RequestBanList = 8,
 }
 
 /// <summary>

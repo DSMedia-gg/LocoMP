@@ -312,4 +312,14 @@ public enum MessageType : byte
     /// target being kicked/banned (reason, immediately before disconnect), and broadcast for shared state
     /// changes (joins paused/resumed). Display-only — the authoritative effect already happened.</summary>
     AdminNotice = 68,
+
+    /// <summary>server → admin: a diagnostics snapshot, in reply to an
+    /// <see cref="AdminActionKind.RequestDiagnostics"/>. Payload: <see cref="AdminCodec.WriteDiagnostics"/>.
+    /// Admin-gated at the request.</summary>
+    AdminDiagnostics = 69,
+
+    /// <summary>server → admin: the session ban list, in reply to an
+    /// <see cref="AdminActionKind.RequestBanList"/>. Payload: <see cref="AdminCodec.WriteBanList"/>
+    /// (count + keys). Admin-gated at the request.</summary>
+    AdminBanList = 70,
 }

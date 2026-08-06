@@ -63,6 +63,8 @@ public static class ProtocolVersion
     /// host/admin's kick / ban / promote / demote / pause-joins / unban request, and AdminNotice (68)
     /// returns the consequence (kicked/banned reason, joins paused/resumed broadcast, role change, or an
     /// authorisation rejection). JoinRejected gains two kinds — Banned (session-scoped) and JoinsPaused.
-    /// A v14 peer wouldn't know the new messages, so this is a deliberate incompatible bump.</remarks>
+    /// AdminAction also carries admin-only QUERIES (RequestDiagnostics/RequestBanList) answered by
+    /// AdminDiagnostics (69) / AdminBanList (70), so a remote admin's panel can populate. A v14 peer
+    /// wouldn't know the new messages, so this is a deliberate incompatible bump.</remarks>
     public const int Current = 15;
 }
