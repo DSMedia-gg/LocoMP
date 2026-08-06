@@ -16,10 +16,13 @@ namespace LocoMP.Core.Tests;
 /// car BY ITS BOGIES, so the bot must stream bogie points at each car's REAL coupler pitch and
 /// REAL per-end bogie insets — the min(3.5, len/4) inset guess left the rear joint wide even with
 /// a measured pitch. --car-geometry carries all three per car; --car-lengths (pitch only) keeps
-/// the guess for older hosts' hints. The bot separates consecutive cars by the COMPRESSED coupled
-/// rest (0.2 m — the coupler joint's own rest), not DV's 0.3 m spawn gap: a synthesised replica
-/// streamed at the spawn gap sits too wide for DV's chain-hook proximity check and renders gapped
-/// + unlinked (Cody's live catch, 2026-08-05).
+/// the guess for older hosts' hints. The bot separates consecutive cars by the COMPRESSED-under-
+/// tension coupled rest (−0.14 m — DV's tight-coupled buffers-touching rest, re-derived from
+/// Coupler.decompiled.cs; see ConsistDriver.DefaultCoupledCouplerGap), not DV's 0.3 m spawn gap: a
+/// synthesised replica streamed too wide sits outside DV's chain-hook proximity check and renders
+/// gapped + unlinked (Cody's live catch, 2026-08-05; the flush number is his burst-4 measurement).
+/// --coupled-gap overrides it for the whole consist so the buffer-to-buffer flush can be dialled
+/// live with no rebuild.
 /// </summary>
 public class CarGeometryTests
 {
@@ -84,8 +87,9 @@ public class CarGeometryTests
         AssertNear(20.0 - 2.0 - 6.0, Span(cars[0]), "car 0 bogie span");
         AssertNear(12.0 - 2.5 - 2.6, Span(cars[1]), "car 1 bogie span");
         // The joint: car 0's rear coupler meets car 1's nose across the COMPRESSED coupled gap
-        // (0.2 m — the coupler joint's rest, not DV's 0.3 m spawn separation; 2026-08-05 tuning).
-        AssertNear(6.0 + 0.2 + 2.5, Math.Abs(cars[0].Rear.S - cars[1].Front.S), "coupler joint");
+        // (−0.14 m — DV's tight-coupled buffers-touching rest, not the 0.3 m spawn separation;
+        // burst-4 2026-08-05 re-derivation). A literal here so reverting the default fails it.
+        AssertNear(6.0 + (-0.14) + 2.5, Math.Abs(cars[0].Rear.S - cars[1].Front.S), "coupler joint");
     }
 
     [Fact]
@@ -95,15 +99,17 @@ public class CarGeometryTests
         CarSnapshot[] cars = Sample(new[] { new CarGeometry(16.0), new CarGeometry(16.0) });
 
         AssertNear(16.0 - 3.5 - 3.5, Span(cars[0]), "car 0 bogie span");
-        AssertNear(3.5 + 0.2 + 3.5, Math.Abs(cars[0].Rear.S - cars[1].Front.S), "coupler joint");
+        AssertNear(3.5 + (-0.14) + 3.5, Math.Abs(cars[0].Rear.S - cars[1].Front.S), "coupler joint");
     }
 
     [Fact]
     public void Consecutive_cars_stream_at_the_compressed_coupled_gap_not_the_spawn_gap()
     {
         // Coupler-anchor to coupler-anchor across the joint is the gap ALONE once the insets are
-        // subtracted off each side — pin it at DV's coupled joint rest (0.2 m), never the 0.3 m
-        // spawn separation. Reverting the constant fails here (and the two joint asserts above).
+        // subtracted off each side — pin it at DV's tight-coupled buffers-touching rest (−0.14 m),
+        // never the 0.3 m spawn separation. Reverting the default fails here (and the joint asserts
+        // above). The literal doubles as the DefaultCoupledCouplerGap contract.
+        Assert.Equal(-0.14, ConsistDriver.DefaultCoupledCouplerGap, 3);
         CarSnapshot[] cars = Sample(new[]
         {
             new CarGeometry(18.0, 2.0, 3.0),
@@ -111,7 +117,27 @@ public class CarGeometryTests
         });
         double couplerToCoupler =
             Math.Abs(cars[0].Rear.S - cars[1].Front.S) - 3.0 /* car0 rear inset */ - 4.0 /* car1 front inset */;
-        AssertNear(0.2, couplerToCoupler, "compressed coupled gap");
+        AssertNear(-0.14, couplerToCoupler, "compressed coupled gap");
+    }
+
+    [Fact]
+    public void The_coupled_gap_flag_overrides_the_default_for_the_whole_consist()
+    {
+        // The live-tuning path: --coupled-gap dials buffer-to-buffer flush with no rebuild, so it must
+        // reach the streamed spacing. 0.05 is deliberately NOT the default — the coupler-to-coupler
+        // distance must track the override exactly, not the −0.14 m compressed rest.
+        BotOptions? o = BotOptions.Parse(new[] { "--coupled-gap", "0.05" });
+        Assert.NotNull(o);
+        Assert.Equal(0.05, o!.CoupledGap);
+
+        CarSnapshot[] cars = Sample(new[]
+        {
+            new CarGeometry(18.0, 2.0, 3.0),
+            new CarGeometry(14.0, 4.0, 2.5),
+        }, coupledGap: o.CoupledGap);
+        double couplerToCoupler =
+            Math.Abs(cars[0].Rear.S - cars[1].Front.S) - 3.0 - 4.0;
+        AssertNear(0.05, couplerToCoupler, "overridden coupled gap");
     }
 
     private static double Span(CarSnapshot car) => Math.Abs(car.Front.S - car.Rear.S);
@@ -122,7 +148,7 @@ public class CarGeometryTests
 
     /// <summary>Drive a two-car consist over the Loopback hub until a snapshot lands with every
     /// bogie on one edge, and return its cars.</summary>
-    private static CarSnapshot[] Sample(CarGeometry[] geometry)
+    private static CarSnapshot[] Sample(CarGeometry[] geometry, double? coupledGap = null)
     {
         var hub = new LoopbackNetwork();
         var clock = new ManualClock();
@@ -142,7 +168,7 @@ public class CarGeometryTests
         Assert.True(ghost.Joined && observer.Joined);
 
         var driver = new ConsistDriver(Loop(), carCount: 2, speed: 20, seed: 5, "Ghost", _ => { },
-            carGeometry: geometry);
+            carGeometry: geometry, coupledGap: coupledGap);
 
         for (int i = 0; i < 400; i++)
         {

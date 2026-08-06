@@ -21,18 +21,32 @@ public sealed class ConsistDriver
     // from the bogie track points, so a guessed inset shifts the body within its span (G3′ round 2:
     // rear joint wide). --car-lengths (pitch only) keeps the old min(3.5, len/4) inset guess.
     //
-    // Inter-car gap = the COMPRESSED coupled rest, NOT DV's spawn separation. DV lays fresh cars
-    // SEPARATION_BETWEEN_TRAIN_CARS (0.3 m; CarSpawner) apart and THEN couples them; the coupler
-    // joint (Coupler.CoupleTo sets each anchor = couplerPos − forward·0.1) pulls the pair to a
-    // ~0.2 m coupled rest. A real host streams its physically-coupled, already-compressed bogies,
-    // but the bot SYNTHESISES positions — stream the 0.3 m spawn gap and the replicas sit ~0.1 m
-    // too wide, so DV's chain-hook proximity check (check position 0.25 m inward per coupler,
-    // ~1.4 m range) loses its curvature margin and never hooks: the pair renders gapped + unlinked
-    // until claimed (Cody's G3 tuning find, 2026-08-05 — a DE2 pair gapped at its 7.49 m rest pitch,
-    // hooked flush only when hand-tightened). 0.2 m is the joint's OWN rest, so it is both correct
-    // and collision-safe (never overlaps).
+    // Inter-car gap = the COMPRESSED-under-tension coupled rest, NOT DV's spawn separation. DV lays
+    // fresh cars SEPARATION_BETWEEN_TRAIN_CARS (0.3 m; CarSpawner) apart and THEN couples them, so a
+    // real host streams already-compressed bogies — but the bot SYNTHESISES positions, so the gap it
+    // streams IS the coupled rest, and if it is too wide DV's chain-hook proximity check (check
+    // position 0.25 m inward per coupler, ~1.4 m range) loses its curvature margin and never hooks:
+    // the pair renders gapped + unlinked until claimed (Cody's G3 tuning find, 2026-08-05).
+    //
+    // Re-derived from Coupler.decompiled.cs (burst-4 follow-up, 2026-08-05 live): a default couple is
+    // Attached_Tight (CoupleTo, !viaChainInteraction), and SetChainTight(true) does two things —
+    //   (a) StartJointAdaptation(0.2) drives the rigid joint's linearLimit (MAX distance between the
+    //       two anchors) to 0.2 m, and each anchor sits couplerPos − forward·(0.2/2) = 0.1 m BEHIND
+    //       its own coupler on the body side, so at the limit the two COUPLER transforms meet at
+    //       0.2 − 0.1 − 0.1 = 0.0 m (buffer-to-buffer), not 0.2 m; and
+    //   (b) EnableBufferSpring compresses further (targetPosition 0.3 m, 4 MN spring) and DISABLES the
+    //       fake buffer colliders, so the rest sits slightly NEGATIVE — the coupler transforms overlap
+    //       a touch as the physical buffers press. The old 0.2 m was the ANCHOR-separation limit read
+    //       as if it were the coupler gap — a tenth-plus too wide, which is exactly why the earlier
+    //       fix helped but did not reach flush.
+    // Cody's live burst-4 measurement pins the equilibrium: at the 0.2 m gap the streamed replicas sat
+    // ~0.34 m too WIDE across DM3/S060/DH4 (DE2 ≈0.30, the short shunter), so the flush coupled gap is
+    // 0.2 − 0.34 ≈ −0.14 m — consistent with the decompile's "compressed past tip-contact". That is the
+    // new default; a specific curve/livery can still be dialled with --coupled-gap (live, no rebuild)
+    // or overridden per car via --car-geometry pitch. Negative is physical here: the buffer colliders
+    // are off when tight, so a slight coupler-transform overlap is the buffers touching, not a clip.
     private const double DefaultCarLength = 16.0;
-    private const double CoupledCouplerGap = 0.2;
+    public const double DefaultCoupledCouplerGap = -0.14;
     private const double BogieInset = 3.5;
 
     // Distinct per driver within a process AND across processes/restarts: the token names the
@@ -50,6 +64,7 @@ public sealed class ConsistDriver
     private readonly double[] _lengths; // coupler pitch of car i
     private readonly double[] _frontInsets; // nose → front bogie pivot of car i
     private readonly double[] _rearInsets;  // rear coupler → rear bogie pivot of car i
+    private readonly double _coupledGap;    // rear coupler of car i → nose of car i+1 (--coupled-gap)
     private double _speed; // mutable: a granted player's throttle input scales it (M3.5c)
     private readonly double _baseSpeed;
     private readonly Action<string> _log;
@@ -71,9 +86,11 @@ public sealed class ConsistDriver
 
     public ConsistDriver(WorldTopology topology, int carCount, double speed, int seed, string name, Action<string> log,
                          uint? startEdgeId = null, string[]? liveries = null, string cargoId = "", float cargoAmount = 0f,
-                         int derailCarIndex = -1, Pose derailPose = default, CarGeometry[]? carGeometry = null)
+                         int derailCarIndex = -1, Pose derailPose = default, CarGeometry[]? carGeometry = null,
+                         double? coupledGap = null)
     {
         _carCount = Math.Max(1, carCount);
+        _coupledGap = coupledGap ?? DefaultCoupledCouplerGap;
         _offsets = new double[_carCount];
         _lengths = new double[_carCount];
         _frontInsets = new double[_carCount];
@@ -89,7 +106,7 @@ public sealed class ConsistDriver
             _lengths[i] = len;
             _frontInsets[i] = double.IsNaN(g.FrontInset) ? Math.Min(BogieInset, len / 4) : g.FrontInset;
             _rearInsets[i] = double.IsNaN(g.RearInset) ? Math.Min(BogieInset, len / 4) : g.RearInset;
-            if (i > 0) _offsets[i] = _offsets[i - 1] + _lengths[i - 1] + CoupledCouplerGap;
+            if (i > 0) _offsets[i] = _offsets[i - 1] + _lengths[i - 1] + _coupledGap;
         }
         double totalLength = _offsets[_carCount - 1] + _lengths[_carCount - 1];
         _walker = new TopologyWalker(topology, seed, tailCapacityM: totalLength + 100, startEdgeId);

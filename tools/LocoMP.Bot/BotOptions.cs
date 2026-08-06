@@ -40,6 +40,7 @@ public sealed class BotOptions
     public string[] Liveries = Array.Empty<string>(); // real livery ids for the consist (host logs a hint)
     public double[] CarLengths = Array.Empty<double>(); // real coupler pitch per car (legacy hint; insets guessed)
     public CarGeometry[] CarGeometries = Array.Empty<CarGeometry>(); // pitch + real bogie insets per car (host logs the hint)
+    public double? CoupledGap;          // rear-coupler → next-nose gap; null = the driver's decompile-derived default
     public string CargoId = "";         // cargo id loaded onto the consist's wagons
     public float CargoAmount = 0f;      // 0 = the car's capacity
     public int DerailCar = 0;           // 1-based consist car streamed as DERAILED at --at (0 = none)
@@ -126,6 +127,7 @@ public sealed class BotOptions
                         o.CarGeometries = Next().Split(',', StringSplitOptions.RemoveEmptyEntries)
                             .Select(ParseCarGeometry).ToArray();
                         break;
+                    case "--coupled-gap": o.CoupledGap = double.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--cargo":
                     {
                         string[] parts = Next().Split(':');
@@ -239,6 +241,10 @@ Usage: LocoMP.Bot [options]
                          so guessed insets shift the body and leave a joint wide)
   --car-lengths <a,b,c>  pitch-only spacing (older hosts' hint format) — bogie insets
                          fall back to the min(3.5, len/4) guess
+  --coupled-gap <m>      rear-coupler → next-car-nose gap for the whole consist
+                         (default {ConsistDriver.DefaultCoupledCouplerGap:F2} — DV's tight-coupled rest, buffers touching;
+                         NEGATIVE = compressed, correct here since tight buffers overlap).
+                         Dial this live to trim buffer-to-buffer flush with no rebuild
   --cargo <id[:amt]>     load this cargo onto the consist's wagons (amt default: full)
   --derail-car <n>       stream consist car n (1-based) as DERAILED at the --at point —
                          a joining client then exercises the null-track spawn path
