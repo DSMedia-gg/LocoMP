@@ -56,6 +56,7 @@ public static class Main
         JobCapture.Install(harmony, log);
         WalletMirror.Install(harmony, log);
         SaveSuppressor.Install(harmony, log);
+        CarSaveFilter.Install(harmony, log);
         CommsRadioHook.Install(harmony, log);
         ManualServiceHook.Install(harmony, log);
 

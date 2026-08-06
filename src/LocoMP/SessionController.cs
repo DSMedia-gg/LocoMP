@@ -661,6 +661,9 @@ public sealed class SessionController
             _client = MakeClient(_hub.Connect(out _)); // the host is just client #1, zero latency
             _trains = new TrainSync(_client, isHost: true, _log);
             _trains.WorldUnloaded += OnWorldUnloaded;
+            // Keep remote players'/bots' replica cars OUT of the host's SP save — otherwise an autosave
+            // mid-session bakes the foreign consists in and they persist across re-hosts (2026-08-06).
+            CarSaveFilter.IsReplica = _trains.Remote.IsRemoteCar;
             _cabControls = new CabControlSync(_client, _trains, _log);
             // D13: the HOST keeps DV's native generation running — JobCapture mirrors every
             // generated job onto the server board. Only joining CLIENTS suppress.
@@ -724,6 +727,9 @@ public sealed class SessionController
             _trains = new TrainSync(_client, isHost: false, _log);
             _trains.WorldUnloaded += OnWorldUnloaded;
             _cabControls = new CabControlSync(_client, _trains, _log);
+            // Symmetric with the host arm: on a client SaveSuppressor blocks the save before this runs,
+            // but wiring it keeps the guard correct if that ever changes (every host car is a replica here).
+            CarSaveFilter.IsReplica = _trains.Remote.IsRemoteCar;
             JobGenSuppressor.Active = true;            // clients never generate either (02 §4)
             JobGenSuppressor.StopAll(_log);
             // M3.5b: the joined world is session-modified (own cars cleared, host's spawned in) —
@@ -845,6 +851,7 @@ public sealed class SessionController
         _manualService = null;
         JobGenSuppressor.Active = false;               // DV's own generation resumes outside sessions
         SaveSuppressor.Active = false;                 // native saving resumes outside sessions
+        CarSaveFilter.IsReplica = null;                // SP saves are unfiltered again (cleared before _trains dies)
         _careerToast = "";
 
         if (_client is { Joined: true }) { _client.Leave(); _client.Poll(); }
