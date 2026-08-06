@@ -201,6 +201,9 @@ public sealed class NetClient : IDisposable
     /// <summary>Ask the server for the current session ban list (reply via <see cref="BanListReceived"/>).</summary>
     public void RequestBanList() => SendAdminAction(AdminActionKind.RequestBanList);
 
+    /// <summary>Ask the server to save the world now (M5.2 "Save now").</summary>
+    public void SaveNow() => SendAdminAction(AdminActionKind.SaveNow);
+
     /// <summary>Advance the join stage, forward only — later traffic of an earlier family (ordinary
     /// in-session career/item messages) must never regress the display, and nothing but the server's
     /// sentinel may reach Complete.</summary>

@@ -132,6 +132,11 @@ public sealed class NetServer : IDisposable
     /// host UI / server-console visibility; the eviction itself is invisible to the player.</summary>
     public event Action<string>? ProfileEvicted;
 
+    /// <summary>Raised when an admin requests "Save now" (M5.2). The server has already authorised it; the
+    /// subscriber (host game / dedicated-server process) performs the actual save — <see cref="CaptureSave"/>
+    /// + write — since the file IO lives outside game-free Core.</summary>
+    public event Action? SaveRequested;
+
     /// <summary>Pump the transport, then advance time-driven career state (claim TTLs, grace
     /// expiries, board refill) — cheap when nothing is due.</summary>
     public void Poll()
@@ -535,6 +540,10 @@ public sealed class NetServer : IDisposable
 
             case AdminActionKind.RequestBanList:
                 SendAdminBanList(peerId);
+                break;
+
+            case AdminActionKind.SaveNow:
+                SaveRequested?.Invoke(); // authorised; the host/server process does the write
                 break;
         }
     }

@@ -36,6 +36,11 @@ public enum AdminActionKind : byte
 
     /// <summary>Ask the server for the current session ban list (reply: AdminBanList).</summary>
     RequestBanList = 8,
+
+    /// <summary>Ask the server to save the world now (M5.2 "Save now"). The server authorises it and
+    /// raises its SaveRequested hook; the host / dedicated-server process does the actual write (the file
+    /// IO is deliberately outside game-free Core).</summary>
+    SaveNow = 9,
 }
 
 /// <summary>

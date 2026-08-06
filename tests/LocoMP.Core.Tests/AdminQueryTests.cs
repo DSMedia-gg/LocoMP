@@ -130,4 +130,40 @@ public class AdminQueryTests
         Assert.NotNull(list);
         Assert.Contains("kB", list!);
     }
+
+    [Fact]
+    public void An_admin_save_now_raises_the_server_save_hook()
+    {
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        using var server = new NetServer(hub.Server, new ServerConfig(Identity), clock);
+        int saves = 0;
+        server.SaveRequested += () => saves++;
+
+        using var host = new NetClient(hub.Connect(out _), Identity, "Host", clock, playerKey: "kH");
+        Pump(server, new[] { host });
+
+        host.SaveNow();
+        Pump(server, new[] { host });
+        Assert.Equal(1, saves);
+    }
+
+    [Fact]
+    public void A_non_admin_save_now_does_nothing()
+    {
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        using var server = new NetServer(hub.Server, new ServerConfig(Identity), clock);
+        int saves = 0;
+        server.SaveRequested += () => saves++;
+
+        using var host = new NetClient(hub.Connect(out _), Identity, "Host", clock, playerKey: "kH");
+        Pump(server, new[] { host });
+        using var bob = new NetClient(hub.Connect(out _), Identity, "Bob", clock, playerKey: "kB");
+        Pump(server, new[] { host, bob });
+
+        bob.SaveNow();                          // Bob is a plain player
+        Pump(server, new[] { host, bob });
+        Assert.Equal(0, saves);
+    }
 }
