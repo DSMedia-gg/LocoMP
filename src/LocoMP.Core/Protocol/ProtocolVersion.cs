@@ -59,5 +59,10 @@ public static class ProtocolVersion
     /// the requester's world knows which car the chain connects to, and it is what lets the server
     /// resolve the def gap for a PARKED set it must reclaim itself (F8: an ownerless set has no owner
     /// to route to, so the server commits the split/merge directly — parked truth is server truth).</remarks>
-    public const int Current = 14;
+    /// <remarks>v15 (M5.2, host moderation): admin utilities — AdminAction (MessageType 67) carries a
+    /// host/admin's kick / ban / promote / demote / pause-joins / unban request, and AdminNotice (68)
+    /// returns the consequence (kicked/banned reason, joins paused/resumed broadcast, role change, or an
+    /// authorisation rejection). JoinRejected gains two kinds — Banned (session-scoped) and JoinsPaused.
+    /// A v14 peer wouldn't know the new messages, so this is a deliberate incompatible bump.</remarks>
+    public const int Current = 15;
 }

@@ -23,6 +23,7 @@ public sealed class NetServer : IDisposable
     private readonly ServerConfig _config;
     private readonly IClock _clock;
     private readonly Dictionary<int, PlayerState> _players = new();
+    private readonly ServerModeration _moderation = new();
 
     // The admission queue (D18): joiners who passed EVERY validation but capacity, in arrival order.
     // A queued peer is connected but NOT admitted — no roster entry, no subsystem state, its non-join
@@ -112,6 +113,10 @@ public sealed class NetServer : IDisposable
     /// host UI, admin, and tests. Inert unless <see cref="ServerConfig.Interest"/> is enabled.</summary>
     public InterestManager Interest => _interest;
 
+    /// <summary>Session moderation (M5.2): admin roles, session bans, pause-joins. The host UI and the
+    /// dedicated-server console read/drive this; the join gate and admin-action handler enforce it.</summary>
+    public ServerModeration Moderation => _moderation;
+
     public int PlayerCount => _players.Count;
 
     /// <summary>How many validated joiners are waiting for a slot (D18) — host UI / test visibility.</summary>
@@ -188,6 +193,9 @@ public sealed class NetServer : IDisposable
                 case MessageType.JoinRequest: HandleJoin(peerId, r); break;
                 case MessageType.PlayerPose: HandlePose(peerId, r); break;
                 case MessageType.Leave: Remove(peerId); break;
+                case MessageType.AdminAction:
+                    if (_players.ContainsKey(peerId)) HandleAdminAction(peerId, r);
+                    break;
                 default:
                     // Subsystem traffic is only heard from ADMITTED peers — everything else is
                     // ignored. Try each subsystem in turn; the first to claim the type wins.
@@ -251,13 +259,27 @@ public sealed class NetServer : IDisposable
             return;
         }
 
+        // Session ban (M5.2): the key is the credential (F7), so a ban keyed on it holds across a
+        // reconnect within the session. Checked BEFORE takeover/capacity — a banned key never evicts a
+        // live peer, never takes a slot; it is refused at the door. The owner can never be banned, so
+        // the host can't lock itself out. (Session-scoped, U3: the ban dies with the server.)
+        if (_moderation.IsBanned(playerKey))
+        {
+            Reject(peerId, RejectKind.Banned, "you are banned from this session");
+            return;
+        }
+
+        // A reconnect of a player already ONLINE is a takeover, not a new join (used by the pause gate
+        // below). Captured before the takeover block evicts the zombie and clears the online flag.
+        bool keyWasOnline = Career.IsKeyOnline(playerKey);
+
         // Credentialed takeover (F7): the key is a client-held secret (never shown to other players)
         // and the password was just checked, so presenting a key that is ALREADY ONLINE is this
         // player reconnecting past their own zombie peer — evict it through the ordinary removal
         // path (its state releases exactly as a transport timeout would have, just now) and let the
         // newcomer take the freed slot. The old lockout ("player key already in session") made a
         // fast reconnect wait out the transport timeout, 15 s to minutes in the gauntlet.
-        if (Career.IsKeyOnline(playerKey))
+        if (keyWasOnline)
         {
             int zombie = Career.PeerOf(playerKey);
             if (zombie == 0)
@@ -289,6 +311,16 @@ public sealed class NetServer : IDisposable
             return;
         }
 
+        // Pause-new-joins (M5.2): a host "hold the door" toggle. Exempts a player already represented in
+        // the session — a same-key-queued reconnect returned above, and an online takeover (keyWasOnline)
+        // is re-entry, not a new admission — so only a genuinely NEW joiner is refused, and it's a
+        // transient state, not a rejection of the player.
+        if (_moderation.JoinsPaused && !keyWasOnline)
+        {
+            Reject(peerId, RejectKind.JoinsPaused, "the host has paused new joins");
+            return;
+        }
+
         if (_players.Count >= _config.MaxPlayers)
         {
             // The admission queue (D18): validated joiners wait for a slot instead of bouncing off
@@ -317,6 +349,7 @@ public sealed class NetServer : IDisposable
     {
         var state = new PlayerState(peerId, name, Pose.Identity);
         _players[peerId] = state;
+        _moderation.EnsureOwner(playerKey);                // first admit = session owner/admin (M5.2)
         _interest.AddClient(peerId);                       // relevance tracking (fail-open until it moves)
 
         SendAccepted(peerId, state);                       // newcomer learns id + time + roster
@@ -415,6 +448,90 @@ public sealed class NetServer : IDisposable
             .WriteString(serverNeeds ?? string.Empty)
             .ToArray();
         _transport.Send(peerId, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>A host/admin moderation request (M5.2). Wire: [kind][targetPeerId][targetKey]. Authority
+    /// is server-side: the sender must be an admin, the owner is immune to eviction/demotion, and
+    /// promote/demote are owner-only. Peer-targeted verbs (kick/ban/promote/demote) name a live roster id;
+    /// unban names an offline key. Every refusal comes back as an <see cref="AdminNoticeKind.Rejected"/>
+    /// notice so the acting UI can explain it.</summary>
+    private void HandleAdminAction(int peerId, PacketReader r)
+    {
+        var kind = (AdminActionKind)r.ReadByte();
+        int targetPeerId = (int)r.ReadVarUInt();
+        string targetKey = r.ReadString();
+
+        string? senderKey = Career.KeyOf(peerId);
+        if (senderKey is null || !_moderation.IsAdmin(senderKey))
+        {
+            SendAdminNotice(peerId, AdminNoticeKind.Rejected, "not allowed");
+            return;
+        }
+
+        // A peer-targeted verb resolves its victim key from the live roster; a stranger/queued/absent
+        // target has no key and the verb is refused by name.
+        string? victimKey = targetPeerId != 0 && _players.ContainsKey(targetPeerId)
+            ? Career.KeyOf(targetPeerId)
+            : null;
+
+        switch (kind)
+        {
+            case AdminActionKind.Kick:
+            case AdminActionKind.Ban:
+                if (victimKey is null) { SendAdminNotice(peerId, AdminNoticeKind.Rejected, "no such player"); return; }
+                if (_moderation.IsOwner(victimKey)) { SendAdminNotice(peerId, AdminNoticeKind.Rejected, "cannot target the owner"); return; }
+                // Record the ban BEFORE eviction so an instantaneous rejoin race is already refused.
+                if (kind == AdminActionKind.Ban) _moderation.Ban(victimKey);
+                SendAdminNotice(targetPeerId,
+                    kind == AdminActionKind.Ban ? AdminNoticeKind.Banned : AdminNoticeKind.Kicked, "");
+                // A genuine vacancy: Remove pumps the queue (unlike an F7 handover). Then close the socket.
+                Remove(targetPeerId);
+                _transport.Disconnect(targetPeerId);
+                break;
+
+            case AdminActionKind.Promote:
+            case AdminActionKind.Demote:
+                if (!_moderation.IsOwner(senderKey)) { SendAdminNotice(peerId, AdminNoticeKind.Rejected, "owner only"); return; }
+                if (victimKey is null) { SendAdminNotice(peerId, AdminNoticeKind.Rejected, "no such player"); return; }
+                bool changed = kind == AdminActionKind.Promote ? _moderation.Promote(victimKey) : _moderation.Demote(victimKey);
+                if (changed)
+                    SendAdminNotice(targetPeerId, AdminNoticeKind.RoleChanged,
+                        kind == AdminActionKind.Promote ? "admin" : "player");
+                break;
+
+            case AdminActionKind.PauseJoins:
+            case AdminActionKind.ResumeJoins:
+                bool pause = kind == AdminActionKind.PauseJoins;
+                _moderation.JoinsPaused = pause;
+                BroadcastAdminNotice(pause ? AdminNoticeKind.JoinsPaused : AdminNoticeKind.JoinsResumed, "");
+                break;
+
+            case AdminActionKind.Unban:
+                // Offline target: the key comes on the wire (from the ban-list view), no live peer. The
+                // host UI re-reads Moderation.BannedKeys, so no notice is needed for success.
+                _moderation.Unban(targetKey);
+                break;
+        }
+    }
+
+    private void SendAdminNotice(int peerId, AdminNoticeKind kind, string arg)
+    {
+        byte[] payload = new PacketWriter(16)
+            .WriteByte((byte)MessageType.AdminNotice)
+            .WriteByte((byte)kind)
+            .WriteString(arg)
+            .ToArray();
+        _transport.Send(peerId, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    private void BroadcastAdminNotice(AdminNoticeKind kind, string arg)
+    {
+        byte[] payload = new PacketWriter(16)
+            .WriteByte((byte)MessageType.AdminNotice)
+            .WriteByte((byte)kind)
+            .WriteString(arg)
+            .ToArray();
+        foreach (int id in _players.Keys) _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);
     }
 
     private void BroadcastPlayerJoined(PlayerState state, int exceptPeer)

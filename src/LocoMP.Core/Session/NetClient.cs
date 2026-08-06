@@ -127,6 +127,10 @@ public sealed class NetClient : IDisposable
     /// means for its world (the joined Shim must NOT silently unblock native saving, 03 §10).</summary>
     public event Action? Disconnected;
 
+    /// <summary>server → client moderation consequence (M5.2): kicked/banned reason, joins paused/resumed,
+    /// a role change, or an action rejection. Args: kind, string argument (meaning depends on kind).</summary>
+    public event Action<AdminNoticeKind, string>? AdminNotice;
+
     public void Poll() => _transport.Poll();
 
     /// <summary>Announce the local player's pose to the server (sequenced-unreliable — latest wins).</summary>
@@ -147,6 +151,43 @@ public sealed class NetClient : IDisposable
         byte[] payload = new PacketWriter(1).WriteByte((byte)MessageType.Leave).ToArray();
         _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
     }
+
+    /// <summary>Send a moderation action to the server (M5.2). Authority is server-side — a non-admin's
+    /// request comes back as an <see cref="AdminNotice"/> of kind Rejected. Peer-targeted verbs
+    /// (kick/ban/promote/demote) pass <paramref name="targetPeerId"/>; unban passes
+    /// <paramref name="targetKey"/>; pause/resume need neither.</summary>
+    public void SendAdminAction(AdminActionKind kind, int targetPeerId = 0, string targetKey = "")
+    {
+        if (!Joined) return;
+        byte[] payload = new PacketWriter(16)
+            .WriteByte((byte)MessageType.AdminAction)
+            .WriteByte((byte)kind)
+            .WriteVarUInt((uint)targetPeerId)
+            .WriteString(targetKey ?? string.Empty)
+            .ToArray();
+        _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>Kick a player by roster id (they may reconnect immediately).</summary>
+    public void Kick(int targetPeerId) => SendAdminAction(AdminActionKind.Kick, targetPeerId);
+
+    /// <summary>Kick and session-ban a player by roster id.</summary>
+    public void Ban(int targetPeerId) => SendAdminAction(AdminActionKind.Ban, targetPeerId);
+
+    /// <summary>Grant admin to a player by roster id (owner only).</summary>
+    public void Promote(int targetPeerId) => SendAdminAction(AdminActionKind.Promote, targetPeerId);
+
+    /// <summary>Revoke admin from a player by roster id (owner only).</summary>
+    public void Demote(int targetPeerId) => SendAdminAction(AdminActionKind.Demote, targetPeerId);
+
+    /// <summary>Stop admitting new players.</summary>
+    public void PauseJoins() => SendAdminAction(AdminActionKind.PauseJoins);
+
+    /// <summary>Resume admitting new players.</summary>
+    public void ResumeJoins() => SendAdminAction(AdminActionKind.ResumeJoins);
+
+    /// <summary>Lift a session ban on a key (from the ban-list view).</summary>
+    public void Unban(string targetKey) => SendAdminAction(AdminActionKind.Unban, 0, targetKey);
 
     /// <summary>Advance the join stage, forward only — later traffic of an earlier family (ordinary
     /// in-session career/item messages) must never regress the display, and nothing but the server's
@@ -214,6 +255,7 @@ public sealed class NetClient : IDisposable
                 case MessageType.TimeSync: HandleTimeSync(r); break;
                 case MessageType.InterestHide: HandleInterestHide(r); break;
                 case MessageType.JoinBurstComplete: AdvanceStage(JoinStage.Complete); break;
+                case MessageType.AdminNotice: HandleAdminNotice(r); break;
                 default:
                     // Stage inference (M5.1): the burst is sent world → career → items on one ordered
                     // channel, so the first message a later family claims proves every earlier family
@@ -323,6 +365,15 @@ public sealed class NetClient : IDisposable
     {
         long serverTime = r.ReadInt64();
         ServerTimeOffsetMs = serverTime - _clock.NowMs;
+    }
+
+    /// <summary>A moderation consequence from the server (M5.2). Display-only — the authoritative effect
+    /// already happened (we may be about to be disconnected on a kick/ban); the UI just explains it.</summary>
+    private void HandleAdminNotice(PacketReader r)
+    {
+        var kind = (AdminNoticeKind)r.ReadByte();
+        string arg = r.ReadString();
+        AdminNotice?.Invoke(kind, arg);
     }
 
     /// <summary>Hide a replica that left our relevance scope (D10). A hide is a presence HINT, never an

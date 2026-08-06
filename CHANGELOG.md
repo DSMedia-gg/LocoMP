@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Host moderation is now enforced by the server (M5.2 backend).** A session now has an owner (the
+  host — or the first player to join a dedicated server) who can kick a player, session-ban them (the
+  ban follows their reconnects but is lifted when the session ends), pause and resume new joins, and
+  promote another player to admin so they can moderate too. The owner can never be kicked, banned or
+  demoted, so a host can't lock itself out. Every action is authorised on the server — a non-admin's
+  request is refused — and a kicked or banned player is told why. The in-game menu that drives all of
+  this arrives with M5.2's UI; this release lands the machinery it sits on. (Network protocol bumped —
+  both sides must run this build.)
 - **A full server now holds your place in line instead of turning you away.** Joining a server at
   its player cap used to bounce you with an instant "server full". Now you wait in a real admission
   queue: the loading cover shows your live position ("waiting for a free slot — position 2 of 3"),

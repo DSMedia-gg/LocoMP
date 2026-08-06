@@ -297,4 +297,19 @@ public enum MessageType : byte
     /// [position:varuint (1-based)][total:varuint]. Sent on enqueue and re-sent to every queued peer
     /// whenever the queue changes; admission arrives as an ordinary <see cref="JoinAccepted"/>.</summary>
     JoinQueued = 66,
+
+    // ── M5.2: host moderation / admin utilities. Admin actions flow client → server; notices flow
+    // server → client. Authority is server-side (ServerModeration + NetServer). Protocol bump v14→v15. ──
+
+    /// <summary>admin client → server: a moderation action. Wire:
+    /// [kind:byte (<see cref="AdminActionKind"/>)][targetPeerId:varuint (0 if none)][targetKey:string
+    /// (empty if none)]. The server authorises against the sender's admin role before acting; an
+    /// unauthorised or impossible action comes back as an <see cref="AdminNotice"/> of kind Rejected.</summary>
+    AdminAction = 67,
+
+    /// <summary>server → client: the outcome/consequence of moderation. Wire:
+    /// [kind:byte (<see cref="AdminNoticeKind"/>)][arg:string]. Sent to the acting admin (ack/reject), to a
+    /// target being kicked/banned (reason, immediately before disconnect), and broadcast for shared state
+    /// changes (joins paused/resumed). Display-only — the authoritative effect already happened.</summary>
+    AdminNotice = 68,
 }

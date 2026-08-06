@@ -57,6 +57,12 @@ public enum RejectKind : byte
     /// the credential, so a live duplicate normally EVICTS the old peer (takeover) — this reject
     /// survives only for the race where the key came online while its holder waited in the queue.</summary>
     DuplicateKey = 8,
+    /// <summary>The player key is session-banned by a host/admin (M5.2, v15). Session-scoped: the ban
+    /// dies with the session (U3) — no have/need fields.</summary>
+    Banned = 9,
+    /// <summary>The host has paused new joins (M5.2, v15). A transient door-closed state, not a
+    /// rejection of the player — retrying once joins resume succeeds. No have/need fields.</summary>
+    JoinsPaused = 10,
 }
 
 /// <summary>Outcome of a handshake check. Rejections always name the exact mismatch (have/need).</summary>
