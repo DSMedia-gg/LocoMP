@@ -160,7 +160,8 @@ if (opts.SpawnTrains > 0)
     {
         for (int i = 0; i < opts.SpawnTrains; i++)
             kinematicTrains.Add(new ServerKinematicTrain(server.Trains, topology, opts.TrainCars, opts.TrainSpeed,
-                                                         seed: 1000 + i, liveries: opts.TrainLiveries));
+                                                         seed: 1000 + i, liveries: opts.TrainLiveries,
+                                                         startEdgeId: opts.TrainStartEdge));
         Console.WriteLine($"[server] driving {kinematicTrains.Count} server-owned train(s) of {opts.TrainCars} car(s) " +
                           $"at {opts.TrainSpeed:F0} m/s along {Path.GetFileName(worldFile)} ({topology.Edges.Count} edges).");
     }

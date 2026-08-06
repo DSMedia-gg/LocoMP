@@ -36,6 +36,7 @@ public sealed class ServerOptions
     public int TrainCars = 3;
     public double TrainSpeed = 10;          // m/s ≈ 36 km/h
     public string[] TrainLiveries = System.Array.Empty<string>(); // real livery ids (else generic kinds)
+    public uint? TrainStartEdge = null;     // start all server trains on this edge (else seed-derived, scattered)
 
     // Interest management (D10). Off by default — a friend-scale session is comfortably inside the
     // bandwidth budget, and filtering is only worth its complexity as player/train counts climb
@@ -94,6 +95,7 @@ public sealed class ServerOptions
                     case "--train-cars": o.TrainCars = Math.Max(1, int.Parse(Next(), CultureInfo.InvariantCulture)); break;
                     case "--train-speed": o.TrainSpeed = double.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--train-livery": o.TrainLiveries = Next().Split(',', StringSplitOptions.RemoveEmptyEntries); break;
+                    case "--train-start-edge": o.TrainStartEdge = uint.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--soak-report": o.SoakReportSeconds = Math.Max(0, double.Parse(Next(), CultureInfo.InvariantCulture)); break;
                     case "--duration": o.DurationSeconds = Math.Max(0, double.Parse(Next(), CultureInfo.InvariantCulture)); break;
                     case "--preset":
@@ -170,6 +172,8 @@ Usage: LocoMP.Server [options]
   --train-cars <n>       cars per server train       (default 3)
   --train-speed <m/s>    server train speed          (default 10)
   --train-livery <a,b,c> real livery ids for server trains (else generic kinds)
+  --train-start-edge <id> start server trains on this edge (else seed-derived, scattered) — paste a
+                         host/join log's 'ghost-train hint' to spawn them beside a player
   --soak-report <s>      emit a health/leak line every s seconds (players/sets/jobs/items/heap +
                          the money & item conservation oracles). 0 = off. Unhealthy → non-zero exit
   --duration <s>         self-terminate after s seconds (0 = run until Ctrl+C/stop). Use for an
