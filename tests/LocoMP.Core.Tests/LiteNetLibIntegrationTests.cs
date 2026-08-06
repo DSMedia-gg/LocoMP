@@ -152,6 +152,30 @@ public class LiteNetLibIntegrationTests
     }
 
     [Fact]
+    public void Udp_transport_counts_traffic_and_reports_a_peer_rtt()
+    {
+        using var serverT = LiteNetLibTransport.StartServer(0, Key);
+        using var server = new NetServer(serverT, new ServerConfig(Identity), new ManualClock());
+
+        using var aT = LiteNetLibTransport.ConnectClient("127.0.0.1", serverT.Port, Key);
+        using var a = new NetClient(aT, Identity, "Alice", new ManualClock());
+
+        Action[] pumps = { server.Poll, a.Poll };
+        Assert.True(SpinUntil(() => a.Joined && server.PlayerCount == 1, 5000, pumps),
+            "the client should join over UDP");
+
+        // The join handshake alone crossed real bytes both ways.
+        Assert.True(serverT.Stats.BytesReceived > 0, "the join request arrived over UDP");
+        Assert.True(serverT.Stats.BytesSent > 0, "the join burst went out over UDP");
+
+        // A live peer reports an RTT (0+ ms on localhost — the point is non-null); an unknown id is null.
+        int aId = a.LocalId!.Value;
+        Assert.NotNull(serverT.RttMs(aId));
+        Assert.True(serverT.RttMs(aId) >= 0);
+        Assert.Null(serverT.RttMs(9999));
+    }
+
+    [Fact]
     public void A_wrong_connect_key_is_refused_by_the_transport()
     {
         using var serverT = LiteNetLibTransport.StartServer(0, Key);

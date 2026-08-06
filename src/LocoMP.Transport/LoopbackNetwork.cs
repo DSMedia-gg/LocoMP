@@ -64,6 +64,7 @@ public sealed class LoopbackNetwork
         private readonly LoopbackNetwork _net;
         private readonly int _id;
         private readonly Queue<Action> _events = new();
+        private long _bytesSent, _bytesReceived, _messagesSent, _messagesReceived;
 
         public Endpoint(LoopbackNetwork net, int id)
         {
@@ -78,8 +79,20 @@ public sealed class LoopbackNetwork
         public void Send(int peerId, byte[] payload, DeliveryMethod delivery)
         {
             if (payload is null) throw new ArgumentNullException(nameof(payload));
+            _bytesSent += payload.Length;
+            _messagesSent++;
             // Clone so a sender reusing its buffer can't retroactively change a queued message.
             _net.Route(_id, peerId, (byte[])payload.Clone());
+        }
+
+        public TransportStats Stats => new(_bytesSent, _bytesReceived, _messagesSent, _messagesReceived);
+
+        /// <summary>In-process hub: a live link with no latency (0 ms) — server↔known client, or a client's
+        /// server peer; null for an id this endpoint has no link to.</summary>
+        public int? RttMs(int peerId)
+        {
+            if (_id == ServerPeer) return _net._clients.ContainsKey(peerId) ? 0 : (int?)null;
+            return peerId == ServerPeer ? 0 : (int?)null;
         }
 
         public void Poll()
@@ -98,7 +111,12 @@ public sealed class LoopbackNetwork
             else if (peerId == ServerPeer) _net.Disconnect(_id);
         }
 
-        internal void QueueReceive(int fromId, byte[] payload) => _events.Enqueue(() => Received?.Invoke(fromId, payload));
+        internal void QueueReceive(int fromId, byte[] payload) => _events.Enqueue(() =>
+        {
+            _bytesReceived += payload.Length;
+            _messagesReceived++;
+            Received?.Invoke(fromId, payload);
+        });
         internal void QueueConnect(int peerId) => _events.Enqueue(() => PeerConnected?.Invoke(peerId));
         internal void QueueDisconnect(int peerId) => _events.Enqueue(() => PeerDisconnected?.Invoke(peerId));
 

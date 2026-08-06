@@ -13,9 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Session health counters for the host (M5.2 diagnostics backend).** The server can now report a
   one-glance snapshot of a running session — players online, joiners waiting, trainsets, jobs and items
   tracked, admins and bans, whether joins are paused, and the internal health gauges (economy/item
-  accounting still balanced, stale-update count). It's the data behind M5.2's Diagnostics panel. An admin
-  can now request this snapshot and the ban list over the network too, so a promoted admin on a dedicated
-  server sees the same numbers the host does. Live bandwidth and per-player latency come in a later slice.
+  accounting still balanced, stale-update count), plus live network numbers — how much data the session has
+  moved (bytes and messages, in and out) and each player's round-trip latency. It's the data behind M5.2's
+  Diagnostics panel. An admin can request the snapshot and the ban list over the network too, so a promoted
+  admin on a dedicated server sees the same numbers the host does. (Network protocol bumped.)
 - **Host moderation is now enforced by the server (M5.2 backend).** A session now has an owner (the
   host — or the first player to join a dedicated server) who can kick a player, session-ban them (the
   ban follows their reconnects but is lifted when the session ends), pause and resume new joins, promote

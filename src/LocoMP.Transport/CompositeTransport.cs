@@ -58,6 +58,26 @@ public sealed class CompositeTransport : ITransport
         foreach (ITransport inner in _inners) inner.Poll();
     }
 
+    /// <summary>Sum of every inner link's counters — the host serves loopback + UDP at once, so its total
+    /// traffic is both.</summary>
+    public TransportStats Stats
+    {
+        get
+        {
+            long bs = 0, br = 0, ms = 0, mr = 0;
+            foreach (ITransport inner in _inners)
+            {
+                TransportStats s = inner.Stats;
+                bs += s.BytesSent; br += s.BytesReceived; ms += s.MessagesSent; mr += s.MessagesReceived;
+            }
+            return new TransportStats(bs, br, ms, mr);
+        }
+    }
+
+    /// <summary>RTT is a property of the specific link the peer is on — route to that inner.</summary>
+    public int? RttMs(int peerId) =>
+        _byOuter.TryGetValue(peerId, out var route) ? _inners[route.inner].RttMs(route.innerId) : null;
+
     public void Disconnect(int peerId)
     {
         if (_byOuter.TryGetValue(peerId, out var route))

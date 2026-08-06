@@ -46,4 +46,13 @@ public interface ITransport : IDisposable
 
     /// <summary>Pump queued network events (Received / PeerConnected / PeerDisconnected). Once per tick.</summary>
     void Poll();
+
+    /// <summary>Cumulative payload traffic counters since construction (M5.2 diagnostics). Each read is a
+    /// fresh snapshot of the live counters.</summary>
+    TransportStats Stats { get; }
+
+    /// <summary>Round-trip time to a peer in milliseconds, or null if it isn't known/measured — a peer that
+    /// isn't connected, or a transport with no latency to report (the in-process Loopback reports 0 for a
+    /// live peer). Real UDP derives it from the link's measured ping.</summary>
+    int? RttMs(int peerId);
 }

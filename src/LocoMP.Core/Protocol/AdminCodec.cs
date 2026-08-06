@@ -25,7 +25,11 @@ public static class AdminCodec
          .WriteByte(d.MoneyConservationHolds ? (byte)1 : (byte)0)
          .WriteByte(d.ItemConservationHolds ? (byte)1 : (byte)0)
          .WriteByte(d.JoinsPaused ? (byte)1 : (byte)0)
-         .WriteByte(d.InterestEnabled ? (byte)1 : (byte)0);
+         .WriteByte(d.InterestEnabled ? (byte)1 : (byte)0)
+         .WriteInt64(d.BytesSent)
+         .WriteInt64(d.BytesReceived)
+         .WriteInt64(d.MessagesSent)
+         .WriteInt64(d.MessagesReceived);
     }
 
     public static ServerDiagnostics ReadDiagnostics(PacketReader r)
@@ -42,8 +46,13 @@ public static class AdminCodec
         bool item = r.ReadByte() != 0;
         bool paused = r.ReadByte() != 0;
         bool interest = r.ReadByte() != 0;
+        long bytesSent = r.ReadInt64();
+        long bytesReceived = r.ReadInt64();
+        long messagesSent = r.ReadInt64();
+        long messagesReceived = r.ReadInt64();
         return new ServerDiagnostics(players, queued, trainsets, jobs, items, stale,
-            money, item, paused, admins, banned, interest);
+            money, item, paused, admins, banned, interest,
+            bytesSent, bytesReceived, messagesSent, messagesReceived);
     }
 
     /// <summary>Serialise the session ban list (count then each banned key).</summary>

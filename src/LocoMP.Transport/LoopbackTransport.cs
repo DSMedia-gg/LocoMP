@@ -13,6 +13,7 @@ public sealed class LoopbackTransport : ITransport
 {
     private readonly Queue<(int peerId, byte[] payload)> _inbox = new();
     private LoopbackTransport? _peer;
+    private long _bytesSent, _bytesReceived, _messagesSent, _messagesReceived;
 
     public event Action<int, byte[]>? Received;
 
@@ -38,6 +39,8 @@ public sealed class LoopbackTransport : ITransport
     public void Send(int peerId, byte[] payload, DeliveryMethod delivery)
     {
         if (payload is null) throw new ArgumentNullException(nameof(payload));
+        _bytesSent += payload.Length;
+        _messagesSent++;
         // Copy so the sender mutating its buffer can't retroactively change what the peer receives.
         _peer?._inbox.Enqueue((peerId, (byte[])payload.Clone()));
     }
@@ -47,9 +50,16 @@ public sealed class LoopbackTransport : ITransport
         while (_inbox.Count > 0)
         {
             var (peerId, payload) = _inbox.Dequeue();
+            _bytesReceived += payload.Length;
+            _messagesReceived++;
             Received?.Invoke(peerId, payload);
         }
     }
+
+    public TransportStats Stats => new(_bytesSent, _bytesReceived, _messagesSent, _messagesReceived);
+
+    /// <summary>In-process pair: an established link with no latency — 0 ms for the paired peer.</summary>
+    public int? RttMs(int peerId) => _peer != null ? 0 : (int?)null;
 
     /// <summary>The 1:1 pair models a permanently-established link with no lifecycle — no-op, matching
     /// how this transport never raises connect/disconnect either. Eviction tests use LoopbackNetwork.</summary>

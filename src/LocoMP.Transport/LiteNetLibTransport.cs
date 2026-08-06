@@ -29,6 +29,7 @@ public sealed class LiteNetLibTransport : ITransport
     private readonly Dictionary<int, NetPeer> _peersById = new();
     private readonly Dictionary<NetPeer, int> _idByPeer = new();
     private int _nextPeerId = 1;
+    private long _bytesSent, _bytesReceived, _messagesSent, _messagesReceived;
 
     public event Action<int, byte[]>? Received;
     public event Action<int>? PeerConnected;
@@ -85,11 +86,22 @@ public sealed class LiteNetLibTransport : ITransport
     {
         if (payload is null) throw new ArgumentNullException(nameof(payload));
         if (_peersById.TryGetValue(peerId, out NetPeer? peer))
+        {
             peer.Send(payload, Map(delivery));
+            _bytesSent += payload.Length;
+            _messagesSent++;
+        }
         // No peer for that id (already dropped / not yet connected): silently ignore, as UDP would.
     }
 
     public void Poll() => _net.PollEvents();
+
+    public TransportStats Stats => new(_bytesSent, _bytesReceived, _messagesSent, _messagesReceived);
+
+    /// <summary>Round-trip time from the link's measured ping. LiteNetLib's <c>NetPeer.Ping</c> is the
+    /// smoothed ONE-WAY latency, so RTT ≈ 2×. Null for an id with no live peer.</summary>
+    public int? RttMs(int peerId) =>
+        _peersById.TryGetValue(peerId, out NetPeer? peer) ? peer.Ping * 2 : (int?)null;
 
     /// <summary>Force-drop a peer (F7 eviction). LiteNetLib sends the disconnect packet and raises
     /// PeerDisconnectedEvent locally, so the id maps clean up through the ordinary handler.</summary>
@@ -131,6 +143,8 @@ public sealed class LiteNetLibTransport : ITransport
         if (_idByPeer.TryGetValue(peer, out int id))
         {
             byte[] data = reader.GetRemainingBytes(); // owned copy — safe to hand to Core
+            _bytesReceived += data.Length;
+            _messagesReceived++;
             Received?.Invoke(id, data);
         }
         reader.Recycle(); // no AutoRecycle in 1.3.5 — return the pooled reader ourselves

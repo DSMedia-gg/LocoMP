@@ -15,7 +15,8 @@ public readonly struct ServerDiagnostics
 {
     public ServerDiagnostics(int players, int queued, int trainsets, int jobs, int items,
         long staleSnapshotsDropped, bool moneyConservationHolds, bool itemConservationHolds,
-        bool joinsPaused, int admins, int bannedKeys, bool interestEnabled)
+        bool joinsPaused, int admins, int bannedKeys, bool interestEnabled,
+        long bytesSent, long bytesReceived, long messagesSent, long messagesReceived)
     {
         Players = players;
         Queued = queued;
@@ -29,6 +30,10 @@ public readonly struct ServerDiagnostics
         Admins = admins;
         BannedKeys = bannedKeys;
         InterestEnabled = interestEnabled;
+        BytesSent = bytesSent;
+        BytesReceived = bytesReceived;
+        MessagesSent = messagesSent;
+        MessagesReceived = messagesReceived;
     }
 
     /// <summary>Admitted players (excludes queued joiners).</summary>
@@ -67,4 +72,16 @@ public readonly struct ServerDiagnostics
 
     /// <summary>Spatial interest management is active (D10) — relevance-gated snapshot relay is on.</summary>
     public bool InterestEnabled { get; }
+
+    /// <summary>Cumulative application-payload bytes the server has sent since it started (M5.2).</summary>
+    public long BytesSent { get; }
+
+    /// <summary>Cumulative application-payload bytes the server has received since it started.</summary>
+    public long BytesReceived { get; }
+
+    /// <summary>Cumulative messages the server has sent.</summary>
+    public long MessagesSent { get; }
+
+    /// <summary>Cumulative messages the server has received.</summary>
+    public long MessagesReceived { get; }
 }

@@ -58,6 +58,12 @@ public sealed class CountingTransport : ITransport
 
     public void Disconnect(int peerId) => _inner.Disconnect(peerId);
 
+    // Pass-through: this decorator measures the server's send-side; the transport-level counters and RTT
+    // are the inner link's to report.
+    public TransportStats Stats => _inner.Stats;
+
+    public int? RttMs(int peerId) => _inner.RttMs(peerId);
+
     /// <summary>Zero every counter — call immediately before the interval you want to weigh.</summary>
     public void Reset()
     {

@@ -176,19 +176,28 @@ public sealed class NetServer : IDisposable
     /// <summary>A cheap health snapshot for the M5.2 Diagnostics panel — the counters the server already
     /// tracks, aggregated. Bandwidth / per-peer latency are transport-level and not included here (see
     /// <see cref="ServerDiagnostics"/>).</summary>
-    public ServerDiagnostics CaptureDiagnostics() => new(
-        _players.Count,
-        _queue.Count,
-        Trains.Registry.Sets.Count,
-        Career.Registry.Jobs.Count,
-        Items.Registry.Items.Count,
-        Trains.StaleSnapshotsDropped,
-        Career.Registry.Ledger.ConservationHolds,
-        Items.Registry.ItemConservationHolds,
-        _moderation.JoinsPaused,
-        _moderation.Admins.Count,
-        _moderation.BannedKeys.Count,
-        _config.Interest.Enabled);
+    public ServerDiagnostics CaptureDiagnostics()
+    {
+        TransportStats t = _transport.Stats;
+        return new(
+            _players.Count,
+            _queue.Count,
+            Trains.Registry.Sets.Count,
+            Career.Registry.Jobs.Count,
+            Items.Registry.Items.Count,
+            Trains.StaleSnapshotsDropped,
+            Career.Registry.Ledger.ConservationHolds,
+            Items.Registry.ItemConservationHolds,
+            _moderation.JoinsPaused,
+            _moderation.Admins.Count,
+            _moderation.BannedKeys.Count,
+            _config.Interest.Enabled,
+            t.BytesSent, t.BytesReceived, t.MessagesSent, t.MessagesReceived);
+    }
+
+    /// <summary>Round-trip time to a player in ms, or null if unknown (M5.2 — the roster's per-player ping).
+    /// Live and per-peer, so it is NOT part of the <see cref="CaptureDiagnostics"/> snapshot.</summary>
+    public int? RttMs(int peerId) => _transport.RttMs(peerId);
 
     /// <summary>Push the authoritative clock to every admitted player (call on a slow cadence).</summary>
     public void BroadcastTime()

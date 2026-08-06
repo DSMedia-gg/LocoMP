@@ -31,7 +31,8 @@ public class AdminQueryTests
         // Every numeric field distinct so a write/read field-order swap can't hide behind equal values.
         var d = new ServerDiagnostics(players: 3, queued: 2, trainsets: 5, jobs: 8, items: 13,
             staleSnapshotsDropped: 4200, moneyConservationHolds: true, itemConservationHolds: false,
-            joinsPaused: true, admins: 6, bannedKeys: 7, interestEnabled: true);
+            joinsPaused: true, admins: 6, bannedKeys: 7, interestEnabled: true,
+            bytesSent: 111, bytesReceived: 222, messagesSent: 33, messagesReceived: 44);
 
         var w = new PacketWriter(48);
         AdminCodec.WriteDiagnostics(w, d);
@@ -49,6 +50,10 @@ public class AdminQueryTests
         Assert.Equal(d.ItemConservationHolds, r.ItemConservationHolds);
         Assert.Equal(d.JoinsPaused, r.JoinsPaused);
         Assert.Equal(d.InterestEnabled, r.InterestEnabled);
+        Assert.Equal(d.BytesSent, r.BytesSent);
+        Assert.Equal(d.BytesReceived, r.BytesReceived);
+        Assert.Equal(d.MessagesSent, r.MessagesSent);
+        Assert.Equal(d.MessagesReceived, r.MessagesReceived);
     }
 
     [Fact]

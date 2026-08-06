@@ -66,5 +66,9 @@ public static class ProtocolVersion
     /// AdminAction also carries admin-only QUERIES (RequestDiagnostics/RequestBanList) answered by
     /// AdminDiagnostics (69) / AdminBanList (70), so a remote admin's panel can populate. A v14 peer
     /// wouldn't know the new messages, so this is a deliberate incompatible bump.</remarks>
-    public const int Current = 15;
+    /// <remarks>v16 (M5.2 diagnostics net stats): the AdminDiagnostics payload gains four cumulative
+    /// traffic counters (bytes/messages sent+received) appended after the existing fields, so a v15 peer
+    /// would misparse it — a deliberate incompatible bump. Per-peer RTT is served live via NetServer.RttMs
+    /// (roster ping), not in this snapshot.</remarks>
+    public const int Current = 16;
 }
