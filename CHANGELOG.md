@@ -75,11 +75,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   makes every livery line up with vanilla-perfect gaps at both ends of every car. (The game
   places a spawned car by its bogie positions, so guessed bogie offsets shifted car bodies even
   when the overall spacing was right. The older pitch-only `--car-lengths` hint still works.)
-  Coupled cars in a bot consist are now streamed at their COMPRESSED coupled spacing (the coupler
-  joint's own rest, tighter than the game's fresh-spawn gap) rather than the wider spawn gap, so
-  the chain visual hooks flush on sight instead of rendering gapped and unlinked until the consist
-  is claimed. (Real player hosts already stream their physically-coupled bogie positions, so this
-  only ever affected synthesised bot consists.)
+  Coupled cars in a bot consist are now streamed at their COMPRESSED-under-tension coupled spacing
+  (the game's tight-coupled rest with the buffers touching, re-derived from the coupler joint —
+  meaningfully tighter than both the fresh-spawn gap and the earlier estimate) rather than the wider
+  spawn gap, so the chain visual hooks flush on sight instead of rendering gapped and unlinked until
+  the consist is claimed. A new `--coupled-gap <m>` flag overrides that spacing for the whole
+  consist, so the buffer-to-buffer flush can be dialled in live against a running game without a
+  rebuild. (Real player hosts already stream their physically-coupled bogie positions, so this only
+  ever affected synthesised bot consists.)
 - **Remote trains ride smoother at speed.** Between position updates, a remote consist's smoothing
   target is now dead-reckoned FORWARD along the rail from the last update's speed (bounded so a
   stalled stream never runs a train away, and clamped to the track so it can't drift off a curve),
@@ -87,6 +90,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   train's visible lag collapses toward zero, with no protocol change.
 
 ### Fixed
+- **Hosting no longer bloats your save with other players' trains.** While you host, the game spawns
+  every joined player's (and every test bot's) consist as real cars in your world — and an autosave
+  during the session used to write those foreign trains into your own single-player save, so they came
+  back as permanent cars in your world and the save grew with every session (a handful of extra
+  trainsets and cars per host). Replicas of trains that other players are simulating are now excluded
+  from your save; your own trains save exactly as before. (The trains stay fully visible and physical
+  during play — they're only omitted from the save file itself.)
 - **Keep driving a train whose owner disconnects.** If you were driving another player's consist on
   a granted cab and its owner left the session, your controls used to go dead and you had to leave
   and re-enter the cab to take it back. The set now transfers to you as its owner the moment the

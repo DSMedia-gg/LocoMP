@@ -6,9 +6,11 @@
 **LocoMP** is a clean-room, MIT-licensed multiplayer mod for [Derail Valley](https://www.derailvalley.com/),
 built by **DSMedia**. Server-authoritative core, VR + desktop crossplay, and a first-class Mod API.
 
-> **Status: pre-alpha (M0 — walking skeleton).** Nothing to play yet. This repository currently
-> contains the project scaffold, CI pipeline, and a game-adapter spike. Follow the milestones in the
-> roadmap for what lands next.
+> **Status: pre-alpha, but playable for testing.** Two players can now install the mod, load the same
+> world, see each other, and run trains together over a direct connection — plus an early headless
+> dedicated server. It is early and rough, and the "Friends via Steam" join path is still to come, so
+> connections are direct IP:port (UDP 8877) for now. If you were handed a build to try, start with the
+> **[Playtest guide](PLAYTEST.md)**. Follow the milestones in the roadmap for what lands next.
 
 ## Disclaimers
 
@@ -28,6 +30,13 @@ train-membership changes are **server-committed transactions with epochs** (no c
 snap-back), item/economy/persistence are **server-authoritative and per-player by default**, and a
 **headless dedicated server** is a first-class target. Public release is gated on a measurable
 beat-the-incumbent checklist, not vibes.
+
+## Playing it (testing)
+
+You don't need to build anything to play — grab a packaged `LocoMP` folder, drop it in Derail Valley's
+`Mods\` folder via [Unity Mod Manager](https://www.nexusmods.com/site/mods/21), and follow the
+**[Playtest guide](PLAYTEST.md)**: one player hosts from their loaded world, the other Direct-Joins by
+IP on UDP port `8877`. Both players must run the same LocoMP build and the same game build.
 
 ## Building from source
 

@@ -22,6 +22,9 @@ Facepunch.*.dll
 ## Extracted world topology — per-build derived data from a local game run (M2.2); re-extract, don't commit
 tests/data/*.lmpw
 
+## Local scratch (mint tools, extracted worlds, throwaway rigs) — derived/experimental, never commit
+scratch/
+
 ## DepotDownloader / CI scratch
 depot/
 .DepotDownloader/
