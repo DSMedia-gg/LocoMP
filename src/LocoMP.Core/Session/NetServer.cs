@@ -168,6 +168,23 @@ public sealed class NetServer : IDisposable
     /// SaveCodec; restore by passing the result to the constructor of the next server.</summary>
     public ServerSaveData CaptureSave() => new(Career.Registry.Capture(), Trains.Capture(), Items.Capture());
 
+    /// <summary>A cheap health snapshot for the M5.2 Diagnostics panel — the counters the server already
+    /// tracks, aggregated. Bandwidth / per-peer latency are transport-level and not included here (see
+    /// <see cref="ServerDiagnostics"/>).</summary>
+    public ServerDiagnostics CaptureDiagnostics() => new(
+        _players.Count,
+        _queue.Count,
+        Trains.Registry.Sets.Count,
+        Career.Registry.Jobs.Count,
+        Items.Registry.Items.Count,
+        Trains.StaleSnapshotsDropped,
+        Career.Registry.Ledger.ConservationHolds,
+        Items.Registry.ItemConservationHolds,
+        _moderation.JoinsPaused,
+        _moderation.Admins.Count,
+        _moderation.BannedKeys.Count,
+        _config.Interest.Enabled);
+
     /// <summary>Push the authoritative clock to every admitted player (call on a slow cadence).</summary>
     public void BroadcastTime()
     {
