@@ -288,6 +288,7 @@ public sealed class RealCarSync
 
         _sets.Remove(def.Id);
         _respawns.Remove(def.Id);
+        PreSettleSpacing(adopted); // R4-F: relax the streamed-flush gaps BEFORE physics wakes up
         foreach (TrainCar car in adopted)
         {
             if (_destroyHooks.TryGetValue(car, out Action onGone))
@@ -300,6 +301,85 @@ public sealed class RealCarSync
         }
         cars = adopted;
         return true;
+    }
+
+    /// <summary>R4-F: replicas stream visually FLUSH (coupler faces overlapping ~0.14 m vs DV's
+    /// joint rest — the live-tuned `--coupled-gap` look), which is fine while the cars are
+    /// kinematic, but softening them on adoption hands DV a wound spring: the buffer drive
+    /// (4e6 spring, 1.2e6 N cap, rest = faces touching) shoves every pair apart at once —
+    /// shattered windscreens, broken couplings, derails on a STATIONARY set. Before physics wakes
+    /// up, open each coupled pair back out to the joint rest (coupler faces touching, gap 0),
+    /// anchored at the player's own car so the cab they are standing in moves least. Shifts only
+    /// ever open OUTWARD — an over-wide pair (geometry-starved fallback spacing) is left to the
+    /// joint's own gradual limit adaptation, which is not violent.</summary>
+    private void PreSettleSpacing(TrainCar[] cars)
+    {
+        try
+        {
+            if (cars.Length < 2) return;
+            int anchor = AnchorIndex(cars);
+            float opened = 0f;
+            int pairs = 0;
+
+            // Walk outward from the anchor in both directions; shifts accumulate away from it.
+            Vector3 accumulated = Vector3.zero;
+            for (int i = anchor + 1; i < cars.Length; i++)
+                WalkPair(cars[i - 1], cars[i], ref accumulated, ref opened, ref pairs);
+            accumulated = Vector3.zero;
+            for (int i = anchor - 1; i >= 0; i--)
+                WalkPair(cars[i + 1], cars[i], ref accumulated, ref opened, ref pairs);
+
+            if (pairs > 0)
+                _log($"[trains] adoption pre-settle: opened {opened:F2} m across {pairs} coupling(s) " +
+                     "back to joint rest (anchored at your car)");
+        }
+        catch (Exception e)
+        {
+            _log($"[trains] adoption pre-settle skipped ({e.Message}) — physics settles the hard way");
+        }
+    }
+
+    /// <summary>Shift <paramref name="farCar"/> (and, via <paramref name="accumulated"/>, everything
+    /// beyond it) outward until this pair's coupler faces just touch. A broken link in the walk —
+    /// missing car, uncoupled or foreign-coupled pair, a derailed end — resets the accumulation:
+    /// there is no wound spring across a gap that has no joint.</summary>
+    private void WalkPair(TrainCar nearCar, TrainCar farCar, ref Vector3 accumulated, ref float opened, ref int pairs)
+    {
+        if (nearCar == null || farCar == null) { accumulated = Vector3.zero; return; }
+        if (accumulated != Vector3.zero) farCar.transform.position += accumulated;
+        if (nearCar.derailed || farCar.derailed) { accumulated = Vector3.zero; return; }
+
+        Coupler? mine = NearestCoupler(nearCar, farCar.transform.position);
+        Coupler? theirs = NearestCoupler(farCar, nearCar.transform.position);
+        if (mine == null || theirs == null || !mine.IsCoupled() || mine.coupledTo != theirs)
+        {
+            accumulated = Vector3.zero;
+            return;
+        }
+
+        Vector3 dir = farCar.transform.position - nearCar.transform.position;
+        if (dir.sqrMagnitude < 0.01f) { accumulated = Vector3.zero; return; }
+        dir.Normalize();
+        // Signed face gap along the consist axis: negative = overlapping (streamed flush).
+        float gap = Vector3.Dot(theirs.transform.position - mine.transform.position, dir);
+        float shift = 0f - gap;
+        if (shift <= 0.005f) return; // at or beyond rest — nothing is wound here
+        Vector3 delta = dir * shift;
+        farCar.transform.position += delta;
+        accumulated += delta;
+        opened += shift;
+        pairs++;
+    }
+
+    /// <summary>The car the player occupies (cab-entry claims and grant-heir handovers both have
+    /// them aboard), else the middle of the consist — the anchor that does not move.</summary>
+    private static int AnchorIndex(TrainCar[] cars)
+    {
+        TrainCar occupied = PlayerManager.Car;
+        if (occupied != null)
+            for (int i = 0; i < cars.Length; i++)
+                if (cars[i] == occupied) return i;
+        return cars.Length / 2;
     }
 
     /// <summary>R4-I: <see cref="TryAdopt"/>'s inverse — ownership moved away from a set WE were
