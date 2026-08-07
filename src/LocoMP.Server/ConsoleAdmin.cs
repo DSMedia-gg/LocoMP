@@ -34,7 +34,8 @@ public sealed class ConsoleAdmin
     /// <summary>Drain queued commands on the calling (main-loop) thread. Returns true if a stop/quit
     /// command was seen, so the loop can exit.</summary>
     public bool Drain(Func<string> status, Action saveNow,
-                      Func<string>? listBackups = null, Func<int, (bool ok, string message)>? restore = null)
+                      Func<string>? listBackups = null, Func<int, (bool ok, string message)>? restore = null,
+                      Action<string>? say = null)
     {
         bool stop = false;
         while (_lines.TryDequeue(out string? cmd))
@@ -50,9 +51,16 @@ public sealed class ConsoleAdmin
                     Console.WriteLine(listBackups is null ? "[admin] no backup storage attached" : listBackups());
                     break;
                 case "help" or "?":
-                    Console.WriteLine("commands: status | save | backups | restore <n> | stop | help");
+                    Console.WriteLine("commands: status | save | say <text> | backups | restore <n> | stop | help");
                     break;
                 default:
+                    // M5.4: talk to the session as THE SERVER (players see a [server] chat line).
+                    // Case-preserving — the original cmd is sliced, not the lowered copy.
+                    if (lower.StartsWith("say ", StringComparison.Ordinal) && say != null)
+                    {
+                        say(cmd.Substring("say ".Length));
+                        break;
+                    }
                     // M5.2 restore: roll the world back to backup n, then STOP without the final
                     // save — the next start loads the restored world. Everything is rotation-safe
                     // (the displaced current became .1), so a mistaken restore is itself undoable.
@@ -68,7 +76,7 @@ public sealed class ConsoleAdmin
                         }
                         break;
                     }
-                    Console.WriteLine($"[admin] unknown command '{cmd}' — try: status | save | backups | restore <n> | stop | help");
+                    Console.WriteLine($"[admin] unknown command '{cmd}' — try: status | save | say <text> | backups | restore <n> | stop | help");
                     break;
             }
         }

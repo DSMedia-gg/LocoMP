@@ -135,6 +135,16 @@ using var server = new NetServer(udp, config, clock, restore, interestTopology);
 server.PlayerAdmitted += p => Console.WriteLine($"[server] admitted {p.Name} (id {p.Id}) — {server.PlayerCount} player(s)");
 server.PlayerRemoved += id => Console.WriteLine($"[server] removed id {id} — {server.PlayerCount} player(s)");
 server.ProfileEvicted += key => Console.WriteLine($"[career] evicted pristine profile {key} at grace lapse");
+// M5.4: the committed chat feed (player lines + system events) mirrors to the operator's console.
+server.Chat += e => Console.WriteLine(e.Kind switch
+{
+    ChatMessageKind.Player => $"[chat] {e.SenderName}: {e.Text}",
+    ChatMessageKind.Joined => $"[chat] * {e.SenderName} joined",
+    ChatMessageKind.Left => $"[chat] * {e.SenderName} left",
+    ChatMessageKind.Kicked => $"[chat] * {e.SenderName} was kicked",
+    ChatMessageKind.Banned => $"[chat] * {e.SenderName} was banned",
+    _ => $"[chat] [server] {e.Text}",
+});
 
 var autosaver = new Autosaver(clock, opts.AutosaveSeconds * 1000L, storage, () => SaveCodec.Write(server.CaptureSave()));
 autosaver.SaveFailed += e => Console.WriteLine(
@@ -262,7 +272,8 @@ while (!stopping)
         },
         restore: index => storage.TryRestoreBackup(index, out string? why)
             ? (true, $"restored backup {index} — stopping WITHOUT the final save so it sticks; restart to load it (the displaced world survives as .1)")
-            : (false, $"restore failed: {why}")))
+            : (false, $"restore failed: {why}"),
+        say: text => server.BroadcastServerChat(text)))
         stopping = true; // failure already logs via SaveFailed
 
     // Only gather the sample when a report is actually due — it queries process memory and forces a

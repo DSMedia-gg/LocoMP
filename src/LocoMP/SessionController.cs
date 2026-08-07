@@ -123,6 +123,10 @@ public sealed class SessionController
     public event Action<string>? ErrorRaised;
     public event Action<string>? CareerToast;
 
+    /// <summary>M5.4: a committed chat line arrived (player, system event, or server). Already in
+    /// <see cref="NetClient.ChatLog"/> when this fires; the overlay appends, the log has a copy.</summary>
+    public event Action<ChatEntry>? ChatReceived;
+
     // ── M5.1 join progress + structured refusal ──────────────────────────────────────────────
 
     /// <summary>Where the join burst is (<see cref="Core.Session.JoinStage.None"/> when no client
@@ -866,6 +870,17 @@ public sealed class SessionController
         };
         // M5.2: the roster status (roles + ping) repaints the same list PlayersChanged drives.
         client.RosterChanged += () => PlayersChanged?.Invoke();
+        // M5.4 chat: every committed line lands in Player.log too — the live-verify trail.
+        client.ChatReceived += e =>
+        {
+            _log(e.Kind switch
+            {
+                ChatMessageKind.Player => $"[chat] {e.SenderName}: {e.Text}",
+                ChatMessageKind.Server => $"[chat] [server] {e.Text}",
+                _ => $"[chat] * {e.SenderName} {e.Kind.ToString().ToLowerInvariant()}",
+            });
+            ChatReceived?.Invoke(e);
+        };
         client.AdminNotice += (kind, arg) =>
         {
             if (kind != AdminNoticeKind.SessionEnded) return;

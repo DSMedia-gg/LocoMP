@@ -21,6 +21,11 @@ public sealed class NetClient : IDisposable
     private readonly IClock _clock;
     private readonly Dictionary<int, PlayerState> _players = new();
     private readonly Dictionary<int, PlayerStatus> _roster = new();
+    private readonly List<ChatEntry> _chatLog = new();
+
+    /// <summary>Most chat lines the client keeps (M5.4) — the overlay's scrollback bound. Oldest
+    /// lines fall off; the session log is ephemeral by design (no history replay on join).</summary>
+    public const int ChatLogCapacity = 100;
 
     public NetClient(ITransport transport, HandshakeRequest identity, string displayName, IClock clock,
         string? password = null, string? playerKey = null)
@@ -148,6 +153,16 @@ public sealed class NetClient : IDisposable
     /// a role change, or an action rejection. Args: kind, string argument (meaning depends on kind).</summary>
     public event Action<AdminNoticeKind, string>? AdminNotice;
 
+    /// <summary>A chat line arrived (M5.4) — a player message (our own lines come back as the
+    /// server's echo, so rendering the echo shows exactly what was committed), a system event
+    /// (joined/left/kicked/banned), or a server line. Already appended to <see cref="ChatLog"/>
+    /// when this fires.</summary>
+    public event Action<ChatEntry>? ChatReceived;
+
+    /// <summary>The session's chat backlog, oldest first, capped at <see cref="ChatLogCapacity"/>.
+    /// Cleared on disconnect — chat is session-scoped.</summary>
+    public IReadOnlyList<ChatEntry> ChatLog => _chatLog;
+
     /// <summary>server → admin: a diagnostics snapshot, in reply to <see cref="RequestDiagnostics"/> (M5.2).</summary>
     public event Action<ServerDiagnostics>? DiagnosticsReceived;
 
@@ -258,6 +273,19 @@ public sealed class NetClient : IDisposable
     public void SetAutosaveInterval(int seconds) =>
         SendAdminAction(AdminActionKind.SetAutosaveInterval, 0, seconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
+    /// <summary>Send a chat line (M5.4). The server sanitises, rate-limits, and echoes the committed
+    /// line back to everyone INCLUDING us — render from <see cref="ChatReceived"/>, never locally, so
+    /// the sender sees exactly what the session saw. Reliable-unordered (03 §5).</summary>
+    public void SendChat(string text)
+    {
+        if (!Joined || string.IsNullOrWhiteSpace(text)) return;
+        byte[] payload = new PacketWriter(32)
+            .WriteByte((byte)MessageType.ChatSend)
+            .WriteString(text)
+            .ToArray();
+        _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableUnordered);
+    }
+
     /// <summary>Advance the join stage, forward only — later traffic of an earlier family (ordinary
     /// in-session career/item messages) must never regress the display, and nothing but the server's
     /// sentinel may reach Complete.</summary>
@@ -294,6 +322,7 @@ public sealed class NetClient : IDisposable
         ClearQueue();
         _players.Clear();
         _roster.Clear();   // silent — Disconnected below already tells the frontend everything is gone
+        _chatLog.Clear();  // chat is session-scoped (M5.4)
         WorldTimeOa = 0;   // the next session's sun re-anchors from its own join burst
         WorldDayLengthMinutes = 0;
         if (WorldPaused)
@@ -338,6 +367,7 @@ public sealed class NetClient : IDisposable
                 case MessageType.InterestHide: HandleInterestHide(r); break;
                 case MessageType.JoinBurstComplete: AdvanceStage(JoinStage.Complete); break;
                 case MessageType.AdminNotice: HandleAdminNotice(r); break;
+                case MessageType.ChatMessage: HandleChatMessage(r); break;
                 case MessageType.AdminDiagnostics: DiagnosticsReceived?.Invoke(AdminCodec.ReadDiagnostics(r)); break;
                 case MessageType.AdminBanList: BanListReceived?.Invoke(AdminCodec.ReadBanList(r)); break;
                 case MessageType.RosterStatus: HandleRosterStatus(r); break;
@@ -509,6 +539,20 @@ public sealed class NetClient : IDisposable
             .WriteSingle(dayLengthMinutes)
             .ToArray();
         _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>One committed chat line (M5.4): append to the capped backlog, then notify. The kind
+    /// decides how the UI words it; the payload is display-ready otherwise.</summary>
+    private void HandleChatMessage(PacketReader r)
+    {
+        var kind = (ChatMessageKind)r.ReadByte();
+        int senderId = (int)r.ReadVarUInt();
+        string senderName = r.ReadString();
+        string text = r.ReadString();
+        var entry = new ChatEntry(kind, senderId, senderName, text);
+        _chatLog.Add(entry);
+        if (_chatLog.Count > ChatLogCapacity) _chatLog.RemoveAt(0);
+        ChatReceived?.Invoke(entry);
     }
 
     /// <summary>A moderation consequence from the server (M5.2). Display-only — the authoritative effect

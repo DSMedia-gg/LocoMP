@@ -48,6 +48,7 @@ if (opts.Listen)
     server = new NetServer(serverTransport, new ServerConfig(opts.ToIdentity(), opts.Password), clock);
     server.PlayerAdmitted += p => Console.WriteLine($"[server] admitted {p.Name} (id {p.Id}) — {server!.PlayerCount} player(s)");
     server.PlayerRemoved += id => Console.WriteLine($"[server] removed id {id} — {server!.PlayerCount} player(s)");
+    server.Chat += e => Console.WriteLine($"[server] chat {(e.Kind == LocoMP.Core.Protocol.ChatMessageKind.Player ? e.SenderName + ": " + e.Text : "* " + e.SenderName + " " + e.Kind.ToString().ToLowerInvariant())}");
     Console.WriteLine($"[server] hosting on UDP {opts.Port} — join from the game (address 127.0.0.1)");
 }
 
@@ -69,7 +70,7 @@ for (int i = 0; i < opts.Count; i++)
         : opts.Count > 1 ? $"{opts.PlayerKey}-{i + 1}" : opts.PlayerKey;
     var bot = new BotClient(name, connect,
         opts.ToIdentity(), behavior, clock, Console.WriteLine,
-        opts.Password, opts.ChurnSeconds, playerKey);
+        opts.Password, opts.ChurnSeconds, playerKey, opts.Say);
     // Multiple ghosts/claimers share a start hint; stagger them a seed apart so they diverge at junctions.
     uint? startEdge = opts.StartEdge >= 0 ? (uint)opts.StartEdge : (uint?)null;
     ConsistDriver? driver = null;

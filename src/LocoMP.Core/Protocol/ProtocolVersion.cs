@@ -85,5 +85,12 @@ public static class ProtocolVersion
     /// hardware, grant-exempt — the game's physical-reach requirement is the proximity gate), which
     /// changes no message shape. A v17 peer wouldn't know the new messages, so this is a deliberate
     /// incompatible bump, per v7/v11 precedent.</remarks>
-    public const int Current = 18;
+    /// <remarks>v19 (M5.4 chat): ChatSend (MessageType 77) carries a player's line to the server —
+    /// sanitised, per-peer rate-limited (the first slice of 03 §9's promised limits), and echoed to
+    /// everyone (sender included) as ChatMessage (78), which also carries the server-authored system
+    /// feed: joined / left / kicked / banned lines (only the server knows WHY a player departed —
+    /// bystanders otherwise see one uniform PlayerLeft) and dedicated-console "say" lines. The first
+    /// family on the reliable-unordered tier the 03 §5 split reserved for chat. A v18 peer wouldn't
+    /// know the new messages, so this is a deliberate incompatible bump, per v7/v11 precedent.</remarks>
+    public const int Current = 19;
 }

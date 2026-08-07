@@ -33,6 +33,7 @@ public sealed class SessionViewModel
         c.JoinStageChanged += s => { JoinStageChanged?.Invoke(s); Raise(); };
         c.JoinRejected += r => { JoinRejected?.Invoke(r); Raise(); };
         c.QueueChanged += (position, total) => { QueueChanged?.Invoke(position, total); Raise(); };
+        c.ChatReceived += e => { ChatReceived?.Invoke(e); Raise(); };
     }
 
     public SessionPhase Phase => _c.Phase;
@@ -149,4 +150,18 @@ public sealed class SessionViewModel
 
     /// <summary>Diagnostics snapshot (host only; null otherwise) — the panel renders it read-only.</summary>
     public ServerDiagnostics? Diagnostics => _c.Server?.CaptureDiagnostics();
+
+    // ── M5.4 chat (the overlay binds these) ───────────────────────────────────────────────────
+
+    /// <summary>A committed chat line arrived (also coalesced into Changed). The overlay appends
+    /// rather than rebinding the whole backlog.</summary>
+    public event Action<ChatEntry>? ChatReceived;
+
+    /// <summary>The session's chat backlog, oldest first (empty outside a session).</summary>
+    public IReadOnlyList<ChatEntry> ChatLog =>
+        _c.Client?.ChatLog ?? (IReadOnlyList<ChatEntry>)Array.Empty<ChatEntry>();
+
+    /// <summary>Send a chat line. The server echoes the committed form back to everyone including
+    /// us — the overlay renders the echo, never the local draft.</summary>
+    public void SendChat(string text) => _c.Client?.SendChat(text);
 }

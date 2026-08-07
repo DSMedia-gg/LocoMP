@@ -371,4 +371,21 @@ public enum MessageType : byte
     /// Wire: [paused:byte][reason:string (display text, may be empty)]. Broadcast on every change and
     /// sent in the join burst while paused; a dedicated server never pauses (no host to pause).</summary>
     WorldPauseState = 76,
+
+    // ── M5.4 chat (protocol v19): the first family on the reliable-UNORDERED tier the 03 §5 channel
+    // split reserved for chat/UI. Text-only, session-scoped, no history replay — a joiner's log
+    // starts at admission. ──
+
+    /// <summary>client → server: a chat line from this player. Wire: [text:string]. The server
+    /// sanitises (trim, control chars, length cap), rate-limits per peer (<see cref="Session.ChatPolicy"/>),
+    /// stamps the sender authoritatively, and broadcasts a <see cref="ChatMessage"/> — the sender
+    /// renders from the echo, so what everyone sees is what the sender sees.</summary>
+    ChatSend = 77,
+
+    /// <summary>server → clients: one committed chat line — a player message or a system event. Wire:
+    /// [kind:byte (<see cref="ChatMessageKind"/>)][senderPeerId:varuint (0 = no player)][senderName:string]
+    /// [text:string (empty for system kinds — the client renders "name joined" etc. from the kind, which
+    /// keeps the strings localization-ready)]. The name is server-stamped so a line outlives its
+    /// sender's departure. Reliable-unordered (03 §5).</summary>
+    ChatMessage = 78,
 }

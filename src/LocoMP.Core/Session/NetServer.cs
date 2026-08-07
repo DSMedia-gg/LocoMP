@@ -24,6 +24,7 @@ public sealed class NetServer : IDisposable
     private readonly IClock _clock;
     private readonly Dictionary<int, PlayerState> _players = new();
     private readonly ServerModeration _moderation = new();
+    private readonly ChatPolicy _chat;
 
     // The admission queue (D18): joiners who passed EVERY validation but capacity, in arrival order.
     // A queued peer is connected but NOT admitted — no roster entry, no subsystem state, its non-join
@@ -66,6 +67,7 @@ public sealed class NetServer : IDisposable
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _clock = clock ?? throw new ArgumentNullException(nameof(clock));
         _topology = topology;
+        _chat = new ChatPolicy(_clock);
 
         Func<int, Pose?> poseOf = id => _players.TryGetValue(id, out PlayerState? p) ? p.Pose : (Pose?)null;
         WorldTime = new WorldClock(_clock);
@@ -274,6 +276,61 @@ public sealed class NetServer : IDisposable
             _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);
     }
 
+    /// <summary>Every chat line the server commits — player messages and system events alike (M5.4).
+    /// The dedicated-server console logs from this; sender-only service notices (the rate-limit
+    /// warning) are private and never raised here.</summary>
+    public event Action<ChatEntry>? Chat;
+
+    /// <summary>Say something as THE SERVER (M5.4 — the dedicated console's <c>say</c>; a host talks
+    /// as a player through their own client instead). Sanitised like player chat but never
+    /// rate-limited; empty after sanitisation is a no-op.</summary>
+    public void BroadcastServerChat(string text)
+    {
+        string clean = ChatPolicy.Sanitize(text);
+        if (clean.Length == 0) return;
+        BroadcastChat(new ChatEntry(ChatMessageKind.Server, 0, string.Empty, clean));
+    }
+
+    /// <summary>Commit one chat line: broadcast to every admitted player (minus an optional
+    /// exception) and raise <see cref="Chat"/> for the server process's own log.</summary>
+    private void BroadcastChat(ChatEntry entry, int exceptPeer = 0)
+    {
+        byte[] payload = BuildChatMessage(entry);
+        foreach (int id in _players.Keys)
+            if (id != exceptPeer) _transport.Send(id, payload, DeliveryMethod.ReliableUnordered);
+        Chat?.Invoke(entry);
+    }
+
+    private static byte[] BuildChatMessage(ChatEntry entry) => new PacketWriter(32)
+        .WriteByte((byte)MessageType.ChatMessage)
+        .WriteByte((byte)entry.Kind)
+        .WriteVarUInt((uint)entry.SenderId)
+        .WriteString(entry.SenderName)
+        .WriteString(entry.Text)
+        .ToArray();
+
+    /// <summary>A player's chat line (M5.4). Sanitise, charge the sender's bucket, stamp the sender
+    /// authoritatively, and echo to EVERYONE — the sender renders from the echo, so what they see is
+    /// exactly what was committed (truncation included). A refused line dies silently except for a
+    /// cooldown-gated warning to the sender alone.</summary>
+    private void HandleChatSend(int peerId, PacketReader r)
+    {
+        if (!_players.TryGetValue(peerId, out PlayerState? sender)) return;
+        string clean = ChatPolicy.Sanitize(r.ReadString());
+        if (clean.Length == 0) return;
+
+        if (!_chat.TryCharge(peerId, out bool warn))
+        {
+            if (warn)
+                _transport.Send(peerId, BuildChatMessage(new ChatEntry(
+                    ChatMessageKind.Server, 0, string.Empty, "you're sending messages too quickly")),
+                    DeliveryMethod.ReliableUnordered);
+            return;
+        }
+
+        BroadcastChat(new ChatEntry(ChatMessageKind.Player, peerId, sender.Name, clean));
+    }
+
     /// <summary>Announce a clean session end (M5.2 Save &amp; Stop / dedicated shutdown) to every
     /// admitted AND queued peer, so their UI can say "the host ended the session" instead of inferring
     /// a dead link. Announce-only by design: state teardown stays with the caller's ordinary
@@ -392,6 +449,7 @@ public sealed class NetServer : IDisposable
                 case MessageType.WorldTimeReport:
                     if (_players.ContainsKey(peerId)) HandleWorldTimeReport(peerId, r);
                     break;
+                case MessageType.ChatSend: HandleChatSend(peerId, r); break;
                 default:
                     // Subsystem traffic is only heard from ADMITTED peers — everything else is
                     // ignored. Try each subsystem in turn; the first to claim the type wins.
@@ -490,8 +548,9 @@ public sealed class NetServer : IDisposable
             else
             {
                 // pump: false — the freed slot is a HANDOVER to this reconnecting player, not a
-                // vacancy for the queue; the capacity check below admits them into it.
-                Remove(zombie, pump: false);
+                // vacancy for the queue; the capacity check below admits them into it. No farewell
+                // line: the player never left, their zombie link did.
+                Remove(zombie, pump: false, farewell: null);
                 _transport.Disconnect(zombie);
             }
         }
@@ -557,6 +616,8 @@ public sealed class NetServer : IDisposable
             _transport.Send(peerId, BuildWorldPauseState(), DeliveryMethod.ReliableOrdered);
         Career.OnPlayerAdmitted(peerId, playerKey, name);  // career burst: your career + the board
         Items.OnPlayerAdmitted(peerId);                    // item burst: AFTER career maps peer↔key
+        BroadcastChat(new ChatEntry(ChatMessageKind.Joined, peerId, name, string.Empty),
+            exceptPeer: peerId);                           // system feed: everyone else's chat log (M5.4)
         BroadcastRoster();                                 // roles+ping ride the burst for the newcomer
                                                            // AND update everyone else's player list
         SendJoinBurstComplete(peerId);                     // MUST be the last send of the burst — the
@@ -686,8 +747,11 @@ public sealed class NetServer : IDisposable
                 if (kind == AdminActionKind.Ban) _moderation.Ban(victimKey);
                 SendAdminNotice(targetPeerId,
                     kind == AdminActionKind.Ban ? AdminNoticeKind.Banned : AdminNoticeKind.Kicked, "");
-                // A genuine vacancy: Remove pumps the queue (unlike an F7 handover). Then close the socket.
-                Remove(targetPeerId);
+                // A genuine vacancy: Remove pumps the queue (unlike an F7 handover). Then close the
+                // socket. The farewell kind tells every bystander's chat WHY (M5.4) — only the server
+                // knows; the wire's PlayerLeft is uniform.
+                Remove(targetPeerId, farewell: kind == AdminActionKind.Ban
+                    ? ChatMessageKind.Banned : ChatMessageKind.Kicked);
                 _transport.Disconnect(targetPeerId);
                 break;
 
@@ -817,7 +881,10 @@ public sealed class NetServer : IDisposable
 
     private void OnPeerDisconnected(int peerId) => Remove(peerId);
 
-    private void Remove(int peerId, bool pump = true)
+    /// <param name="farewell">The system chat line the departure earns (M5.4): Left for an ordinary
+    /// leave/drop, Kicked/Banned from the moderation path, null for the F7 takeover eviction — the
+    /// player is right there reconnecting, so a "left" line would be a lie.</param>
+    private void Remove(int peerId, bool pump = true, ChatMessageKind? farewell = ChatMessageKind.Left)
     {
         // A QUEUED peer leaving (transport drop or Leave) just leaves the line — it was never
         // admitted, so there is no roster entry or subsystem state to release. Everyone behind
@@ -834,6 +901,7 @@ public sealed class NetServer : IDisposable
         // default (never-streamed) pose is null here, not a phantom position at the origin.
         Pose? lastPose = _posed.Contains(peerId) && _players.TryGetValue(peerId, out PlayerState? last)
             ? last.Pose : (Pose?)null;
+        string? name = _players.TryGetValue(peerId, out PlayerState? leaving) ? leaving.Name : null;
 
         if (!_players.Remove(peerId)) return; // never joined, or already removed — no double broadcast
 
@@ -843,6 +911,10 @@ public sealed class NetServer : IDisposable
             .ToArray();
         foreach (int id in _players.Keys)
             _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);
+
+        if (farewell.HasValue)                             // system feed: why they departed (M5.4)
+            BroadcastChat(new ChatEntry(farewell.Value, peerId, name ?? string.Empty, string.Empty));
+        _chat.Forget(peerId);                              // peer ids are transport-scoped, may be reused
 
         Trains.OnPlayerRemoved(peerId);                    // park their consists, free their grants
         Items.OnPlayerRemoved(peerId, lastPose);           // release/retain their held items — BEFORE

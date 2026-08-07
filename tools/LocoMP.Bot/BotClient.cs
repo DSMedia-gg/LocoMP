@@ -42,7 +42,8 @@ public sealed class BotClient : IDisposable
 
     public BotClient(string name, Func<ITransport> connectFactory, HandshakeRequest identity,
                      IBotBehavior behavior, IClock clock, Action<string> log,
-                     string? password = null, double churnSeconds = 0, string? playerKey = null)
+                     string? password = null, double churnSeconds = 0, string? playerKey = null,
+                     string? sayOnJoin = null)
     {
         _name = name;
         _connect = connectFactory;
@@ -53,7 +54,14 @@ public sealed class BotClient : IDisposable
         _password = password;
         _churnMs = (long)(churnSeconds * 1000);
         _playerKey = playerKey;
+        _sayOnJoin = string.IsNullOrWhiteSpace(sayOnJoin) ? null : sayOnJoin;
     }
+
+    /// <summary>M5.4: a chat line announced once per join, only after the burst settles (chat is an
+    /// in-session surface — greeting mid-burst would race the newcomer's own log). Re-sent after a
+    /// churn/reconnect, which is exactly what a live chat row wants from a remote peer.</summary>
+    private readonly string? _sayOnJoin;
+    private bool _saidThisJoin;
 
     public bool Joined => _client?.Joined == true;
 
@@ -92,6 +100,13 @@ public sealed class BotClient : IDisposable
             {
                 _joinedAtMs = now;
                 JoinCount++;
+                _saidThisJoin = false;
+            }
+
+            if (!_saidThisJoin && _sayOnJoin != null && _client.JoinSettled)
+            {
+                _saidThisJoin = true;
+                _client.SendChat(_sayOnJoin);
             }
 
             _client.SendPose(_behavior.Tick(dtSeconds));
@@ -140,6 +155,14 @@ public sealed class BotClient : IDisposable
                 : $"[{_name}] left the admission queue");
         _client.PlayerJoined += p => _log($"[{_name}] sees player join: {p.Name} (id {p.Id})");
         _client.PlayerLeft += id => _log($"[{_name}] sees player leave: id {id}");
+        // M5.4 chat: every committed line logs, so a live row can read the whole conversation —
+        // including this bot's own echo, which proves the round trip — from the bot console alone.
+        _client.ChatReceived += e => _log(e.Kind switch
+        {
+            ChatMessageKind.Player => $"[{_name}] chat {e.SenderName}: {e.Text}",
+            ChatMessageKind.Server => $"[{_name}] chat [server] {e.Text}",
+            _ => $"[{_name}] chat * {e.SenderName} {e.Kind.ToString().ToLowerInvariant()}",
+        });
         // Subscribed unconditionally, for every mode: "the replica vanishes on the OTHER peer" is the entire
         // assertion of the comms-radio delete check (RUNBOOK A3 Run B), and without this line the bot has no
         // way to report it — a lingering ghost replica and a correctly-removed one look identical from a
