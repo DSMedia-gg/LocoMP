@@ -62,6 +62,7 @@ public sealed class BotClient : IDisposable
     /// churn/reconnect, which is exactly what a live chat row wants from a remote peer.</summary>
     private readonly string? _sayOnJoin;
     private bool _saidThisJoin;
+    private double _lastWorldOa;
 
     public bool Joined => _client?.Joined == true;
 
@@ -141,6 +142,7 @@ public sealed class BotClient : IDisposable
     {
         _attemptStartedMs = now;
         _joinedAtMs = 0;
+        _lastWorldOa = 0; // a fresh join's burst restates current time — that's an anchor, not a jump
         _transport = _connect();
         _client = new NetClient(_transport, _identity, _name, _clock, _password, _playerKey);
         _client.Accepted += id => _log($"[{_name}] joined as id {id} (server offset {_client!.ServerTimeOffsetMs} ms, sees {_client.Players.Count} other player(s))");
@@ -155,6 +157,18 @@ public sealed class BotClient : IDisposable
                 : $"[{_name}] left the admission queue");
         _client.PlayerJoined += p => _log($"[{_name}] sees player join: {p.Name} (id {p.Id})");
         _client.PlayerLeft += id => _log($"[{_name}] sees player leave: id {id}");
+        // D19 + v18 world-time: the bot is the observable "second player" on a one-PC rig — the
+        // host's ESC pause and sleep/fast-travel time jumps must visibly reach a client, and this
+        // console is where that shows. Heartbeat restatements stay silent; only JUMPS log
+        // (> ~30 world-minutes between updates — steady flow at 48x advances ~4).
+        _client.WorldPauseChanged += (paused, reason) =>
+            _log($"[{_name}] world {(paused ? "PAUSED" : "resumed")}{(reason.Length > 0 ? " — " + reason : "")}");
+        _client.WorldTimeChanged += (oa, dayLength) =>
+        {
+            if (_lastWorldOa != 0 && Math.Abs(oa - _lastWorldOa) > 0.02)
+                _log($"[{_name}] world time JUMPED to {DateTime.FromOADate(oa):HH:mm} (day length {dayLength:F0} min)");
+            _lastWorldOa = oa;
+        };
         // M5.4 chat: every committed line logs, so a live row can read the whole conversation —
         // including this bot's own echo, which proves the round trip — from the bot console alone.
         _client.ChatReceived += e => _log(e.Kind switch
