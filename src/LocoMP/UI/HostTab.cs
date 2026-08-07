@@ -46,7 +46,7 @@ public sealed class HostTab
         _name = kit.LabeledField(column, "Your name", "Player", _prefs.PlayerName);
         _port = kit.LabeledField(column, "Port", NetDefaults.Port.ToString(CultureInfo.InvariantCulture),
             _prefs.HostPort.ToString(CultureInfo.InvariantCulture), fieldWidth: 140f);
-        _password = kit.LabeledField(column, "Password", "(open session)", masked: true);
+        _password = kit.LabeledField(column, "Password", "(open session)", _prefs.HostPassword, masked: true);
         _maxPlayers = kit.LabeledField(column, "Max players", "32", "32", fieldWidth: 140f);
         _autosave = kit.LabeledField(column, "Autosave (seconds)", "120", "120", fieldWidth: 140f);
 
@@ -94,6 +94,7 @@ public sealed class HostTab
         string name = _name.text.Trim();
         _prefs.PlayerName = name.Length > 0 ? name : _prefs.PlayerName;
         _prefs.HostPort = port;
+        _prefs.HostPassword = _password.text; // D22: what you hosted with is what you host with next
         _prefs.Save(_log);
 
         _vm.Host(new HostOptions

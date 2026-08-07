@@ -22,6 +22,7 @@ public sealed class HostMenuScreen : IScreen
     private static readonly string[] Sections = { "Players", "Session", "World & Save", "Diagnostics" };
 
     private readonly SessionViewModel _vm;
+    private readonly UiPrefs _prefs;
     private readonly Action<string> _log;
     private readonly Action _back;
     private readonly Func<string>? _extractTopology; // returns a status line; null = tool unavailable
@@ -32,9 +33,10 @@ public sealed class HostMenuScreen : IScreen
     private int _section;
     private string _lastAction = "";
 
-    public HostMenuScreen(SessionViewModel vm, Action<string> log, Action back, Func<string>? extractTopology)
+    public HostMenuScreen(SessionViewModel vm, UiPrefs prefs, Action<string> log, Action back, Func<string>? extractTopology)
     {
         _vm = vm;
+        _prefs = prefs;
         _log = log;
         _back = back;
         _extractTopology = extractTopology;
@@ -180,8 +182,13 @@ public sealed class HostMenuScreen : IScreen
         TMP_InputField pw = kit.LabeledField(pwRow, "Password", "empty = open session");
         kit.Button(pwRow, "Apply", () =>
         {
-            _vm.SetPassword(pw.text.Trim());
-            Note(pw.text.Trim().Length == 0 ? "session password removed" : "session password changed");
+            string value = pw.text.Trim();
+            _vm.SetPassword(value);
+            // D22: a mid-session change IS the host's password now — persist it so the next
+            // re-host keeps it (the R4-C finding: the host dialog's stale config used to win).
+            _prefs.HostPassword = value;
+            _prefs.Save(_log);
+            Note(value.Length == 0 ? "session password removed" : "session password changed");
         }, width: 110f);
 
         RectTransform capRow = kit.Row(column, "Max players");

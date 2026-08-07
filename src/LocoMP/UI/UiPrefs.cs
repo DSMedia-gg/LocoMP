@@ -11,7 +11,11 @@ namespace LocoMP.UI;
 /// The LocoMP settings store (M5.1 form memory, grown into the M5.3 backend): player name, join
 /// endpoints, and the client preferences, as key=value lines beside the other LocoMP files in
 /// <see cref="Application.persistentDataPath"/> (the PlayerKeyStore pattern — one flat file, no
-/// serializer dependency). Passwords are NEVER persisted. Unreadable/absent file = defaults,
+/// serializer dependency). JOIN passwords are never persisted (they are someone else's secret);
+/// the HOST'S OWN session password persists per D22 — R4-C found a password set mid-session
+/// silently lost on re-host, and what the host last set is what the next session must get. It is
+/// a session gate, not a credential (the player key is the credential, and stays in
+/// PlayerKeyStore), stored plainly like the rest of this file. Unreadable/absent file = defaults,
 /// never a throw; an out-of-range value clamps instead of poisoning the session.
 ///
 /// <para><b>Live-apply (M5.3):</b> the settings screen edits fields then calls
@@ -34,6 +38,10 @@ public sealed class UiPrefs
     public string Address = "127.0.0.1";
     public int Port = NetDefaults.Port;
     public int HostPort = NetDefaults.Port;
+
+    /// <summary>The host's own session password (D22): prefills the Host tab and survives
+    /// re-hosts; a mid-session change (M5.2 Apply) writes back here. Empty = open session.</summary>
+    public string HostPassword = "";
 
     // ── M5.3 client preferences ────────────────────────────────────────────────────────────────
 
@@ -85,6 +93,7 @@ public sealed class UiPrefs
                     case "address" when value.Length > 0: prefs.Address = value; break;
                     case "port" when TryPort(value, out int p): prefs.Port = p; break;
                     case "hostPort" when TryPort(value, out int hp): prefs.HostPort = hp; break;
+                    case "hostPassword": prefs.HostPassword = value; break; // empty = open session
                     case "recent":
                         // "address port" — split on the LAST space so an exotic address survives.
                         int space = value.LastIndexOf(' ');
@@ -124,6 +133,7 @@ public sealed class UiPrefs
                 "address=" + Address,
                 "port=" + Port.ToString(CultureInfo.InvariantCulture),
                 "hostPort=" + HostPort.ToString(CultureInfo.InvariantCulture),
+                "hostPassword=" + HostPassword,
                 "uiScale=" + UiScale.ToString("0.###", CultureInfo.InvariantCulture),
                 "chatEnabled=" + (ChatEnabled ? "1" : "0"),
                 "chatFade=" + ChatFadeSeconds.ToString("0.###", CultureInfo.InvariantCulture),

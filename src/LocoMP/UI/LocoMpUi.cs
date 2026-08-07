@@ -294,7 +294,7 @@ public sealed class LocoMpUi
                 // M5.2: the host's four utility groups. Guarded here too — the button greys out,
                 // but a stale click between rebuilds must not open a dead panel.
                 if (_vm.IsHost && _router != null)
-                    _router.Push(new HostMenuScreen(_vm, _log, () => _router.Pop(), _extractTopology));
+                    _router.Push(new HostMenuScreen(_vm, _prefs, _log, () => _router.Pop(), _extractTopology));
             }));
             RequestCursor();
             _log($"[ui] LocoMP screens opened ({origin})");
