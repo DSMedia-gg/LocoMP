@@ -12,7 +12,7 @@ namespace LocoMP.Transport;
 /// peer to a fresh outer id. NetServer sees one flat roster and never knows which link a player is
 /// on. Single-threaded like everything at this seam: events fire inside <see cref="Poll"/>.
 /// </summary>
-public sealed class CompositeTransport : ITransport
+public sealed class CompositeTransport : ITransport, IPeerIdentity
 {
     private readonly ITransport[] _inners;
     private readonly Dictionary<int, (int inner, int innerId)> _byOuter = new();
@@ -77,6 +77,13 @@ public sealed class CompositeTransport : ITransport
     /// <summary>RTT is a property of the specific link the peer is on — route to that inner.</summary>
     public int? RttMs(int peerId) =>
         _byOuter.TryGetValue(peerId, out var route) ? _inners[route.inner].RttMs(route.innerId) : null;
+
+    /// <summary>Platform identity routes the same way (M5.5): the answer belongs to the inner link the
+    /// peer arrived on — a Steam-relay peer has a SteamId64, a UDP or Loopback peer has none.</summary>
+    public ulong? IdentityOf(int peerId) =>
+        _byOuter.TryGetValue(peerId, out var route) && _inners[route.inner] is IPeerIdentity identity
+            ? identity.IdentityOf(route.innerId)
+            : null;
 
     public void Disconnect(int peerId)
     {
