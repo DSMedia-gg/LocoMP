@@ -31,6 +31,11 @@ public sealed class ClientTrains
     /// <summary>The mirrored trainset world (definitions + latest snapshots + discard counters).</summary>
     public TrainsetView View { get; } = new();
 
+    /// <summary>The mirrored coupler-hardware state (v18, 02 §1): hoses/anglecocks/MU per car end,
+    /// fed by CouplerHardwareState (join burst + live commits). The Shim's reconcile tick reads this
+    /// to rig replicas; <see cref="CouplerHardwareChanged"/> fires per applied line.</summary>
+    public CouplerHardwareRegistry Hardware { get; } = new();
+
     public IReadOnlyDictionary<uint, byte> Junctions => _junctions;
     public IReadOnlyDictionary<uint, float> Turntables => _turntables;
     public IReadOnlyDictionary<int, int> Grants => _grants;
@@ -65,6 +70,11 @@ public sealed class ClientTrains
     /// perform the real action (rerail to the pose, or delete the car); the native event then drives
     /// the normal path, and we charge <c>initiatorPeer</c> the fee (M4). (kind, carId, dest, initiator)</summary>
     public event Action<CommsActionKind, int, Pose, int>? CommsActionCommanded;
+
+    /// <summary>The server committed a coupler-hardware change (v18) — already folded into
+    /// <see cref="Hardware"/>; the Shim applies it to live replicas (its reconcile tick catches
+    /// replicas that spawn later).</summary>
+    public event Action<CouplerHardwareReport>? CouplerHardwareChanged;
 
     // ── send side (all silently no-op until joined, matching NetClient.SendPose) ──
 
@@ -264,6 +274,17 @@ public sealed class ClientTrains
     /// despawns its replica (M4 — the destroy hook alone can't distinguish delete from stream-out).</summary>
     public void NotifyCarDeleted(int carId) => SendIdOnly(MessageType.CarDeleteNotice, carId);
 
+    /// <summary>Report a coupler-hardware act the local player (or the local native world — an
+    /// auto-break) just performed (v18). The commit comes back as CouplerHardwareState to everyone
+    /// ELSE; redundant restatements are absorbed server-side.</summary>
+    public void ReportCouplerHardware(in CouplerHardwareReport report)
+    {
+        if (!_joined()) return;
+        var w = new PacketWriter(16).WriteByte((byte)MessageType.CouplerHardwareReport);
+        TrainCodec.WriteCouplerHardware(w, report);
+        _transport.Send(NetProtocol.ServerPeer, w.ToArray(), DeliveryMethod.ReliableOrdered);
+    }
+
     // ── receive side ──
 
     internal bool TryHandle(MessageType type, PacketReader r)
@@ -364,6 +385,13 @@ public sealed class ClientTrains
                 CommsActionCommanded?.Invoke(kind, carId, dest, initiator);
                 return true;
             }
+            case MessageType.CouplerHardwareState:
+            {
+                CouplerHardwareReport report = TrainCodec.ReadCouplerHardware(r);
+                Hardware.ApplyCommitted(report);
+                CouplerHardwareChanged?.Invoke(report);
+                return true;
+            }
             default:
                 return false;
         }
@@ -375,6 +403,7 @@ public sealed class ClientTrains
         _junctions.Clear();
         _turntables.Clear();
         _grants.Clear();
+        Hardware.Clear();
         // TrainsetView state is rebuilt by the join burst too; recreate-on-join keeps its counters
         // meaningful per session — but View is a public property, so clear via its own applies:
         foreach (int id in new List<int>(View.Sets.Keys)) View.ApplyRemove(id);

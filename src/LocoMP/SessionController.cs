@@ -63,6 +63,7 @@ public sealed class SessionController
     private ManualServiceSync? _manualService;
     private WorldTimeSync? _worldTime;
     private HandbrakeSync? _handbrakes;
+    private CouplerHardwareSync? _couplerHardware;
     private string _careerToast = "";
 
     // IMGUI field state
@@ -228,6 +229,7 @@ public sealed class SessionController
         _cabControls?.Tick((float)dt);
         _worldTime?.Tick((float)dt);
         _handbrakes?.Tick((float)dt);
+        _couplerHardware?.Tick((float)dt);
         _walletMirror?.Tick(dt);
         _itemSync?.Tick(dt);
         _commsRadio?.Tick(dt);
@@ -718,6 +720,9 @@ public sealed class SessionController
             _worldTime = new WorldTimeSync(_client, isHost: true, _log);
             // v18 (02 §1): per-car handbrakes over the control-state machinery (id 200).
             _handbrakes = new HandbrakeSync(_client, _trains, _log);
+            // v18 (02 §1): hoses/anglecocks/MU as server-validated discrete state; the reconcile
+            // tick also SEEDS the host's pre-connected consists into the session.
+            _couplerHardware = new CouplerHardwareSync(_client, _trains, _log);
             _mode = Mode.Hosting;
 
             _log($"[session] hosting on UDP {port} (game reports version '{PresenceShim.ReportedGameVersion}', handshake build '{PresenceShim.GameBuild}')");
@@ -787,6 +792,8 @@ public sealed class SessionController
             _worldTime = new WorldTimeSync(_client, isHost: false, _log);
             // v18 (02 §1): per-car handbrakes over the control-state machinery (id 200).
             _handbrakes = new HandbrakeSync(_client, _trains, _log);
+            // v18 (02 §1): hoses/anglecocks/MU discrete state — replicas rig up from the mirror.
+            _couplerHardware = new CouplerHardwareSync(_client, _trains, _log);
             _mode = Mode.Joined;
             _log($"[session] joining {_address}:{_portText}…");
         }
@@ -932,6 +939,8 @@ public sealed class SessionController
         _worldTime = null;
         _handbrakes?.Dispose();                        // unhooks every BrakeSystem watch
         _handbrakes = null;
+        _couplerHardware?.Dispose();                   // unhooks the static hose/MU seams + cock hooks
+        _couplerHardware = null;
         JobGenSuppressor.Active = false;               // DV's own generation resumes outside sessions
         SaveSuppressor.Active = false;                 // native saving resumes outside sessions
         CarSaveFilter.IsReplica = null;                // SP saves are unfiltered again (cleared before _trains dies)

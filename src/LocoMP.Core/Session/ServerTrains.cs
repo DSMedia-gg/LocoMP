@@ -31,6 +31,11 @@ public sealed class ServerTrains
     // state only — restored worlds come back neutral, like the game's own cold start.
     private readonly Dictionary<int, Dictionary<byte, float>> _controls = new();
 
+    // v18 coupler hardware (02 §1): hoses/anglecocks/MU per car end — server-validated discrete
+    // state, replayed in the join burst. Session state only, like _controls: a restored world's
+    // native spawn logic re-rigs its own consists.
+    private readonly CouplerHardwareRegistry _hardware = new();
+
     // Last ADMITTED snapshot per trainset — always epoch-current by construction (admission checks
     // the epoch and every transaction prunes). Feeds the join-burst baseline and the world save.
     private readonly Dictionary<int, TrainsetSnapshot> _latest = new();
@@ -208,6 +213,7 @@ public sealed class ServerTrains
             case MessageType.UncoupleRequest: HandleUncoupleRequest(peerId, r); return true;
             case MessageType.CommsActionRequest: HandleCommsActionRequest(peerId, r); return true;
             case MessageType.CarDeleteNotice: HandleCarDeleteNotice(peerId, r); return true;
+            case MessageType.CouplerHardwareReport: HandleCouplerHardware(peerId, r); return true;
             default: return false;
         }
     }
@@ -231,6 +237,8 @@ public sealed class ServerTrains
         foreach (KeyValuePair<int, Dictionary<byte, float>> car in _controls)
             foreach (KeyValuePair<byte, float> ctrl in car.Value)
                 _transport.Send(peerId, BuildControlState(car.Key, ctrl.Key, ctrl.Value), DeliveryMethod.ReliableOrdered);
+        foreach (CouplerHardwareReport line in _hardware.EnumerateState())
+            _transport.Send(peerId, BuildHardwareState(line), DeliveryMethod.ReliableOrdered);
     }
 
     /// <summary>A player left: park their consists (03 §3 — positions freeze until reclaimed) and
@@ -263,6 +271,7 @@ public sealed class ServerTrains
                 Registry.Remove(trainsetId);
                 _latest.Remove(trainsetId);   // defensive — a phantom has none by definition
                 ForgetInterest(trainsetId);
+                foreach (CarDef car in def.Cars) _hardware.PruneCar(car.Id); // a phantom's rig dies with it
                 Broadcast(BuildRemove(trainsetId), DeliveryMethod.ReliableOrdered);
             }
             else if (TryGrantHeir(def, out int heir))
@@ -315,9 +324,19 @@ public sealed class ServerTrains
         if (_latest.TryGetValue(trainsetId, out TrainsetSnapshot? snap))
             _transport.Send(peerId, BuildSnapshot(snap), DeliveryMethod.ReliableOrdered);
         foreach (CarDef car in def.Cars)
+        {
             if (_controls.TryGetValue(car.Id, out Dictionary<byte, float>? perCar))
                 foreach (KeyValuePair<byte, float> ctrl in perCar)
                     _transport.Send(peerId, BuildControlState(car.Id, ctrl.Key, ctrl.Value), DeliveryMethod.ReliableOrdered);
+        }
+        // Hardware lines for this set's cars (v18) — the rebuilt replica must rig back up.
+        foreach (CouplerHardwareReport line in _hardware.EnumerateState())
+            foreach (CarDef car in def.Cars)
+                if (line.CarA == car.Id || line.CarB == car.Id)
+                {
+                    _transport.Send(peerId, BuildHardwareState(line), DeliveryMethod.ReliableOrdered);
+                    break;
+                }
     }
 
     // ── server-owned trains (M6-B.2): the dedicated server as a sim owner ──
@@ -790,6 +809,25 @@ public sealed class ServerTrains
             ProposalRejected?.Invoke(peerId, $"delete: {reason}");
     }
 
+    /// <summary>Any player physically worked coupler hardware (v18): validate against consist
+    /// state, commit, broadcast to everyone but the reporter (whose world already did it), absorb
+    /// redundant restatements silently (a native auto-break reports in from EVERY client).</summary>
+    private void HandleCouplerHardware(int peerId, PacketReader r)
+    {
+        CouplerHardwareReport report = TrainCodec.ReadCouplerHardware(r);
+        switch (_hardware.TryApply(report, Registry, out string? reason))
+        {
+            case HardwareApplyResult.Rejected:
+                ProposalRejected?.Invoke(peerId, $"hardware: {reason}");
+                return;
+            case HardwareApplyResult.Redundant:
+                return;
+        }
+        byte[] payload = BuildHardwareState(report);
+        foreach (int id in _connectedIds())
+            if (id != peerId) _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);
+    }
+
     /// <summary>Commit a single-car delete plus its removal broadcasts — shared by the owner's
     /// CarDeleteNotice and the D21 parked retire.</summary>
     private bool CommitCarDelete(int carId, out string? reason)
@@ -799,6 +837,7 @@ public sealed class ServerTrains
         // The car is gone for good, so its kinematic state must not linger and be inherited by a
         // later set that happens to reuse the id.
         ForgetCars(new[] { carId });
+        _hardware.PruneCar(carId);
         if (txn != null)
         {
             BroadcastTransaction(txn);
@@ -927,6 +966,13 @@ public sealed class ServerTrains
             .WriteVarUInt((uint)carId)
             .WriteVarUInt((uint)playerId)
             .ToArray();
+
+    private static byte[] BuildHardwareState(in CouplerHardwareReport report)
+    {
+        var w = new PacketWriter(16).WriteByte((byte)MessageType.CouplerHardwareState);
+        TrainCodec.WriteCouplerHardware(w, report);
+        return w.ToArray();
+    }
 
     private static byte[] BuildControlState(int carId, byte controlId, float value) =>
         new PacketWriter(16)

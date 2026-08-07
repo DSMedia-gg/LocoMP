@@ -146,4 +146,26 @@ internal static class TrainCodec
         for (int i = 0; i < count; i++) cars[i] = ReadCarSnapshot(r);
         return new TrainsetSnapshot(id, epoch, time, cars);
     }
+
+    /// <summary>v18 coupler hardware: one report/state line (same payload both directions).</summary>
+    public static void WriteCouplerHardware(PacketWriter w, in CouplerHardwareReport report)
+    {
+        w.WriteByte((byte)report.Kind);
+        w.WriteVarUInt((uint)report.CarA);
+        w.WriteByte((byte)report.EndA);
+        w.WriteVarUInt((uint)report.CarB);
+        w.WriteByte((byte)report.EndB);
+        w.WriteByte(report.Flag ? (byte)1 : (byte)0);
+    }
+
+    public static CouplerHardwareReport ReadCouplerHardware(PacketReader r)
+    {
+        var kind = (CouplerHardwareKind)r.ReadByte();
+        int carA = (int)r.ReadVarUInt();
+        var endA = (CoupleEnd)r.ReadByte();
+        int carB = (int)r.ReadVarUInt();
+        var endB = (CoupleEnd)r.ReadByte();
+        bool flag = r.ReadByte() != 0;
+        return new CouplerHardwareReport(kind, carA, endA, carB, endB, flag);
+    }
 }
