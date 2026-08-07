@@ -45,7 +45,7 @@ public sealed class StatusHud
         canvas.sortingOrder = LocoMpCanvas.OverlaySortingOrder - 1; // under the screens, over the HUD
         var scaler = _go.AddComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution = new Vector2(1920f, 1080f);
+        LocoMpCanvas.ApplyScale(scaler);
 
         var panelGo = new GameObject("Panel", typeof(RectTransform), typeof(Image));
         var rect = (RectTransform)panelGo.transform;

@@ -30,7 +30,9 @@ public sealed class RealCarSync
     // staleness) at zero protocol risk. Deliberately shipped AHEAD of any dead reckoning: if
     // jitter turns ugly at 30, that diagnosis — lag vs jitter — decides whether extrapolation
     // (TopologyWalker + the 03 §5 250 ms cap) is worth building at all. Judge it in-game.
-    private const float LerpRate = 30f;
+    // M5.3: user-tunable ("interpolation prefs") — the settings store pushes its clamped value
+    // here; the 08-05 live verdict picked the default.
+    public static float LerpRate = 30f;
     private const float SnapDistance = 80f;
     private const float HardenSeconds = 3f;  // car components finish initializing over a few frames
     private const int MaxRespawnsPerSet = 3;

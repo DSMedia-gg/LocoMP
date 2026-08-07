@@ -21,6 +21,7 @@ public sealed class RootScreen : IScreen
     private readonly Action? _openHostMenu;
     private readonly DirectJoinTab _joinTab;
     private readonly HostTab _hostTab;
+    private readonly SettingsTab _settingsTab;
     private readonly GameObject?[] _bodies = new GameObject?[TabNames.Length];
     private TMP_Text? _status;
     private Button? _hostMenuButton;
@@ -34,6 +35,7 @@ public sealed class RootScreen : IScreen
         _openHostMenu = openHostMenu;
         _joinTab = new DirectJoinTab(vm, prefs, log);
         _hostTab = new HostTab(vm, prefs, log);
+        _settingsTab = new SettingsTab(prefs, log);
     }
 
     public GameObject? Go { get; private set; }
@@ -66,8 +68,8 @@ public sealed class RootScreen : IScreen
             kit.Button(tabs, TabNames[i], () => SwitchTab(index), enabled, width: 180f);
         }
 
-        // Tab bodies: Direct Join and Host are the real M5.1 forms; Friends/Settings stay
-        // placeholders until their slices.
+        // Tab bodies: Direct Join, Host and Settings are real forms; Friends stays a
+        // placeholder until the M5.5 Steam slice.
         RectTransform bodyHost = kit.Panel(panel, name: "Body");
         bodyHost.GetComponent<Image>().color = kit.Theme.PanelLight;
         var bodyElement = bodyHost.gameObject.AddComponent<LayoutElement>();
@@ -77,7 +79,7 @@ public sealed class RootScreen : IScreen
             null,
             "Friends goes live once LocoMP connects via Steam (M5.5).",
             null,
-            "Settings arrive with M5.3.",
+            null,
         };
         for (int i = 0; i < TabNames.Length; i++)
         {
@@ -94,6 +96,7 @@ public sealed class RootScreen : IScreen
         }
         _joinTab.Build((RectTransform)_bodies[0]!.transform, kit);
         _hostTab.Build((RectTransform)_bodies[2]!.transform, kit);
+        _settingsTab.Build((RectTransform)_bodies[3]!.transform, kit);
         SwitchTab(0);
     }
 
@@ -130,5 +133,6 @@ public sealed class RootScreen : IScreen
         if (_hostMenuButton != null) _hostMenuButton.interactable = _vm.IsHost;
         _joinTab.Refresh();
         _hostTab.Refresh();
+        _settingsTab.Refresh();
     }
 }

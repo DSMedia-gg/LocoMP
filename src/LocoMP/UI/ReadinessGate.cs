@@ -198,7 +198,7 @@ public sealed class ReadinessGate
         canvas.sortingOrder = LocoMpCanvas.OverlaySortingOrder + 100; // above every LocoMP screen
         var scaler = _coverGo.AddComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution = new Vector2(1920f, 1080f);
+        LocoMpCanvas.ApplyScale(scaler);
         _coverGo.AddComponent<GraphicRaycaster>();
 
         var dimGo = new GameObject("Dim", typeof(RectTransform), typeof(Image));

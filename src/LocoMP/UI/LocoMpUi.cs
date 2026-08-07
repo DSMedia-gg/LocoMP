@@ -49,7 +49,9 @@ public sealed class LocoMpUi
         _prefs = UiPrefs.Load(log);
         Gate = new ReadinessGate(_theme, log);
         Hud = new StatusHud(_theme);
-        Chat = new ChatOverlay(vm, _theme, log);
+        Chat = new ChatOverlay(vm, _theme, _prefs, log);
+        ApplySettings();                 // push the loaded prefs into the statics (M5.3)
+        _prefs.Changed += ApplySettings; // and re-push on every settings-screen commit
         _vm.Changed += OnVmChanged;
         _vm.JoinStageChanged += OnJoinStage;
         _vm.JoinRejected += OnJoinRejected;
@@ -65,6 +67,20 @@ public sealed class LocoMpUi
 
     /// <summary>The M5.4 chat overlay — ambient (never modal), alive whenever a session is.</summary>
     public ChatOverlay Chat { get; }
+
+    /// <summary>The settings store (M5.3) — the settings screen edits this and calls
+    /// NotifyChanged; everything else only reads.</summary>
+    public UiPrefs Prefs => _prefs;
+
+    /// <summary>M5.3 apply hooks: fan the store's values out to the consumers that read statics —
+    /// canvas scale (picked up on each surface's next rebuild) and the Shim's remote-train
+    /// smoothing (read per frame, so it applies mid-session). Chat opts are read live by the
+    /// overlay itself. Idempotent; called at load and on every settings commit.</summary>
+    private void ApplySettings()
+    {
+        LocoMpCanvas.UiScale = _prefs.UiScale;
+        RealCarSync.LerpRate = _prefs.TrainSmoothing;
+    }
 
     public bool IsOpen => _canvas is { Alive: true };
 
@@ -98,6 +114,12 @@ public sealed class LocoMpUi
         // M5.4: the Enter-to-talk feed. Gated off while a screen or the cover owns interaction —
         // their fields must not race chat for the keyboard focus refcount.
         Chat.Tick(allowOpen: !IsOpen && !Gate.Active);
+        // M5.3: the optional in-game hotkey for the LocoMP screens (None = menu buttons only).
+        // In the main menu the button already exists — the hotkey is the in-world path, where
+        // the overlay canvas mode is always the right one.
+        if (_prefs.MenuKey != KeyCode.None && Input.GetKeyDown(_prefs.MenuKey)
+            && !IsOpen && !Gate.Active && !Chat.InputOpen)
+            Open(MenuHookOrigin.PauseMenu);
         if (Input.GetKeyDown(KeyCode.Escape))
         {
             // UnityEngine.Input read — works even with Rewired's kb+mouse detached (gate lock).
@@ -297,6 +319,7 @@ public sealed class LocoMpUi
     /// <summary>Full teardown (mod toggle-off).</summary>
     public void Dispose()
     {
+        _prefs.Changed -= ApplySettings;
         _vm.Changed -= OnVmChanged;
         _vm.JoinStageChanged -= OnJoinStage;
         _vm.JoinRejected -= OnJoinRejected;

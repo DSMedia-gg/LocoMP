@@ -24,6 +24,21 @@ public sealed class LocoMpCanvas
 {
     public const int OverlaySortingOrder = 5000;
 
+    /// <summary>The M5.3 UI-scale preference (1 = DV-native size), applied wherever a LocoMP
+    /// scaler is built. Set from <see cref="UiPrefs.UiScale"/> at load and on settings change; a
+    /// LIVE surface picks it up on its next rebuild (screens rebuild per open, the chat overlay
+    /// rebuilds itself on the change event) — "live-apply where safe".</summary>
+    public static float UiScale = 1f;
+
+    /// <summary>Scale a LocoMP CanvasScaler: a larger scale SHRINKS the reference resolution, so
+    /// everything laid out in it renders bigger. ScaleWithScreenSize keeps the result
+    /// resolution-independent either way.</summary>
+    public static void ApplyScale(CanvasScaler scaler)
+    {
+        float s = Mathf.Clamp(UiScale, UiPrefs.MinUiScale, UiPrefs.MaxUiScale);
+        scaler.referenceResolution = new Vector2(1920f / s, 1080f / s);
+    }
+
     private readonly GameObject _rootGo;
 
     /// <summary>Non-null only in overlay mode.</summary>
@@ -66,7 +81,7 @@ public sealed class LocoMpCanvas
         canvas.sortingOrder = OverlaySortingOrder;
         var scaler = go.AddComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution = new Vector2(1920f, 1080f);
+        ApplyScale(scaler);
         scaler.matchWidthOrHeight = 0.5f;
         go.AddComponent<GraphicRaycaster>();
         EnsureEventSystem();

@@ -24,9 +24,6 @@ namespace LocoMP.UI;
 /// </summary>
 public sealed class ChatOverlay
 {
-    /// <summary>How long a line stays on the passive feed before fading out.</summary>
-    private const float PassiveLineSeconds = 12f;
-
     private const int PassiveMaxLines = 8;
     private const int OpenMaxLines = 14;
     private const float PanelWidth = 620f;
@@ -35,6 +32,7 @@ public sealed class ChatOverlay
 
     private readonly SessionViewModel _vm;
     private readonly LocoMpTheme _theme;
+    private readonly UiPrefs _prefs;
     private readonly Action<string> _log;
     private readonly List<(ChatEntry entry, float at)> _lines = new();
 
@@ -49,12 +47,27 @@ public sealed class ChatOverlay
     private float _nextRepaint;
     private int _openedFrame = -1;
 
-    public ChatOverlay(SessionViewModel vm, LocoMpTheme theme, Action<string> log)
+    public ChatOverlay(SessionViewModel vm, LocoMpTheme theme, UiPrefs prefs, Action<string> log)
     {
         _vm = vm;
         _theme = theme;
+        _prefs = prefs;
         _log = log;
         _vm.ChatReceived += OnChat;
+        // M5.3 live-apply: chat opts and the UI scale land on the next rebuild — tear the canvas
+        // down (input first: a destroyed field never fires onDeselect) and let use rebuild it.
+        _prefs.Changed += OnPrefsChanged;
+    }
+
+    private void OnPrefsChanged()
+    {
+        CloseInput();
+        if (_go != null) UnityEngine.Object.Destroy(_go);
+        _go = null;
+        _feed = null;
+        _input = null;
+        _inputRow = null;
+        _background = null;
     }
 
     /// <summary>True while the input row owns the keyboard — <see cref="LocoMpUi"/> routes ESC to
@@ -66,6 +79,14 @@ public sealed class ChatOverlay
     /// interaction (their fields/covers must not race chat for the keyboard).</summary>
     public void Tick(bool allowOpen)
     {
+        if (!_prefs.ChatEnabled)
+        {
+            // Master switch (M5.3 chat opts): the feed goes fully dark; the backlog still
+            // accumulates in the client mirror, so re-enabling shows the conversation so far.
+            if (InputOpen) CloseInput();
+            if (_go != null) _go.SetActive(false);
+            return;
+        }
         if (!_vm.InSession)
         {
             if (_wasInSession)
@@ -89,7 +110,8 @@ public sealed class ChatOverlay
         }
 
         if (!InputOpen && allowOpen &&
-            (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter)))
+            (Input.GetKeyDown(_prefs.ChatKey) ||
+             (_prefs.ChatKey == KeyCode.Return && Input.GetKeyDown(KeyCode.KeypadEnter))))
             OpenInput();
 
         // Passive fade: cheap 1 Hz repaint retires expired lines; event repaints handle arrivals.
@@ -100,7 +122,7 @@ public sealed class ChatOverlay
     {
         _lines.Add((entry, Time.realtimeSinceStartup));
         if (_lines.Count > NetClient.ChatLogCapacity) _lines.RemoveAt(0);
-        if (_vm.InSession) Repaint();
+        if (_vm.InSession && _prefs.ChatEnabled) Repaint();
     }
 
     private void OpenInput()
@@ -148,6 +170,7 @@ public sealed class ChatOverlay
     public void Destroy()
     {
         _vm.ChatReceived -= OnChat;
+        _prefs.Changed -= OnPrefsChanged;
         CloseInput();
         if (_go != null) UnityEngine.Object.Destroy(_go);
         _go = null;
@@ -171,7 +194,7 @@ public sealed class ChatOverlay
         for (int i = start; i < _lines.Count; i++)
         {
             (ChatEntry entry, float at) = _lines[i];
-            if (!InputOpen && now - at >= PassiveLineSeconds) continue;
+            if (!InputOpen && now - at >= _prefs.ChatFadeSeconds) continue;
             if (shown++ > 0) sb.Append('\n');
             AppendLine(sb, entry);
         }
@@ -228,7 +251,7 @@ public sealed class ChatOverlay
         canvas.sortingOrder = LocoMpCanvas.OverlaySortingOrder - 2; // under the screens and the HUD
         var scaler = _go.AddComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution = new Vector2(1920f, 1080f);
+        LocoMpCanvas.ApplyScale(scaler);
         _go.AddComponent<GraphicRaycaster>(); // the input field needs pointer raycasts to be clickable
 
         var containerGo = new GameObject("Chat", typeof(RectTransform));
