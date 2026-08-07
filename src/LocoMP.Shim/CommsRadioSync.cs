@@ -140,6 +140,10 @@ public sealed class CommsRadioSync : IDisposable
             _pendingRerailLabel = PlateOf(car);
             return true;
         }
+        // Routed: the server prices this from its own table (R4-M). Clear the confirm-time
+        // snapshot so a LATER native success can never bill a stale price.
+        _pendingRerailPrice = 0f;
+        _pendingRerailLabel = "";
         var rot = Quaternion.LookRotation(ctrl.rerailPointWorldForward);
         Vector3 abs = ctrl.rerailPointWorldAbsPosition; // already absolute (origin-shift-corrected)
         _client.Trains.RequestCommsAction(CommsActionKind.Rerail, carId,
@@ -158,6 +162,11 @@ public sealed class CommsRadioSync : IDisposable
             _pendingDeleteLabel = PlateOf(car);
             return true;
         }
+        // Routed: the server bills its delete fee itself (R4-M) — clear the snapshot so a later
+        // native success cannot bill a stale price on top.
+        _pendingDeletePrice = 0f;
+        _pendingDeleteCarId = 0;
+        _pendingDeleteLabel = "";
         _client.Trains.RequestCommsAction(CommsActionKind.Delete, carId, Pose.Identity);
         _log($"[comms] delete of car {carId} routed (a parked target retires server-side)");
         return false;
@@ -268,14 +277,22 @@ public sealed class CommsRadioSync : IDisposable
     }
 
     /// <summary>Bill a REMOTE-initiated action to the initiator (FeeExternal with their peer id).
-    /// World-source-gated like <see cref="ChargeSelf"/> — a non-host executor waives it.</summary>
+    /// World-source-gated like <see cref="ChargeSelf"/> — a non-host executor waives it. A
+    /// SELF-initiated command (the D21 parked-rerail claim-then-execute: the server claimed the set
+    /// for us and routed the command back) is skipped everywhere: the server already billed its own
+    /// fee table at claim time (R4-M), and reporting on top would double-bill the host case.</summary>
     private void ChargeInitiator(float priceDollars, string label, int initiator)
     {
         long cents = (long)Math.Round(priceDollars * 100.0);
         if (cents <= 0) return;
+        if (initiator == _client.LocalId)
+        {
+            _log($"[comms] {label}: server-billed (parked-set fee table) — no executor report");
+            return;
+        }
         if (!_isHost)
         {
-            _log($"[comms] {label}: fee waived (${priceDollars:F2} — billing for non-host actions rides the server price table)");
+            _log($"[comms] {label}: fee waived (${priceDollars:F2} — an owner-routed action on a non-host executor; server-side billing for this path is banked)");
             return;
         }
         _client.Career.ReportExternalFee(cents, label, initiator);

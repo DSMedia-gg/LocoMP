@@ -73,6 +73,7 @@ public sealed class NetServer : IDisposable
         WorldTime = new WorldClock(_clock);
         Trains = new ServerTrains(_transport, _clock, () => _players.Keys);
         Career = new ServerCareer(_transport, _clock, _config.Career, () => _players.Keys, restore?.Career, poseOf);
+        Trains.BindCareer(Career, _config.CommsFees); // parked-set comms fees bill the initiator (R4-M)
         Items = new ServerItems(_transport, () => _players.Keys, _config.Items, poseOf, Career, restore?.Items);
         if (restore != null) Trains.Restore(restore.Trains);
 

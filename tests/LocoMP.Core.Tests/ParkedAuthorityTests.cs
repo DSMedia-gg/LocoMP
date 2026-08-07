@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using LocoMP.Core.Career;
 using LocoMP.Core.Presence;
 using LocoMP.Core.Protocol;
 using LocoMP.Core.Session;
@@ -152,6 +153,78 @@ public class ParkedAuthorityTests
 
         // Ownership is not a membership change: same epoch, snapshots admissible immediately.
         Assert.Equal(head.Epoch, server.Trains.Registry.Sets[head.Id].Epoch);
+    }
+
+    [Fact]
+    public void A_parked_radio_delete_bills_the_initiator_from_the_server_fee_table()
+    {
+        // R4-M: the scan-assist made the ROUTED delete the normal path, and that path was free —
+        // the $100 only ever rode the (now bypassed) adopt-then-delete native fee. The server now
+        // bills its own table when IT executes the retire.
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        using var server = new NetServer(hub.Server, new ServerConfig(Identity), clock);
+        (TrainsetDef head, TrainsetDef _) = ParkedSplit(hub, clock, server, out NetClient guest);
+        using NetClient g = guest;
+
+        string wallet = server.Career.Registry.Policy.WalletAccountFor("kGuest");
+        long before = server.Career.Registry.Ledger.BalanceOf(wallet);
+        long burnedBefore = server.Career.Registry.Ledger.TotalBurned;
+
+        g.Trains.RequestCommsAction(CommsActionKind.Delete, head.Cars[0].Id, Pose.Identity);
+        Pump(server, g);
+
+        Assert.DoesNotContain(server.Trains.Registry.Sets.Values, s => s.Cars.Any(c => c.Id == head.Cars[0].Id));
+        Assert.Equal(before - 100_00, server.Career.Registry.Ledger.BalanceOf(wallet));
+        Assert.Equal(burnedBefore + 100_00, server.Career.Registry.Ledger.TotalBurned);
+        Assert.True(server.Career.Registry.Ledger.ConservationHolds);
+    }
+
+    [Fact]
+    public void A_parked_rerail_bills_the_flat_fee_at_claim_time()
+    {
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        using var server = new NetServer(hub.Server, new ServerConfig(Identity), clock);
+        (TrainsetDef head, TrainsetDef _) = ParkedSplit(hub, clock, server, out NetClient guest);
+        using NetClient g = guest;
+
+        string wallet = server.Career.Registry.Policy.WalletAccountFor("kGuest");
+        long before = server.Career.Registry.Ledger.BalanceOf(wallet);
+
+        g.Trains.RequestCommsAction(CommsActionKind.Rerail, head.Cars[0].Id, new Pose(10f, 2f, 30f, 0f, 0f, 0f, 1f));
+        Pump(server, g);
+
+        Assert.Equal(g.LocalId, server.Trains.Registry.Sets[head.Id].OwnerId); // claim went through
+        Assert.Equal(before - 500_00, server.Career.Registry.Ledger.BalanceOf(wallet));
+        Assert.True(server.Career.Registry.Ledger.ConservationHolds);
+    }
+
+    [Fact]
+    public void An_unaffordable_parked_action_is_refused_and_touches_nothing()
+    {
+        // Fee gates FIRST: a wallet that cannot pay gets a named refusal, keeps its money, and the
+        // world does not change — no free deletes, no free claims, never an overdraft.
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        var config = new ServerConfig(Identity, career: new CareerConfig { StartingBalanceCents = 50_00 });
+        using var server = new NetServer(hub.Server, config, clock);
+        (TrainsetDef head, TrainsetDef _) = ParkedSplit(hub, clock, server, out NetClient guest);
+        using NetClient g = guest;
+
+        var refusals = new List<string>();
+        server.Trains.ProposalRejected += (_, reason) => refusals.Add(reason);
+        string wallet = server.Career.Registry.Policy.WalletAccountFor("kGuest");
+
+        g.Trains.RequestCommsAction(CommsActionKind.Delete, head.Cars[0].Id, Pose.Identity);
+        g.Trains.RequestCommsAction(CommsActionKind.Rerail, head.Cars[1].Id, Pose.Identity);
+        Pump(server, g);
+
+        Assert.Equal(2, refusals.Count(r => r.Contains("insufficient funds")));
+        Assert.Contains(server.Trains.Registry.Sets.Values, s => s.Cars.Any(c => c.Id == head.Cars[0].Id));
+        Assert.Equal(0, server.Trains.Registry.Sets[head.Id].OwnerId); // no claim happened
+        Assert.Equal(50_00, server.Career.Registry.Ledger.BalanceOf(wallet));
+        Assert.True(server.Career.Registry.Ledger.ConservationHolds);
     }
 
     [Fact]

@@ -75,6 +75,29 @@ public sealed class ServerTrains
     /// it is constructed after this subsystem, and it needs this subsystem's snapshots for anchors.</summary>
     internal void BindInterest(InterestManager interest) => _interest = interest;
 
+    /// <summary>Hand this subsystem the career (wallets) + the server fee table so parked-set comms
+    /// actions can bill their initiator (R4-M — the paths with no native executor price). Called by
+    /// <see cref="NetServer"/> after the career exists (it is constructed after this subsystem).</summary>
+    internal void BindCareer(ServerCareer career, CommsFeeTable fees)
+    {
+        _career = career;
+        _fees = fees;
+    }
+
+    private ServerCareer? _career;
+    private CommsFeeTable? _fees;
+
+    /// <summary>Burn a server-priced comms fee from the initiator's policy wallet. True when billed
+    /// (or when fees are unbound/zero — tests without a career stay fee-free); false with a reason
+    /// when the fee REFUSES the action (no profile, insufficient funds — never an overdraft).</summary>
+    private bool TryChargeCommsFee(int peerId, long cents, out string? reason)
+    {
+        reason = null;
+        if (_career == null || cents <= 0) return true;
+        if (_career.KeyOf(peerId) is not string key) { reason = "no career profile"; return false; }
+        return _career.Registry.TryChargeExternalFee(key, cents, out reason);
+    }
+
     /// <summary>Last admitted snapshot per trainset — the position the join burst replays and, since
     /// D10 Burst 2, the spatial ANCHOR interest management distance-tests a railed consist by.</summary>
     internal IReadOnlyDictionary<int, TrainsetSnapshot> LatestSnapshots => _latest;
@@ -768,13 +791,37 @@ public sealed class ServerTrains
         switch (kind)
         {
             case CommsActionKind.Delete:
+                // R4-M: the server executes this retire itself, so the server bills it — the native
+                // fee only ever ran on the (now bypassed) adopt-then-delete path. Fee gates first:
+                // an unaffordable retire refuses outright, exactly like DV's own register would.
+                if (_fees != null && !TryChargeCommsFee(peerId, _fees.DeleteCarCents, out string? feeWhy))
+                {
+                    ProposalRejected?.Invoke(peerId, $"retire: {feeWhy}");
+                    return;
+                }
                 if (!CommitCarDelete(carId, out string? reason))
+                {
+                    // The charge landed but the commit refused (defensive — existence was validated
+                    // above). Refund by mint so conservation stays exact and nobody pays for nothing.
+                    if (_fees != null && _career?.KeyOf(peerId) is string refundKey)
+                        _career.Registry.Ledger.Mint(_career.Registry.Policy.WalletAccountFor(refundKey), _fees.DeleteCarCents);
                     ProposalRejected?.Invoke(peerId, $"retire: {reason}");
+                }
                 return;
 
             case CommsActionKind.Rerail:
+                // Flat server-priced rerail fee, billed at claim time (no native executor price
+                // exists for a parked wreck; the executor skips its own report for self-initiated
+                // commands, so nothing double-bills). Unaffordable → no claim, no command.
+                if (_fees != null && !TryChargeCommsFee(peerId, _fees.RerailFlatCents, out string? rerailFeeWhy))
+                {
+                    ProposalRejected?.Invoke(peerId, $"rerail claim: {rerailFeeWhy}");
+                    return;
+                }
                 if (!Registry.TryClaim(peerId, set.Id, out _, out string? claimReason))
                 {
+                    if (_fees != null && _career?.KeyOf(peerId) is string rerailRefundKey)
+                        _career.Registry.Ledger.Mint(_career.Registry.Policy.WalletAccountFor(rerailRefundKey), _fees.RerailFlatCents);
                     ProposalRejected?.Invoke(peerId, $"rerail claim: {claimReason}");
                     return;
                 }

@@ -13,7 +13,8 @@ namespace LocoMP.Core.Session;
 public sealed class ServerConfig
 {
     public ServerConfig(HandshakeRequest expected, string? password = null, int maxPlayers = 32,
-        CareerConfig? career = null, ItemConfig? items = null, InterestConfig? interest = null)
+        CareerConfig? career = null, ItemConfig? items = null, InterestConfig? interest = null,
+        CommsFeeTable? commsFees = null)
     {
         Expected = expected ?? throw new ArgumentNullException(nameof(expected));
         Password = password;
@@ -22,6 +23,7 @@ public sealed class ServerConfig
         Career = career ?? new CareerConfig();
         Items = items ?? new ItemConfig();
         Interest = interest ?? new InterestConfig();
+        CommsFees = commsFees ?? new CommsFeeTable();
     }
 
     /// <summary>Career knobs (M3): preset, starting grant, claim rules, generator data. The default
@@ -50,6 +52,12 @@ public sealed class ServerConfig
     /// Live-mutable via <see cref="NetServer.SetMaxPlayers"/> (M5.2 session control).</summary>
     public int MaxPlayers { get; private set; }
 
+    /// <summary>Server-authoritative comms-radio fees (R4-M / dedicated economy): what the SERVER
+    /// bills for parked-set actions it commits or claims itself. Executor-reported fees (the world
+    /// source's native prices, D14) still cover self-executed actions; this table covers the paths
+    /// that previously logged "fee waived".</summary>
+    public CommsFeeTable CommsFees { get; }
+
     internal void OverridePassword(string? password) => Password = password;
 
     internal void OverrideMaxPlayers(int maxPlayers)
@@ -57,4 +65,22 @@ public sealed class ServerConfig
         if (maxPlayers < 1) throw new ArgumentOutOfRangeException(nameof(maxPlayers));
         MaxPlayers = maxPlayers;
     }
+}
+
+/// <summary>
+/// The server's own price list for comms-radio actions on PARKED sets (R4-M): the server executes
+/// (delete-as-retire) or claims-then-routes (rerail) these itself, so no native executor price
+/// exists and a client-supplied one would be a client-named economy delta (03 §9). Flat first-slice
+/// numbers: delete matches DV's observed $100; rerail approximates DV's base rate (its native
+/// formula ~500 + 150/m needs world distance the server does not compute). Fees burn (ledger), so
+/// conservation stays exact; an unaffordable fee refuses the ACTION, never overdrafts.
+/// </summary>
+public sealed class CommsFeeTable
+{
+    /// <summary>Fee for retiring one parked car via the radio, in cents. DV charges $100.</summary>
+    public long DeleteCarCents { get; set; } = 100_00;
+
+    /// <summary>Flat fee for the parked-rerail claim-then-execute, in cents (billed at claim; the
+    /// executor skips its own report for self-initiated commands so nothing double-bills).</summary>
+    public long RerailFlatCents { get; set; } = 500_00;
 }
