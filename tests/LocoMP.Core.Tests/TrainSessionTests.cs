@@ -430,4 +430,38 @@ public class TrainSessionTests
         Assert.False(b.Trains.View.Sets.ContainsKey(set.Id));
         Assert.True(removedOnB);
     }
+
+    [Fact]
+    public void A_never_streamed_consist_is_retired_when_its_owner_reconnects_via_takeover()
+    {
+        // R4-E: the F7 credentialed takeover evicts the zombie through the SAME removal path a
+        // leave takes, so a registered-but-never-streamed set must phantom-retire on the handover
+        // exactly as it does on a plain leave — and the join burst to the reconnecting player must
+        // not resurrect it (they get the world AFTER the retire).
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        using var server = new NetServer(hub.Server, new ServerConfig(Identity), clock);
+        using var a1 = new NetClient(hub.Connect(out _), Identity, "Alice", clock, playerKey: "kA");
+        using var b = new NetClient(hub.Connect(out _), Identity, "Bob", clock, playerKey: "kB");
+        Pump(server, new[] { a1, b });
+        Assert.True(a1.Joined);
+
+        a1.Trains.RegisterTrainset(token: 1, Specs("loco", "boxcar"));
+        Pump(server, new[] { a1, b });
+        TrainsetDef set = server.Trains.Registry.Sets.Values.Single(); // registered, NEVER streamed
+
+        bool removedOnB = false;
+        b.Trains.View.TrainsetRemoved += id => { if (id == set.Id) removedOnB = true; };
+
+        // The same key reconnects past its own zombie link (a1 never says Leave).
+        using var a2 = new NetClient(hub.Connect(out _), Identity, "Alice", clock, playerKey: "kA");
+        Pump(server, new[] { a1, a2, b });
+        Assert.True(a2.JoinSettled, "the takeover must admit the reconnecting player");
+        Assert.Equal(2, server.PlayerCount);
+
+        Assert.False(server.Trains.Registry.Sets.ContainsKey(set.Id));
+        Assert.False(b.Trains.View.Sets.ContainsKey(set.Id));
+        Assert.False(a2.Trains.View.Sets.ContainsKey(set.Id)); // the burst must not carry the ghost
+        Assert.True(removedOnB);
+    }
 }

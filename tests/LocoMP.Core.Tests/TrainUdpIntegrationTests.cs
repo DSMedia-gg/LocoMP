@@ -107,4 +107,43 @@ public class TrainUdpIntegrationTests
         Assert.Equal(merged.Epoch, b.Trains.View.LatestSnapshots[merged.Id].Epoch);
         Assert.Equal(0, badApplies);
     }
+
+    [Fact]
+    public void A_phantom_set_is_retired_on_takeover_over_real_udp()
+    {
+        // R4-E probe on the real wire. The Loopback twin passes; this rides LiteNetLib's actual
+        // channels, where the zombie's link goes SILENT (a hung/killed process: no Leave, no
+        // disconnect packet — we just stop polling it) before the same key reconnects. The F7
+        // handover must retire the never-streamed set on the server AND on every surviving mirror,
+        // and the reconnecting player's join burst must not resurrect it.
+        var clock = new ManualClock();
+        using var serverT = LiteNetLibTransport.StartServer(0, Key);
+        using var server = new NetServer(serverT, new ServerConfig(Identity), clock);
+
+        using var a1T = LiteNetLibTransport.ConnectClient("127.0.0.1", serverT.Port, Key);
+        using var a1 = new NetClient(a1T, Identity, "Alice", clock, playerKey: "kA");
+        using var bT = LiteNetLibTransport.ConnectClient("127.0.0.1", serverT.Port, Key);
+        using var b = new NetClient(bT, Identity, "Bob", clock, playerKey: "kB");
+
+        Action[] pumps = { server.Poll, a1.Poll, b.Poll };
+        Assert.True(SpinUntil(() => a1.Joined && b.Joined, 5000, pumps), "both clients should join");
+
+        TrainsetDef? phantom = null;
+        a1.Trains.TrainsetRegistered += (_, def) => phantom = def;
+        a1.Trains.RegisterTrainset(1, Specs("loco", "boxcar")); // registered, NEVER streamed
+        Assert.True(SpinUntil(() => phantom != null && b.Trains.View.Sets.ContainsKey(phantom.Id), 5000, pumps),
+            "registration should mirror before the takeover");
+
+        // a1 goes silent (no Leave, no dispose — the process hung). The same key reconnects.
+        using var a2T = LiteNetLibTransport.ConnectClient("127.0.0.1", serverT.Port, Key);
+        using var a2 = new NetClient(a2T, Identity, "Alice", clock, playerKey: "kA");
+        Action[] pumps2 = { server.Poll, a2.Poll, b.Poll };
+        Assert.True(SpinUntil(() => a2.JoinSettled, 5000, pumps2), "the takeover must admit the reconnect");
+
+        Assert.True(SpinUntil(() =>
+                !server.Trains.Registry.Sets.ContainsKey(phantom!.Id) &&
+                !b.Trains.View.Sets.ContainsKey(phantom.Id), 5000, pumps2),
+            "the handover must phantom-retire the never-streamed set everywhere");
+        Assert.False(a2.Trains.View.Sets.ContainsKey(phantom!.Id), "the burst must not carry the ghost");
+    }
 }
