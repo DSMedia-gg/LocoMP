@@ -128,6 +128,16 @@
       <HintPath>$(DvManaged)\DV.Interaction.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- v18 parity floor: WeatherDriver/WeatherPresetManager (time-of-day truth) + the brake rig
+         (BrakeSystem handbrake + HoseAndCock hoses/anglecocks). -->
+    <Reference Include="DV.WeatherSystem">
+      <HintPath>$(DvManaged)\DV.WeatherSystem.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="DV.BrakeSystem">
+      <HintPath>$(DvManaged)\DV.BrakeSystem.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
 </Project>

@@ -61,6 +61,7 @@ public sealed class SessionController
     private ItemSync? _itemSync;
     private CommsRadioSync? _commsRadio;
     private ManualServiceSync? _manualService;
+    private WorldTimeSync? _worldTime;
     private string _careerToast = "";
 
     // IMGUI field state
@@ -218,11 +219,13 @@ public sealed class SessionController
                 _timeAccum = 0;
                 _server.BroadcastTime();
                 _server.BroadcastRoster();   // M5.2: roles + per-player ping for everyone's player list
+                _server.BroadcastWorldTime(); // v18: restate the shared sun (no-op until anchored)
             }
         }
 
         _trains?.Tick(dt);
         _cabControls?.Tick((float)dt);
+        _worldTime?.Tick((float)dt);
         _walletMirror?.Tick(dt);
         _itemSync?.Tick(dt);
         _commsRadio?.Tick(dt);
@@ -709,6 +712,8 @@ public sealed class SessionController
             // can never hand out a free full service in-session (host-only — the metered valve+Buy path
             // already rides D14's WalletMirror, so it needs nothing here).
             _manualService = new ManualServiceSync(_client, isHost: true, _log);
+            // v18 (02 §3): the host's sky is the session's time truth — heartbeat + jump reports.
+            _worldTime = new WorldTimeSync(_client, isHost: true, _log);
             _mode = Mode.Hosting;
 
             _log($"[session] hosting on UDP {port} (game reports version '{PresenceShim.ReportedGameVersion}', handshake build '{PresenceShim.GameBuild}')");
@@ -773,6 +778,9 @@ public sealed class SessionController
             // Constructed for a symmetric lifecycle; on a client the guard stays disarmed (the only
             // serviceable cars in a session are the host's, and a self-scope fee bills the host).
             _manualService = new ManualServiceSync(_client, isHost: false, _log);
+            // v18 (02 §3): follow the session's sun — correct the local sky only past the drift
+            // threshold, so steady state never visibly snaps.
+            _worldTime = new WorldTimeSync(_client, isHost: false, _log);
             _mode = Mode.Joined;
             _log($"[session] joining {_address}:{_portText}…");
         }
@@ -914,6 +922,8 @@ public sealed class SessionController
         _commsRadio = null;
         _manualService?.Dispose();                     // clears the manual-service hook filters
         _manualService = null;
+        _worldTime?.Dispose();                         // unhooks the TimeJump capture
+        _worldTime = null;
         JobGenSuppressor.Active = false;               // DV's own generation resumes outside sessions
         SaveSuppressor.Active = false;                 // native saving resumes outside sessions
         CarSaveFilter.IsReplica = null;                // SP saves are unfiltered again (cleared before _trains dies)

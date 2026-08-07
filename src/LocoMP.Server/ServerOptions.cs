@@ -37,6 +37,8 @@ public sealed class ServerOptions
     public double TrainSpeed = 10;          // m/s ≈ 36 km/h
     public string[] TrainLiveries = System.Array.Empty<string>(); // real livery ids (else generic kinds)
     public uint? TrainStartEdge = null;     // start all server trains on this edge (else seed-derived, scattered)
+    public double TimeOfDayHours = 8.0;     // world clock at startup, 0-24 (v18 — the server is its own time source)
+    public double DayLengthMinutes = 30;    // real minutes per world day (DV stock: 30)
 
     // Interest management (D10). Off by default — a friend-scale session is comfortably inside the
     // bandwidth budget, and filtering is only worth its complexity as player/train counts climb
@@ -96,6 +98,20 @@ public sealed class ServerOptions
                     case "--train-speed": o.TrainSpeed = double.Parse(Next(), CultureInfo.InvariantCulture); break;
                     case "--train-livery": o.TrainLiveries = Next().Split(',', StringSplitOptions.RemoveEmptyEntries); break;
                     case "--train-start-edge": o.TrainStartEdge = uint.Parse(Next(), CultureInfo.InvariantCulture); break;
+                    case "--time-of-day":
+                    {
+                        // "HH:MM" or a plain hour ("8", "14.5") — the shared sun's start position.
+                        string t = Next();
+                        int colon = t.IndexOf(':');
+                        o.TimeOfDayHours = colon >= 0
+                            ? int.Parse(t.Substring(0, colon), CultureInfo.InvariantCulture)
+                              + int.Parse(t.Substring(colon + 1), CultureInfo.InvariantCulture) / 60.0
+                            : double.Parse(t, CultureInfo.InvariantCulture);
+                        if (o.TimeOfDayHours < 0 || o.TimeOfDayHours >= 24)
+                            throw new ArgumentException("--time-of-day must be within 0-24");
+                        break;
+                    }
+                    case "--day-length": o.DayLengthMinutes = Math.Max(1, double.Parse(Next(), CultureInfo.InvariantCulture)); break;
                     case "--soak-report": o.SoakReportSeconds = Math.Max(0, double.Parse(Next(), CultureInfo.InvariantCulture)); break;
                     case "--duration": o.DurationSeconds = Math.Max(0, double.Parse(Next(), CultureInfo.InvariantCulture)); break;
                     case "--preset":
@@ -174,6 +190,9 @@ Usage: LocoMP.Server [options]
   --train-livery <a,b,c> real livery ids for server trains (else generic kinds)
   --train-start-edge <id> start server trains on this edge (else seed-derived, scattered) — paste a
                          host/join log's 'ghost-train hint' to spawn them beside a player
+  --time-of-day <h>      world clock at startup, HH:MM or a plain hour (default 8:00) — the server
+                         is the session's time source; every client's sky follows it
+  --day-length <min>     real minutes per full world day (default 30 — DV stock)
   --soak-report <s>      emit a health/leak line every s seconds (players/sets/jobs/items/heap +
                          the money & item conservation oracles). 0 = off. Unhealthy → non-zero exit
   --duration <s>         self-terminate after s seconds (0 = run until Ctrl+C/stop). Use for an

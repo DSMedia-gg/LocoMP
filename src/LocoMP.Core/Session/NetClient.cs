@@ -154,6 +154,18 @@ public sealed class NetClient : IDisposable
     /// <summary>server → admin: the session ban list, in reply to <see cref="RequestBanList"/> (M5.2).</summary>
     public event Action<IReadOnlyList<string>>? BanListReceived;
 
+    /// <summary>The committed world time-of-day arrived (v18, 02 §3): (OADate, dayLengthMinutes).
+    /// The value is CURRENT as of its send (the server flows its clock), so the Shim corrects the
+    /// local sky only past a drift threshold — both skies advance at the same rate.</summary>
+    public event Action<double, float>? WorldTimeChanged;
+
+    /// <summary>The last received world time as an OADate (0 = none yet), current AS OF RECEIPT —
+    /// project it forward before comparing (see <see cref="WorldTimeChanged"/>).</summary>
+    public double WorldTimeOa { get; private set; }
+
+    /// <summary>The session's world day length in real minutes (0 = unknown).</summary>
+    public float WorldDayLengthMinutes { get; private set; }
+
     public void Poll() => _transport.Poll();
 
     /// <summary>Announce the local player's pose to the server (sequenced-unreliable — latest wins).</summary>
@@ -257,6 +269,8 @@ public sealed class NetClient : IDisposable
         ClearQueue();
         _players.Clear();
         _roster.Clear();   // silent — Disconnected below already tells the frontend everything is gone
+        WorldTimeOa = 0;   // the next session's sun re-anchors from its own join burst
+        WorldDayLengthMinutes = 0;
         Trains.Reset();
         Career.Reset();
         Items.Reset();
@@ -286,6 +300,7 @@ public sealed class NetClient : IDisposable
                 case MessageType.PlayerLeft: HandlePlayerLeft(r); break;
                 case MessageType.PlayerPose: HandlePlayerPose(r); break;
                 case MessageType.TimeSync: HandleTimeSync(r); break;
+                case MessageType.WorldTimeState: HandleWorldTimeState(r); break;
                 case MessageType.InterestHide: HandleInterestHide(r); break;
                 case MessageType.JoinBurstComplete: AdvanceStage(JoinStage.Complete); break;
                 case MessageType.AdminNotice: HandleAdminNotice(r); break;
@@ -427,6 +442,29 @@ public sealed class NetClient : IDisposable
     {
         long serverTime = r.ReadInt64();
         ServerTimeOffsetMs = serverTime - _clock.NowMs;
+    }
+
+    private void HandleWorldTimeState(PacketReader r)
+    {
+        double oaDate = r.ReadDouble();
+        float dayLengthMinutes = r.ReadSingle();
+        WorldTimeOa = oaDate;
+        WorldDayLengthMinutes = dayLengthMinutes;
+        WorldTimeChanged?.Invoke(oaDate, dayLengthMinutes);
+    }
+
+    /// <summary>World source only (the server ignores anyone else): report the local sky as the
+    /// session's time-of-day truth (v18) — on a slow heartbeat, and immediately on a time JUMP
+    /// (sleep / fast travel) so every peer's sun moves together.</summary>
+    public void SendWorldTimeReport(double oaDate, float dayLengthMinutes)
+    {
+        if (!Joined) return;
+        byte[] payload = new PacketWriter(16)
+            .WriteByte((byte)MessageType.WorldTimeReport)
+            .WriteDouble(oaDate)
+            .WriteSingle(dayLengthMinutes)
+            .ToArray();
+        _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
     }
 
     /// <summary>A moderation consequence from the server (M5.2). Display-only — the authoritative effect

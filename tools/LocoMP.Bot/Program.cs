@@ -124,6 +124,7 @@ while (!stopping && (opts.DurationSeconds <= 0 || sw.Elapsed.TotalSeconds < opts
         lastTimeSync = now;
         server.BroadcastTime();
         server.BroadcastRoster();   // M5.2: keep listen-mode parity with the real server frontends
+        server.BroadcastWorldTime(); // v18: keep listen-mode parity (no-op until anchored)
     }
     foreach (BotClient bot in bots) bot.Tick(dt);
 

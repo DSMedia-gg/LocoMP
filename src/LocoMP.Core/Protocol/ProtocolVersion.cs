@@ -75,5 +75,15 @@ public static class ProtocolVersion
     /// wouldn't know the new message, so this is a deliberate incompatible bump, per v7/v11 precedent.
     /// AdminNotice also gains SessionEnded — the clean "host ended the session" announcement Save &amp;
     /// Stop and dedicated-server shutdown broadcast before the links drop (same v17 bump).</remarks>
-    public const int Current = 17;
+    /// <remarks>v18 (parity floor, AUDIT-2026-08-07 finding 1): the 02-matrix P0 rows no milestone had
+    /// scheduled, one deliberate bump (the v15 precedent — v17 is unreleased, so the families append
+    /// within this arc). WorldTimeReport/WorldTimeState (72/73) make the world source's sky the one
+    /// truth for time of day; CouplerHardwareReport/CouplerHardwareState (74/75) replicate brake
+    /// hoses, anglecocks, and MU cables as server-validated discrete state; WorldPauseState (76) turns
+    /// the host's native ESC pause into an acknowledged session state (D19). Handbrakes ride the
+    /// existing ControlState/ControlInput machinery under a virtual control id (200+ = exterior
+    /// hardware, grant-exempt — the game's physical-reach requirement is the proximity gate), which
+    /// changes no message shape. A v17 peer wouldn't know the new messages, so this is a deliberate
+    /// incompatible bump, per v7/v11 precedent.</remarks>
+    public const int Current = 18;
 }

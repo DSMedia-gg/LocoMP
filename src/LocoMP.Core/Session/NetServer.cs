@@ -68,6 +68,7 @@ public sealed class NetServer : IDisposable
         _topology = topology;
 
         Func<int, Pose?> poseOf = id => _players.TryGetValue(id, out PlayerState? p) ? p.Pose : (Pose?)null;
+        WorldTime = new WorldClock(_clock);
         Trains = new ServerTrains(_transport, _clock, () => _players.Keys);
         Career = new ServerCareer(_transport, _clock, _config.Career, () => _players.Keys, restore?.Career, poseOf);
         Items = new ServerItems(_transport, () => _players.Keys, _config.Items, poseOf, Career, restore?.Items);
@@ -99,6 +100,11 @@ public sealed class NetServer : IDisposable
 
     /// <summary>The current roster, keyed by player id. Read-only view for the host UI / tests.</summary>
     public IReadOnlyDictionary<int, PlayerState> Players => _players;
+
+    /// <summary>The authoritative world time-of-day (v18, 02 §3). Host-embedded: anchored by the
+    /// world source's reports. Dedicated: anchor it once at startup via <see cref="CommitWorldTime"/>
+    /// and it flows. Frontends restate it on the <see cref="BroadcastTime"/> cadence.</summary>
+    public WorldClock WorldTime { get; }
 
     /// <summary>The train subsystem (M2): authoritative trainsets, junctions, turntables, grants.</summary>
     public ServerTrains Trains { get; }
@@ -256,6 +262,47 @@ public sealed class NetServer : IDisposable
             _transport.Send(id, payload, DeliveryMethod.ReliableUnordered);
     }
 
+    /// <summary>Anchor the world time-of-day from the SERVER PROCESS (a dedicated server's startup /
+    /// console — the world-source report path is <see cref="MessageType.WorldTimeReport"/>) and push
+    /// it to everyone. Returns false when the values are rejected (non-positive day length).</summary>
+    public bool CommitWorldTime(double oaDate, float dayLengthMinutes)
+    {
+        if (!WorldTime.Set(oaDate, dayLengthMinutes)) return false;
+        BroadcastWorldTime();
+        return true;
+    }
+
+    /// <summary>Restate the current world time to every admitted player (v18 — call on the
+    /// <see cref="BroadcastTime"/> cadence). The clock FLOWS between anchors, so a restatement is
+    /// always current; a no-op until something has anchored it.</summary>
+    public void BroadcastWorldTime()
+    {
+        if (!WorldTime.HasValue) return;
+        byte[] payload = BuildWorldTimeState();
+        foreach (int id in _players.Keys)
+            _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>The world source reported its sky (heartbeat or a jump — sleep/fast-travel). Only the
+    /// world source is believed: any other peer's local skip must NOT move the shared sun — their sky
+    /// snaps back on the next restatement instead (02 §3: skips are host/server-approved).</summary>
+    private void HandleWorldTimeReport(int peerId, PacketReader r)
+    {
+        double oaDate = r.ReadDouble();
+        float dayLengthMinutes = r.ReadSingle();
+        if (peerId != Career.WorldSourcePeer) return;
+        if (!WorldTime.Set(oaDate, dayLengthMinutes)) return;
+        byte[] payload = BuildWorldTimeState();
+        foreach (int id in _players.Keys)
+            if (id != peerId) _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    private byte[] BuildWorldTimeState() => new PacketWriter(16)
+        .WriteByte((byte)MessageType.WorldTimeState)
+        .WriteDouble(WorldTime.CurrentOa)
+        .WriteSingle(WorldTime.DayLengthMinutes)
+        .ToArray();
+
     private void OnReceived(int peerId, byte[] payload)
     {
         var r = new PacketReader(payload);
@@ -272,6 +319,9 @@ public sealed class NetServer : IDisposable
                 case MessageType.Leave: Remove(peerId); break;
                 case MessageType.AdminAction:
                     if (_players.ContainsKey(peerId)) HandleAdminAction(peerId, r);
+                    break;
+                case MessageType.WorldTimeReport:
+                    if (_players.ContainsKey(peerId)) HandleWorldTimeReport(peerId, r);
                     break;
                 default:
                     // Subsystem traffic is only heard from ADMITTED peers — everything else is
@@ -432,6 +482,8 @@ public sealed class NetServer : IDisposable
         SendAccepted(peerId, state);                       // newcomer learns id + time + roster
         BroadcastPlayerJoined(state, exceptPeer: peerId);  // everyone else learns the newcomer
         Trains.OnPlayerAdmitted(peerId);                   // world burst: trainsets/junctions/grants
+        if (WorldTime.HasValue)                            // the shared sun (v18) rides the world burst
+            _transport.Send(peerId, BuildWorldTimeState(), DeliveryMethod.ReliableOrdered);
         Career.OnPlayerAdmitted(peerId, playerKey, name);  // career burst: your career + the board
         Items.OnPlayerAdmitted(peerId);                    // item burst: AFTER career maps peer↔key
         BroadcastRoster();                                 // roles+ping ride the burst for the newcomer

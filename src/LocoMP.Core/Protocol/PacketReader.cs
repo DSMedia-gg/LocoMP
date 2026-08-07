@@ -64,6 +64,21 @@ public sealed class PacketReader
         return BitConverter.ToSingle(tmp, 0);
     }
 
+    public double ReadDouble()
+    {
+        Require(8);
+        if (BitConverter.IsLittleEndian)
+        {
+            double v = BitConverter.ToDouble(_buf, _pos);
+            _pos += 8;
+            return v;
+        }
+        byte[] tmp = new byte[8];
+        for (int i = 0; i < 8; i++) tmp[i] = _buf[_pos + 7 - i];
+        _pos += 8;
+        return BitConverter.ToDouble(tmp, 0);
+    }
+
     public string ReadString()
     {
         uint len = ReadVarUInt();

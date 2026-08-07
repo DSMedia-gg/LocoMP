@@ -54,6 +54,16 @@ public sealed class PacketWriter
         return this;
     }
 
+    /// <summary>Fixed 8-byte little-endian IEEE double — used for the world time-of-day OADate
+    /// (v18), where a float's ~7 digits could not carry date + sub-second time of day.</summary>
+    public PacketWriter WriteDouble(double value)
+    {
+        byte[] bytes = BitConverter.GetBytes(value);
+        if (!BitConverter.IsLittleEndian) Array.Reverse(bytes);
+        _buf.AddRange(bytes);
+        return this;
+    }
+
     /// <summary>Length-prefixed (varint) UTF-8. Reader caps the length so a hostile prefix can't over-allocate.</summary>
     public PacketWriter WriteString(string value)
     {

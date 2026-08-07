@@ -149,9 +149,16 @@ var admin = new ConsoleAdmin();
 
 server.Poll(); // prime the deterministic board (Career.Tick fills it) so the banner's job count is real
 
+// v18 (02 §3): the dedicated server is its own time source — anchor the world clock once and it
+// flows at the world rate; every client's sky follows. TOD's stock epoch (2000-06-15) keeps the
+// OADate in the same range DV's own saves use.
+server.CommitWorldTime(new DateTime(2000, 6, 15).AddHours(opts.TimeOfDayHours).ToOADate(),
+                       (float)opts.DayLengthMinutes);
+
 Console.WriteLine($"LocoMP.Server '{opts.Name}' — protocol v{ProtocolVersion.Current}, build {opts.GameBuild}, mod {opts.ModVersion}, preset {opts.Preset}.");
 Console.WriteLine($"[server] listening on UDP {udp.Port} — join from the game (Direct connect 127.0.0.1:{udp.Port}).");
 Console.WriteLine($"[server] world save: {opts.SavePath} (autosave every {opts.AutosaveSeconds}s). Board: {server.Career.Registry.Jobs.Count} job(s). Type 'help' for commands.");
+Console.WriteLine($"[server] world time: {TimeSpan.FromHours(opts.TimeOfDayHours):hh\\:mm}, day length {opts.DayLengthMinutes} min.");
 
 // Server-owned kinematic trains (M6-B.2): the server drives its own consists along the extracted
 // topology, so a fresh server has moving trains with no bot. Needs a .lmpw to walk.
@@ -233,6 +240,7 @@ while (!stopping)
         lastTimeSync = now;
         server.BroadcastTime();
         server.BroadcastRoster();   // M5.2: roles + per-player ping for everyone's player list
+        server.BroadcastWorldTime(); // v18: restate the flowing world clock
     }
     autosaver.Tick();
     if (admin.Drain(Status, () => autosaver.SaveNow())) stopping = true; // failure already logs via SaveFailed

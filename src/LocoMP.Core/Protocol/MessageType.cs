@@ -332,4 +332,43 @@ public enum MessageType : byte
     /// join burst, on any role change, and on a slow cadence for the ping refresh; clients prune
     /// entries on PlayerLeft and dedupe no-change restatements.</summary>
     RosterStatus = 71,
+
+    // ── parity floor (protocol v18): world time-of-day, coupler hardware, host pause. The 02-matrix
+    // P0 rows no milestone had picked up (AUDIT-2026-08-07 finding 1). Handbrakes ride the existing
+    // ControlState/ControlInput machinery under a virtual control id (see Session.VirtualControlId)
+    // and need no new message. ──
+
+    /// <summary>world source → server: the authoritative world time-of-day (02 §3 — the host's own
+    /// sky is the truth in host-embedded mode). Wire: [oaDate:double (world DateTime as OADate — the
+    /// same encoding DV's own save uses)][dayLengthMinutes:float]. Sent on a slow heartbeat and
+    /// immediately on a time JUMP (sleep, fast travel). Ignored from any other peer; a dedicated
+    /// server is its own time source and never receives one.</summary>
+    WorldTimeReport = 72,
+
+    /// <summary>server → clients: the committed world time (same payload as the report). Sent in the
+    /// join burst, relayed on every accepted report, and restated on the TimeSync cadence (the server
+    /// FLOWS the clock between reports, so a restatement is always current). Clients correct their
+    /// sky only past a drift threshold — both skies advance at the same rate, so steady state is
+    /// silent.</summary>
+    WorldTimeState = 73,
+
+    /// <summary>any client → server: a physical coupler-hardware act the player just performed (02 §1
+    /// — brake hoses, anglecocks, MU cables). Wire: [kind:byte (<see cref="Trains.CouplerHardwareKind"/>)]
+    /// [carA:varuint][endA:byte][carB:varuint (0 when the kind has no partner)][endB:byte]
+    /// [flag:byte (CockSet: 1 = open)]. The server validates against consist state (the incumbent's
+    /// phantom-MU bug class) and commits; the game's own physical reach requirement is the proximity
+    /// gate on the acting client. Idempotent restatements (every client reports a native auto-break)
+    /// are absorbed silently.</summary>
+    CouplerHardwareReport = 74,
+
+    /// <summary>server → clients: a committed coupler-hardware change (same payload as the report).
+    /// Broadcast to everyone but the reporter (whose world already did it physically); the join burst
+    /// carries every non-default connection/cock so a newcomer's replicas rig up correctly.</summary>
+    CouplerHardwareState = 75,
+
+    /// <summary>server → clients: the world-pause state (D19 — the HOST's native ESC pause freezes the
+    /// world source's sim, so it becomes an acknowledged session state instead of a silent freeze).
+    /// Wire: [paused:byte][reason:string (display text, may be empty)]. Broadcast on every change and
+    /// sent in the join burst while paused; a dedicated server never pauses (no host to pause).</summary>
+    WorldPauseState = 76,
 }
