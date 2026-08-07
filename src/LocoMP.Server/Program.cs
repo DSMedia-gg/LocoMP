@@ -276,12 +276,15 @@ while (!stopping)
         say: text => server.BroadcastServerChat(text),
         bans: () =>
         {
-            if (server.SessionBans.Count == 0) return "no session bans";
-            var sb = new StringBuilder("session bans (id: name — 'unban <id>' lifts one):");
-            foreach (LocoMP.Core.Protocol.SessionBan b in server.SessionBans) sb.Append($"\n  {b.Id}: {b.Name}");
+            // AllBans folds in persistent (U3) entries too — ids ≥ 1000000 outlive the session.
+            // A pure-UDP dedicated server has no identity source, so today the list is session-only;
+            // the surface is already correct for a future Steam-capable frontend.
+            if (server.AllBans.Count == 0) return "no bans";
+            var sb = new StringBuilder("bans (id: name — 'unban <id>' lifts one; ids 1000000+ are persistent):");
+            foreach (LocoMP.Core.Protocol.SessionBan b in server.AllBans) sb.Append($"\n  {b.Id}: {b.Name}");
             return sb.ToString();
         },
-        unban: id => server.UnbanSessionBan(id)))
+        unban: id => server.Unban(id)))
         stopping = true; // failure already logs via SaveFailed
 
     // Only gather the sample when a report is actually due — it queries process memory and forces a

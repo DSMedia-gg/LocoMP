@@ -14,7 +14,7 @@ public sealed class ServerConfig
 {
     public ServerConfig(HandshakeRequest expected, string? password = null, int maxPlayers = 32,
         CareerConfig? career = null, ItemConfig? items = null, InterestConfig? interest = null,
-        CommsFeeTable? commsFees = null)
+        CommsFeeTable? commsFees = null, BanStore? banStore = null)
     {
         Expected = expected ?? throw new ArgumentNullException(nameof(expected));
         Password = password;
@@ -24,7 +24,13 @@ public sealed class ServerConfig
         Items = items ?? new ItemConfig();
         Interest = interest ?? new InterestConfig();
         CommsFees = commsFees ?? new CommsFeeTable();
+        BanStore = banStore;
     }
+
+    /// <summary>Persistent bans keyed on SteamId64 (M5.5, U3), or null when the server has no identity
+    /// source to enforce them against (a pure-UDP dedicated server, most tests). With a store, a ban of
+    /// an identity-bearing peer outlives the session and the join gate refuses that identity forever.</summary>
+    public BanStore? BanStore { get; }
 
     /// <summary>Career knobs (M3): preset, starting grant, claim rules, generator data. The default
     /// has no stations, so a host that doesn't configure jobs simply runs an empty board.</summary>

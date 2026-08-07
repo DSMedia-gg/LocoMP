@@ -524,6 +524,18 @@ public sealed class NetServer : IDisposable
             return;
         }
 
+        // Persistent ban (M5.5, U3): keyed on the link's authenticated SteamId64 — the identity a
+        // player cannot re-roll, unlike the key. Only identity-bearing links (the Steam relay) can
+        // match; UDP/Loopback peers pass exactly as before. The relay's admission door refuses most
+        // banned ids before the socket even opens — this gate covers the peer that connected before
+        // the ban landed and is now re-presenting a join.
+        if (_config.BanStore != null && _transport is IPeerIdentity identityLink &&
+            identityLink.IdentityOf(peerId) is ulong joinSteamId && _config.BanStore.IsBanned(joinSteamId))
+        {
+            Reject(peerId, RejectKind.Banned, "you are banned from this server");
+            return;
+        }
+
         // A reconnect of a player already ONLINE is a takeover, not a new join (used by the pause gate
         // below). Captured before the takeover block evicts the zombie and clears the online flag.
         bool keyWasOnline = Career.IsKeyOnline(playerKey);
@@ -747,7 +759,16 @@ public sealed class NetServer : IDisposable
                 // Record the ban BEFORE eviction so an instantaneous rejoin race is already refused.
                 // The display name rides into the ban entry — it is what every unban surface lists (R4-A).
                 if (kind == AdminActionKind.Ban)
-                    _moderation.Ban(victimKey, _players.TryGetValue(targetPeerId, out PlayerState? victim) ? victim.Name : "");
+                {
+                    string victimName = _players.TryGetValue(targetPeerId, out PlayerState? victim) ? victim.Name : "";
+                    _moderation.Ban(victimKey, victimName);
+                    // U3 (M5.5): with an authenticated identity on the link, the ban also outlives the
+                    // session — recorded against the SteamId64, surfaced as its own (persistent-range)
+                    // entry beside the session one. Anonymous links get the session ban only.
+                    if (_config.BanStore != null && _transport is IPeerIdentity banIdentity &&
+                        banIdentity.IdentityOf(targetPeerId) is ulong victimSteamId)
+                        _config.BanStore.Add(victimSteamId, victimName);
+                }
                 SendAdminNotice(targetPeerId,
                     kind == AdminActionKind.Ban ? AdminNoticeKind.Banned : AdminNoticeKind.Kicked, "");
                 // A genuine vacancy: Remove pumps the queue (unlike an F7 handover). Then close the
@@ -780,9 +801,11 @@ public sealed class NetServer : IDisposable
 
             case AdminActionKind.Unban:
                 // Offline target, named by its opaque ban-entry ID (v20, R4-A — keys never ride the
-                // wire; the ban-list view only ever held ids+names). The refreshed list goes straight
-                // back so the acting admin's view updates without a second query.
-                if (!_moderation.UnbanById(targetPeerId))
+                // wire; the ban-list view only ever held ids+names). Session and persistent ids live
+                // in disjoint ranges (BanStore.PersistentIdFloor), so the id routes itself. The
+                // refreshed list goes straight back so the acting admin's view updates without a
+                // second query.
+                if (!Unban(targetPeerId))
                 {
                     SendAdminNotice(peerId, AdminNoticeKind.Rejected, "no such ban");
                     return;
@@ -833,17 +856,32 @@ public sealed class NetServer : IDisposable
     private void SendAdminBanList(int peerId)
     {
         var w = new PacketWriter(48).WriteByte((byte)MessageType.AdminBanList);
-        AdminCodec.WriteBanList(w, _moderation.Bans); // ids + names only — never keys (R4-A)
+        AdminCodec.WriteBanList(w, AllBans); // ids + names only — never keys, never SteamIds (R4-A)
         _transport.Send(peerId, w.ToArray(), DeliveryMethod.ReliableOrdered);
     }
 
-    /// <summary>The surfaced session-ban entries (id + name) — the host UI's and the dedicated
-    /// console's direct view (R4-A). Remote admins get the same via RequestBanList.</summary>
+    /// <summary>The surfaced session-ban entries (id + name) — session-scoped, dies with the server.</summary>
     public IReadOnlyCollection<SessionBan> SessionBans => _moderation.Bans;
 
-    /// <summary>Lift a session ban by its surfaced entry id — the dedicated console's unban
-    /// (`unban &lt;id&gt;`) and the host UI's button both land here or on the wire verb.</summary>
-    public bool UnbanSessionBan(int id) => _moderation.UnbanById(id);
+    /// <summary>Every surfaced ban entry — session bans first, then persistent (U3) ones projected
+    /// into the same (id, name) shape. Ids ≥ <see cref="BanStore.PersistentIdFloor"/> are the
+    /// persistent ones; the wire and every list view stay a flat (id, name) list either way. This is
+    /// the host UI's and the dedicated console's view; remote admins get it via RequestBanList.</summary>
+    public IReadOnlyCollection<SessionBan> AllBans
+    {
+        get
+        {
+            if (_config.BanStore is null) return _moderation.Bans;
+            var merged = new List<SessionBan>(_moderation.Bans);
+            foreach (PersistentBan b in _config.BanStore.Entries) merged.Add(new SessionBan(b.Id, b.Name));
+            return merged;
+        }
+    }
+
+    /// <summary>Lift a ban by its surfaced entry id — session or persistent, the disjoint id ranges
+    /// route it. The dedicated console's unban (`unban &lt;id&gt;`) and the host UI's button both land
+    /// here or on the wire verb.</summary>
+    public bool Unban(int id) => _moderation.UnbanById(id) || _config.BanStore?.RemoveById(id) == true;
 
     private void SendAdminNotice(int peerId, AdminNoticeKind kind, string arg)
     {
