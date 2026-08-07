@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **A host can retune the session while it runs (M5.2 session control).** The session owner can now
+  change the password mid-session (players already in stay in — only new joins check it), raise or
+  lower the player cap (raising it admits anyone waiting in the queue instantly; lowering it never
+  kicks anyone), and adjust how often the world autosaves — all live, no restart. Only the owner can:
+  a promoted admin can moderate players but not reconfigure the session.
+- **World backups you can actually use (M5.2).** The server already kept rotating backups beside the
+  save; now you can see them (`backups` on the dedicated console — index, size, age) and roll back to
+  one (`restore <n>`), which stops the server so the restore sticks on the next start. A restore never
+  destroys anything: the world you rolled away from becomes the newest backup, so even a restore can
+  be undone.
 - **Everyone sees the same sun now (time-of-day sync).** The host's sky is the session's clock:
   every player's time of day follows it, a sleep or fast-travel skip moves the sun for the whole
   session at once, and a guest's own bed nap snaps back instead of forking the world's time. It's
