@@ -10,7 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Session health counters for the host (M5.2 diagnostics backend).** The server can now report a
+- **The player list now shows who's who — and how their connection is (M5.2 roster backend).** Every
+  player in a session now sees the same live roster: who the host is, who has been promoted to admin,
+  and each player's ping to the server, refreshed every few seconds. It arrives with the join data, so
+  the list is right from the first frame, and a promotion or demotion updates everyone's badges the
+  moment it happens. The dev panel already renders it; M5.2's player-admin screen builds on the same
+  feed. (Network protocol bumped — both sides must run this build.)
+- **Sessions can now end on purpose (M5.2 Save & Stop).** A host can save and stop the session
+  cleanly: every joined player — including anyone still waiting in the admission queue — is told "the
+  host ended the session" instead of watching their connection die and being left to wonder. A
+  dedicated server says the same on shutdown. And an admin's remote "save now" actually writes the
+  world file on both the host and the dedicated server (it was authorised but wired to nothing).
+  Leaving to restore your own world works exactly as before — the difference is that you're told why. The server can now report a
   one-glance snapshot of a running session — players online, joiners waiting, trainsets, jobs and items
   tracked, admins and bans, whether joins are paused, and the internal health gauges (economy/item
   accounting still balanced, stale-update count), plus live network numbers — how much data the session has
