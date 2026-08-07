@@ -37,10 +37,15 @@ public sealed class LocoMpUi
     private SessionPhase _lastPhase = SessionPhase.Idle;
     private bool _pendingLeave;
 
-    public LocoMpUi(SessionViewModel vm, Action<string> log)
+    private readonly Func<string>? _extractTopology;
+
+    /// <param name="extractTopology">M5.2 host-menu binding for the world extractor (returns a
+    /// status line). Null keeps the button disabled — the dev-panel path still exists.</param>
+    public LocoMpUi(SessionViewModel vm, Action<string> log, Func<string>? extractTopology = null)
     {
         _vm = vm;
         _log = log;
+        _extractTopology = extractTopology;
         _prefs = UiPrefs.Load(log);
         Gate = new ReadinessGate(_theme, log);
         Hud = new StatusHud(_theme);
@@ -250,7 +255,13 @@ public sealed class LocoMpUi
             _theme.Font ??= MenuHook.HarvestedFont;
             var kit = new WidgetKit(_theme);
             _router = new ScreenRouter(_canvas.Root, kit);
-            _router.Push(new RootScreen(_vm, _prefs, _log, Close));
+            _router.Push(new RootScreen(_vm, _prefs, _log, Close, openHostMenu: () =>
+            {
+                // M5.2: the host's four utility groups. Guarded here too — the button greys out,
+                // but a stale click between rebuilds must not open a dead panel.
+                if (_vm.IsHost && _router != null)
+                    _router.Push(new HostMenuScreen(_vm, _log, () => _router.Pop(), _extractTopology));
+            }));
             RequestCursor();
             _log($"[ui] LocoMP screens opened ({origin})");
         }

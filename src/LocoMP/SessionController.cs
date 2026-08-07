@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -65,6 +66,8 @@ public sealed class SessionController
     private HandbrakeSync? _handbrakes;
     private CouplerHardwareSync? _couplerHardware;
     private PauseSync? _pauseSync;
+    private FileSaveStorage? _storage;   // hosting only — the career save's backup rotation (M5.2)
+    private bool _skipFinalSave;         // a restored backup must not be overwritten on the way down
     private string _careerToast = "";
 
     // IMGUI field state
@@ -605,6 +608,7 @@ public sealed class SessionController
             ProgressionPreset preset = o.Preset;
             CareerConfigBuilder.TryBuild(preset, out CareerConfig careerConfig, _log);
             var storage = new FileSaveStorage(CareerSavePath(preset));
+            _storage = storage; // kept for the M5.2 backup view/restore panel
             ServerSaveData? restore = null;
             if (_freshCareer)
             {
@@ -908,6 +912,39 @@ public sealed class SessionController
         // Per-preset files: wallet migration between presets is undefined, so they never collide.
         Path.Combine(Application.persistentDataPath, $"locomp-career-{preset}.lmps");
 
+    /// <summary>The hosting career's backup rotation, newest first (M5.2 backup view). Empty when
+    /// not hosting.</summary>
+    public IReadOnlyList<SaveBackupInfo> ListBackups() =>
+        _storage?.ListBackups() ?? (IReadOnlyList<SaveBackupInfo>)Array.Empty<SaveBackupInfo>();
+
+    /// <summary>M5.2 restore (host only): roll the career back to backup <paramref name="index"/>
+    /// and END the session without the final save (which would overwrite the rollback with live
+    /// state) — the console's restore semantics. The displaced career survives as backup .1, so
+    /// even a mistaken restore is undoable. The next Host with the same preset loads it.</summary>
+    public bool RestoreBackupAndStop(int index, out string? reason)
+    {
+        reason = null;
+        if (_mode != Mode.Hosting || _storage is null)
+        {
+            reason = "not hosting";
+            return false;
+        }
+        if (!_storage.TryRestoreBackup(index, out reason)) return false;
+        _skipFinalSave = true;
+        _log($"[career] restored backup {index} — ending the session so it sticks (the displaced career is backup 1)");
+        SaveAndStop();
+        return true;
+    }
+
+    /// <summary>Current autosave cadence in seconds (M5.2 panel display).</summary>
+    public int AutosaveSeconds => _autosaveSeconds;
+
+    /// <summary>Is the host holding the door (pause-new-joins)? False when not hosting.</summary>
+    public bool JoinsPausedByHost => _server?.Moderation.JoinsPaused ?? false;
+
+    /// <summary>The hosting career preset (panel display; PerPlayer when not hosting).</summary>
+    public ProgressionPreset HostPresetForDisplay => HostPreset;
+
     /// <summary>M5.2 Save &amp; Stop (host only): announce the clean end to every joined player —
     /// their screen says "session ended by the host" instead of inferring a dead link — give the
     /// notice a moment to flush, then run the ordinary <see cref="Leave"/> (final career save +
@@ -931,13 +968,21 @@ public sealed class SessionController
     {
         if (_autosaver != null && _server != null)
         {
+            if (_skipFinalSave)
+            {
+                // A backup was just restored (M5.2): the rolled-back file on disk IS the intended
+                // career — a final save here would overwrite it with the live session state.
+                _log("[career] final save skipped — a restored backup is the new career");
+            }
             // SaveNow no longer throws (Autosaver guards storage) — gate the success line on the
             // RESULT, because "[career] career saved" is a log line the runbooks grep for.
-            if (_autosaver.SaveNow())
+            else if (_autosaver.SaveNow())
                 _log("[career] career saved");
             else
                 _log("[career] final save FAILED: " + (_autosaver.LastSaveError?.Message ?? "unknown"));
         }
+        _skipFinalSave = false;
+        _storage = null;
         _autosaver = null;
         _jobCapture?.Dispose();
         _jobCapture = null;

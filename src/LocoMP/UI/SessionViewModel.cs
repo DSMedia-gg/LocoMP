@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using LocoMP.Core.Persistence;
 using LocoMP.Core.Presence;
 using LocoMP.Core.Protocol;
 using LocoMP.Core.Session;
@@ -101,4 +103,50 @@ public sealed class SessionViewModel
         _c.JoinSession(options);
     }
     public void Leave() => _c.Leave();
+
+    // ── M5.2 host-menu surface (the overlay's four utility groups bind ONLY these) ────────────
+
+    /// <summary>Our own player id (0 before admission) — the roster's self row.</summary>
+    public int LocalId => _c.Client?.LocalId ?? 0;
+
+    /// <summary>A player's session role from the roster status (Player when unknown).</summary>
+    public PlayerRole RoleOf(int id) => _c.Client?.RoleOf(id) ?? PlayerRole.Player;
+
+    /// <summary>A player's measured server round-trip in ms (null = unknown).</summary>
+    public int? PingOf(int id) => _c.Client?.PingOf(id);
+
+    /// <summary>Is the door held (pause-new-joins)? Host-read, so it is always current.</summary>
+    public bool JoinsPaused => _c.JoinsPausedByHost;
+
+    /// <summary>Hosting career preset (panel display).</summary>
+    public string PresetName => _c.HostPresetForDisplay.ToString();
+
+    /// <summary>Autosave cadence in seconds (panel display).</summary>
+    public int AutosaveSeconds => _c.AutosaveSeconds;
+
+    // Moderation — the client verbs; the host's own client is the session owner, so these are
+    // authorised server-side exactly like a remote admin's (one path, no host special case).
+    public void Kick(int id) => _c.Client?.Kick(id);
+    public void Ban(int id) => _c.Client?.Ban(id);
+    public void Promote(int id) => _c.Client?.Promote(id);
+    public void Demote(int id) => _c.Client?.Demote(id);
+    public void SetJoinsPaused(bool paused)
+    {
+        if (paused) _c.Client?.PauseJoins();
+        else _c.Client?.ResumeJoins();
+    }
+
+    // Session-control settings (owner-only server-side).
+    public void SetPassword(string password) => _c.Client?.SetSessionPassword(password);
+    public void SetMaxPlayers(int cap) => _c.Client?.SetMaxPlayers(cap);
+    public void SetAutosaveInterval(int seconds) => _c.Client?.SetAutosaveInterval(seconds);
+
+    // World/save tools.
+    public void SaveNow() => _c.Client?.SaveNow();
+    public void SaveAndStop() => _c.SaveAndStop();
+    public IReadOnlyList<SaveBackupInfo> Backups => _c.ListBackups();
+    public bool RestoreBackupAndStop(int index, out string? reason) => _c.RestoreBackupAndStop(index, out reason);
+
+    /// <summary>Diagnostics snapshot (host only; null otherwise) — the panel renders it read-only.</summary>
+    public ServerDiagnostics? Diagnostics => _c.Server?.CaptureDiagnostics();
 }

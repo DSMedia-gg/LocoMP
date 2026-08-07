@@ -18,16 +18,20 @@ public sealed class RootScreen : IScreen
 
     private readonly SessionViewModel _vm;
     private readonly Action _closeRequested;
+    private readonly Action? _openHostMenu;
     private readonly DirectJoinTab _joinTab;
     private readonly HostTab _hostTab;
     private readonly GameObject?[] _bodies = new GameObject?[TabNames.Length];
     private TMP_Text? _status;
+    private Button? _hostMenuButton;
     private int _tab;
 
-    public RootScreen(SessionViewModel vm, UiPrefs prefs, Action<string> log, Action closeRequested)
+    public RootScreen(SessionViewModel vm, UiPrefs prefs, Action<string> log, Action closeRequested,
+                      Action? openHostMenu = null)
     {
         _vm = vm;
         _closeRequested = closeRequested;
+        _openHostMenu = openHostMenu;
         _joinTab = new DirectJoinTab(vm, prefs, log);
         _hostTab = new HostTab(vm, prefs, log);
     }
@@ -47,6 +51,9 @@ public sealed class RootScreen : IScreen
         TMP_Text title = kit.Label(header, "LocoMP — Multiplayer", size: kit.Theme.TitleSize);
         var titleElement = title.gameObject.AddComponent<LayoutElement>();
         titleElement.flexibleWidth = 1f;
+        // M5.2: the host's utility overlay — greyed until a session is being hosted.
+        if (_openHostMenu != null)
+            _hostMenuButton = kit.Button(header, "Host Menu", _openHostMenu, enabled: _vm.IsHost, width: 140f);
         kit.Button(header, "Close", _closeRequested, width: 120f);
 
         _status = kit.Label(panel, "", dim: true);
@@ -120,6 +127,7 @@ public sealed class RootScreen : IScreen
         if (_vm.Error.Length > 0 && _vm.Phase is SessionPhase.Idle or SessionPhase.SessionLost)
             line += $"   ⚠ {_vm.Error}";
         _status.text = line;
+        if (_hostMenuButton != null) _hostMenuButton.interactable = _vm.IsHost;
         _joinTab.Refresh();
         _hostTab.Refresh();
     }

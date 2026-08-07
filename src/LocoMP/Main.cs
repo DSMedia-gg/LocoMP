@@ -65,7 +65,21 @@ public static class Main
         // M5.0 UI foundation: the view-model seam + the first-party screens. The menu hook is the
         // one DV.UI coupling point (clone-and-rewire, gated + isolated); everything else is ours.
         _viewModel = new SessionViewModel(_session);
-        _ui = new LocoMpUi(_viewModel, log);
+        _ui = new LocoMpUi(_viewModel, log, extractTopology: () =>
+        {
+            // M5.2: the extractor reaches the host menu (10-plan §5 "moved out of dev-tools");
+            // the dev-panel button stays as the fallback path.
+            try
+            {
+                string path = TopologyExtractor.Extract(modEntry.Path, log);
+                return "wrote " + Path.GetFileName(path);
+            }
+            catch (Exception e)
+            {
+                log("[extract] FAILED: " + e);
+                return "extract failed: " + e.Message;
+            }
+        });
         MenuHook.Install(log);
         MenuHook.OpenRequested += origin => { if (_active) _ui?.Open(origin); };
         PauseGuardHook.ModalProbe = () => _active && _ui is { ModalActive: true };
