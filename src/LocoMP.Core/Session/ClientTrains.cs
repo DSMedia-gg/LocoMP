@@ -76,6 +76,20 @@ public sealed class ClientTrains
     /// replicas that spawn later).</summary>
     public event Action<CouplerHardwareReport>? CouplerHardwareChanged;
 
+    /// <summary>A car's sim owner streamed a cosmetic scalar (M6-A1.1): (carId, kind, value 0–255
+    /// over the scalar's 0–1 range). Already seq-gated (stale arrivals never fire) and folded into
+    /// <see cref="Cosmetics"/>; the Shim drives the replica's matching sim port from it.</summary>
+    public event Action<int, byte, byte>? CosmeticReceived;
+
+    /// <summary>Latest cosmetic scalars per car (carId → kind → value), for replicas that
+    /// materialise after the state arrived — the Shim's spawn path reads this the way its
+    /// reconcile reads <see cref="Hardware"/>.</summary>
+    public IReadOnlyDictionary<int, Dictionary<byte, byte>> Cosmetics => _cosmetics;
+
+    private readonly Dictionary<int, Dictionary<byte, byte>> _cosmetics = new();
+    private readonly Dictionary<int, byte> _cosmeticSeqIn = new();
+    private readonly Dictionary<int, byte> _cosmeticSeqOut = new();
+
     // ── send side (all silently no-op until joined, matching NetClient.SendPose) ──
 
     /// <summary>Offer an existing consist to the server (world source). The token correlates the
@@ -208,6 +222,17 @@ public sealed class ClientTrains
             .WriteSingle(value)
             .ToArray();
         _transport.Send(NetProtocol.ServerPeer, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    /// <summary>Owner only: stream a car's coarse cosmetic scalars (M6-A1.1). Latest-wins per car
+    /// via the seq byte; the caller change-gates and rate-limits (the Shim's cosmetic tick).</summary>
+    public void SendCosmetic(int carId, IReadOnlyList<(byte kind, byte value)> entries)
+    {
+        if (!_joined() || entries.Count == 0 || entries.Count > CosmeticCodec.MaxEntries) return;
+        byte seq = (byte)(_cosmeticSeqOut.TryGetValue(carId, out byte last) ? last + 1 : 1);
+        _cosmeticSeqOut[carId] = seq;
+        _transport.Send(NetProtocol.ServerPeer, CosmeticCodec.Build(carId, seq, entries),
+            DeliveryMethod.ReliableUnordered);
     }
 
     /// <summary>Owner only: announce a car's load change (empty cargoId = unloaded).</summary>
@@ -358,6 +383,22 @@ public sealed class ClientTrains
                 string cargoId = r.ReadString();
                 float amount = r.ReadSingle();
                 CargoChanged?.Invoke(carId, cargoId, amount);
+                return true;
+            }
+            case MessageType.CosmeticState:
+            {
+                if (!CosmeticCodec.TryRead(r, out int carId, out byte seq, out (byte kind, byte value)[] entries))
+                    return true; // malformed — drop whole
+                if (_cosmeticSeqIn.TryGetValue(carId, out byte lastIn) && !CosmeticCodec.SeqAdvances(lastIn, seq))
+                    return true; // stale reliable-unordered arrival — latest already applied
+                _cosmeticSeqIn[carId] = seq;
+                if (!_cosmetics.TryGetValue(carId, out Dictionary<byte, byte>? perCar))
+                    _cosmetics[carId] = perCar = new Dictionary<byte, byte>();
+                foreach ((byte kind, byte value) in entries)
+                {
+                    perCar[kind] = value;
+                    CosmeticReceived?.Invoke(carId, kind, value);
+                }
                 return true;
             }
             case MessageType.CoupleRequest:

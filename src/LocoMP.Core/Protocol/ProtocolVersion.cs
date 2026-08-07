@@ -98,5 +98,10 @@ public static class ProtocolVersion
     /// targets the entry id (in the targetPeerId slot) instead of a key, and a successful unban
     /// pushes the refreshed list back to the actor. A v19 peer would misread both payloads, so this
     /// is a deliberate incompatible bump, per v7/v11 precedent.</remarks>
-    public const int Current = 20;
+    /// <remarks>v21 (M6-A1.1 cosmetic fidelity): CosmeticState (79) — the coarse owner-cosmetic
+    /// scalar channel (smoke/sand/engine intensity) that starts retiring R17's kinematic ghost.
+    /// Per-car latest-wins on the reliable-unordered tier, interest-gated, replayed in the join
+    /// burst. A v20 peer wouldn't know the new message, so this is a deliberate incompatible bump,
+    /// per v7/v11 precedent.</remarks>
+    public const int Current = 21;
 }

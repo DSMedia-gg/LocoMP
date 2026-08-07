@@ -45,6 +45,7 @@ public sealed class SessionController
     private ITransport? _clientTransport;
     private TrainSync? _trains;
     private CabControlSync? _cabControls;
+    private CosmeticSync? _cosmetics;
 
     private double _poseAccum;
     private double _timeAccum;
@@ -266,6 +267,7 @@ public sealed class SessionController
 
         _trains?.Tick(dt);
         _cabControls?.Tick((float)dt);
+        _cosmetics?.Tick((float)dt);
         _worldTime?.Tick((float)dt);
         _handbrakes?.Tick((float)dt);
         _couplerHardware?.Tick((float)dt);
@@ -773,6 +775,9 @@ public sealed class SessionController
             // mid-session bakes the foreign consists in and they persist across re-hosts (2026-08-06).
             CarSaveFilter.IsReplica = _trains.Remote.IsRemoteCar;
             _cabControls = new CabControlSync(_client, _trains, _log);
+            // M6-A1.1: coarse cosmetic outputs of the sim (plume/sand/rpm) — owner-read here,
+            // replica-driven on every other client.
+            _cosmetics = new CosmeticSync(_client, _trains, _log);
             // D13: the HOST keeps DV's native generation running — JobCapture mirrors every
             // generated job onto the server board. Only joining CLIENTS suppress.
             JobGenSuppressor.Active = false;
@@ -898,6 +903,7 @@ public sealed class SessionController
         _trains = new TrainSync(_client, isHost: false, _log);
         _trains.WorldUnloaded += OnWorldUnloaded;
         _cabControls = new CabControlSync(_client, _trains, _log);
+        _cosmetics = new CosmeticSync(_client, _trains, _log); // M6-A1.1, symmetric with the host arm
         // Symmetric with the host arm: on a client SaveSuppressor blocks the save before this runs,
         // but wiring it keeps the guard correct if that ever changes (every host car is a replica here).
         CarSaveFilter.IsReplica = _trains.Remote.IsRemoteCar;
@@ -1145,6 +1151,8 @@ public sealed class SessionController
         if (_client is { Joined: true }) { _client.Leave(); _client.Poll(); }
         _cabControls?.Dispose();
         _cabControls = null;
+        _cosmetics?.Dispose();
+        _cosmetics = null;
         _trains?.Dispose();
         _trains = null;
         _client?.Dispose();

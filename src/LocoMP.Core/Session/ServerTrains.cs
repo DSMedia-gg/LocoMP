@@ -36,6 +36,16 @@ public sealed class ServerTrains
     // native spawn logic re-rigs its own consists.
     private readonly CouplerHardwareRegistry _hardware = new();
 
+    // M6-A1.1 cosmetic scalars, carId → (kind → value). Owner-cosmetic, latest-wins, replayed in
+    // the join burst and on interest re-entry. Session state only — a restored world's locos come
+    // back cold, like the game's own start. The server stamps its OWN monotonic seq per car on
+    // everything it sends (_cosmeticSeqOut), so client guards see one seq authority regardless of
+    // owner changes; the owner's incoming seq is guarded per (car, sender) so a reordered
+    // reliable-unordered arrival can't regress state (_cosmeticSeqIn, pruned with its peer).
+    private readonly Dictionary<int, Dictionary<byte, byte>> _cosmetics = new();
+    private readonly Dictionary<int, byte> _cosmeticSeqOut = new();
+    private readonly Dictionary<(int carId, int peerId), byte> _cosmeticSeqIn = new();
+
     // Last ADMITTED snapshot per trainset — always epoch-current by construction (admission checks
     // the epoch and every transaction prunes). Feeds the join-burst baseline and the world save.
     private readonly Dictionary<int, TrainsetSnapshot> _latest = new();
@@ -144,6 +154,19 @@ public sealed class ServerTrains
         foreach (int id in carIds) _latestByCar.Remove(id);
     }
 
+    /// <summary>Forget a deleted car's cosmetic state and seq counters (all senders' guards for
+    /// it included) — a later set reusing the id must start cold, not inherit a plume.</summary>
+    private void ForgetCosmetics(int carId)
+    {
+        _cosmetics.Remove(carId);
+        _cosmeticSeqOut.Remove(carId);
+        List<(int, int)>? stale = null;
+        foreach ((int carId, int peerId) key in _cosmeticSeqIn.Keys)
+            if (key.carId == carId) (stale ??= new List<(int, int)>()).Add(key);
+        if (stale != null)
+            foreach ((int, int) key in stale) _cosmeticSeqIn.Remove(key);
+    }
+
     /// <summary>Has the server ever held a position for this set — as a whole-set baseline OR as any
     /// member car's last-known state? False only for a set that registered and was never streamed by
     /// anyone (the phantom-orphan case). A partial set (some cars known) counts as baselined: it once
@@ -237,6 +260,7 @@ public sealed class ServerTrains
             case MessageType.CommsActionRequest: HandleCommsActionRequest(peerId, r); return true;
             case MessageType.CarDeleteNotice: HandleCarDeleteNotice(peerId, r); return true;
             case MessageType.CouplerHardwareReport: HandleCouplerHardware(peerId, r); return true;
+            case MessageType.CosmeticState: HandleCosmetic(peerId, r); return true;
             default: return false;
         }
     }
@@ -262,6 +286,9 @@ public sealed class ServerTrains
                 _transport.Send(peerId, BuildControlState(car.Key, ctrl.Key, ctrl.Value), DeliveryMethod.ReliableOrdered);
         foreach (CouplerHardwareReport line in _hardware.EnumerateState())
             _transport.Send(peerId, BuildHardwareState(line), DeliveryMethod.ReliableOrdered);
+        // Cosmetic scalars last (M6-A1.1): the replicas these drive spawn from the baselines above.
+        foreach (int carId in _cosmetics.Keys)
+            _transport.Send(peerId, BuildCosmetic(carId, bumpSeq: false), DeliveryMethod.ReliableOrdered);
     }
 
     /// <summary>A player left: park their consists (03 §3 — positions freeze until reclaimed) and
@@ -294,7 +321,11 @@ public sealed class ServerTrains
                 Registry.Remove(trainsetId);
                 _latest.Remove(trainsetId);   // defensive — a phantom has none by definition
                 ForgetInterest(trainsetId);
-                foreach (CarDef car in def.Cars) _hardware.PruneCar(car.Id); // a phantom's rig dies with it
+                foreach (CarDef car in def.Cars)
+                {
+                    _hardware.PruneCar(car.Id); // a phantom's rig dies with it
+                    ForgetCosmetics(car.Id);
+                }
                 Broadcast(BuildRemove(trainsetId), DeliveryMethod.ReliableOrdered);
             }
             else if (TryGrantHeir(def, out int heir))
@@ -326,6 +357,15 @@ public sealed class ServerTrains
             _grants.Remove(carId);
             Broadcast(BuildGrantState(carId, 0), DeliveryMethod.ReliableOrdered);
         }
+
+        // The departed sender's cosmetic seq guards die with it — a reused peer id must start
+        // fresh, not inherit a stranger's counter (M6-A1.1). The VALUES stay: a parked loco keeps
+        // its last plume state for late joiners until an owner streams again or the car dies.
+        List<(int, int)>? staleSeq = null;
+        foreach ((int carId, int peerId) key in _cosmeticSeqIn.Keys)
+            if (key.peerId == peerId) (staleSeq ??= new List<(int, int)>()).Add(key);
+        if (staleSeq != null)
+            foreach ((int, int) key in staleSeq) _cosmeticSeqIn.Remove(key);
     }
 
     /// <summary>
@@ -360,6 +400,11 @@ public sealed class ServerTrains
                     _transport.Send(peerId, BuildHardwareState(line), DeliveryMethod.ReliableOrdered);
                     break;
                 }
+        // Cosmetic scalars (M6-A1.1): a client that never lost them drops the restatement on its
+        // seq guard — harmless, its cache is intact; a newcomer to the scope applies them.
+        foreach (CarDef car in def.Cars)
+            if (_cosmetics.ContainsKey(car.Id))
+                _transport.Send(peerId, BuildCosmetic(car.Id, bumpSeq: false), DeliveryMethod.ReliableOrdered);
     }
 
     // ── server-owned trains (M6-B.2): the dedicated server as a sim owner ──
@@ -645,6 +690,53 @@ public sealed class ServerTrains
             if (id != peerId) _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);
     }
 
+    /// <summary>Cosmetic scalars from the car's sim owner (M6-A1.1): validate ownership, gate the
+    /// sender's seq (a reordered arrival must not regress state), fold into the latest-per-car
+    /// store, and relay under the server's own seq to every relevant peer. Purely presentational —
+    /// no epoch, no transaction, self-healing by the next update (11 §2).</summary>
+    private void HandleCosmetic(int peerId, PacketReader r)
+    {
+        if (!CosmeticCodec.TryRead(r, out int carId, out byte seq, out (byte kind, byte value)[] entries))
+            return; // malformed — drop whole, like any bad packet
+        if (!Registry.TryFindCar(carId, out TrainsetDef set) || set.OwnerId != peerId)
+        {
+            ProposalRejected?.Invoke(peerId, $"cosmetic: not the sim owner of car {carId}");
+            return;
+        }
+        (int, int) senderKey = (carId, peerId);
+        if (_cosmeticSeqIn.TryGetValue(senderKey, out byte lastIn) && !CosmeticCodec.SeqAdvances(lastIn, seq))
+            return; // stale reliable-unordered arrival — newer state already committed
+        _cosmeticSeqIn[senderKey] = seq;
+
+        if (!_cosmetics.TryGetValue(carId, out Dictionary<byte, byte>? perCar))
+            _cosmetics[carId] = perCar = new Dictionary<byte, byte>();
+        foreach ((byte kind, byte value) in entries)
+        {
+            // The stored kind set stays within one message's cap, so a replay is always sendable
+            // (TryRead rejects >MaxEntries) — a hostile owner can't inflate a car past it.
+            if (perCar.Count >= CosmeticCodec.MaxEntries && !perCar.ContainsKey(kind)) continue;
+            perCar[kind] = value;
+        }
+
+        byte[] payload = BuildCosmetic(carId, bumpSeq: true);
+        foreach (int id in _connectedIds())
+            if (id != peerId && Relevant(id, set.Id))
+                _transport.Send(id, payload, DeliveryMethod.ReliableUnordered);
+    }
+
+    /// <summary>The full current cosmetic state of one car under the server's per-car seq —
+    /// bumped only when the state changed (a replay restates; a client that already applied it
+    /// drops the restatement, which is correct because its cache still holds the values).</summary>
+    private byte[] BuildCosmetic(int carId, bool bumpSeq)
+    {
+        Dictionary<byte, byte> perCar = _cosmetics[carId];
+        byte seq = _cosmeticSeqOut.TryGetValue(carId, out byte last) ? last : (byte)0;
+        if (bumpSeq) _cosmeticSeqOut[carId] = seq = (byte)(seq + 1);
+        var entries = new List<(byte kind, byte value)>(perCar.Count);
+        foreach (KeyValuePair<byte, byte> kv in perCar) entries.Add((kv.Key, kv.Value));
+        return CosmeticCodec.Build(carId, seq, entries);
+    }
+
     /// <summary>Live cargo change from the car's sim owner: folded into the stored CarDef (late
     /// joiners and saves carry the current load — cargo is not membership, the epoch stays) and
     /// relayed to everyone else.</summary>
@@ -885,6 +977,7 @@ public sealed class ServerTrains
         // later set that happens to reuse the id.
         ForgetCars(new[] { carId });
         _hardware.PruneCar(carId);
+        ForgetCosmetics(carId);
         if (txn != null)
         {
             BroadcastTransaction(txn);

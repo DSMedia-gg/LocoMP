@@ -388,4 +388,20 @@ public enum MessageType : byte
     /// keeps the strings localization-ready)]. The name is server-stamped so a line outlives its
     /// sender's departure. Reliable-unordered (03 §5).</summary>
     ChatMessage = 78,
+
+    // ── M6-A1 loco-sim fidelity (protocol v21): the corpus's first purely-presentational
+    // replication channel (11 §2). Owner-cosmetic, self-healing, relevance-gated — NEVER routed
+    // through the consist-transaction invariant (CLAUDE #5); it is not trainset state. ──
+
+    /// <summary>owner → server → relevant peers: coarse cosmetic output-state for one car — the
+    /// visible RESULT of the owner's loco sim (plume/flow intensities), which a kinematic replica
+    /// never computes locally. Wire: [carId:varuint][seq:byte][count:byte][count × (kind:byte
+    /// (<see cref="Trains.CosmeticKind"/>), value:byte (the scalar quantised 0–255 over its 0–1
+    /// range))]. Reliable-unordered + the per-CAR seq guard = latest-wins without cross-car
+    /// coupling (the Steam-relay framing idiom, byte-width). The server validates the sender owns
+    /// the car's set, folds entries into its latest-per-car store (join-burst replay), and relays
+    /// the original bytes interest-gated like snapshots. A lost packet self-heals on the next
+    /// change; there is no epoch and no arbitration — a desynced scalar is wrong for one tick of
+    /// the owner's cadence, not wrong forever.</summary>
+    CosmeticState = 79,
 }
