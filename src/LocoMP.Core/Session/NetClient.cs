@@ -166,6 +166,18 @@ public sealed class NetClient : IDisposable
     /// <summary>The session's world day length in real minutes (0 = unknown).</summary>
     public float WorldDayLengthMinutes { get; private set; }
 
+    /// <summary>The shared world's pause state changed (D19 — the host paused/resumed via its own
+    /// native pause menu): (paused, display reason). The Shim freezes/unfreezes the local sim via
+    /// DV's own pause-request system and shows the "host paused" surface.</summary>
+    public event Action<bool, string>? WorldPauseChanged;
+
+    /// <summary>Is the shared world paused right now (D19)? Join-burst-fed, so it is correct from
+    /// the first frame of a session joined mid-pause.</summary>
+    public bool WorldPaused { get; private set; }
+
+    /// <summary>The display reason from the last pause notice (empty when unpaused).</summary>
+    public string WorldPauseReason { get; private set; } = string.Empty;
+
     public void Poll() => _transport.Poll();
 
     /// <summary>Announce the local player's pose to the server (sequenced-unreliable — latest wins).</summary>
@@ -271,6 +283,14 @@ public sealed class NetClient : IDisposable
         _roster.Clear();   // silent — Disconnected below already tells the frontend everything is gone
         WorldTimeOa = 0;   // the next session's sun re-anchors from its own join burst
         WorldDayLengthMinutes = 0;
+        if (WorldPaused)
+        {
+            // The link died mid-pause: the frontend must not stay frozen forever — surface the
+            // unpause so the Shim releases its pause request along with the session teardown.
+            WorldPaused = false;
+            WorldPauseReason = string.Empty;
+            WorldPauseChanged?.Invoke(false, string.Empty);
+        }
         Trains.Reset();
         Career.Reset();
         Items.Reset();
@@ -301,6 +321,7 @@ public sealed class NetClient : IDisposable
                 case MessageType.PlayerPose: HandlePlayerPose(r); break;
                 case MessageType.TimeSync: HandleTimeSync(r); break;
                 case MessageType.WorldTimeState: HandleWorldTimeState(r); break;
+                case MessageType.WorldPauseState: HandleWorldPauseState(r); break;
                 case MessageType.InterestHide: HandleInterestHide(r); break;
                 case MessageType.JoinBurstComplete: AdvanceStage(JoinStage.Complete); break;
                 case MessageType.AdminNotice: HandleAdminNotice(r); break;
@@ -451,6 +472,16 @@ public sealed class NetClient : IDisposable
         WorldTimeOa = oaDate;
         WorldDayLengthMinutes = dayLengthMinutes;
         WorldTimeChanged?.Invoke(oaDate, dayLengthMinutes);
+    }
+
+    private void HandleWorldPauseState(PacketReader r)
+    {
+        bool paused = r.ReadByte() != 0;
+        string reason = r.ReadString();
+        if (WorldPaused == paused) return;
+        WorldPaused = paused;
+        WorldPauseReason = paused ? reason : string.Empty;
+        WorldPauseChanged?.Invoke(paused, reason);
     }
 
     /// <summary>World source only (the server ignores anyone else): report the local sky as the

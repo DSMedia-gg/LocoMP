@@ -64,6 +64,7 @@ public sealed class SessionController
     private WorldTimeSync? _worldTime;
     private HandbrakeSync? _handbrakes;
     private CouplerHardwareSync? _couplerHardware;
+    private PauseSync? _pauseSync;
     private string _careerToast = "";
 
     // IMGUI field state
@@ -230,6 +231,7 @@ public sealed class SessionController
         _worldTime?.Tick((float)dt);
         _handbrakes?.Tick((float)dt);
         _couplerHardware?.Tick((float)dt);
+        _pauseSync?.Tick((float)dt);
         _walletMirror?.Tick(dt);
         _itemSync?.Tick(dt);
         _commsRadio?.Tick(dt);
@@ -327,6 +329,8 @@ public sealed class SessionController
                 else
                     GUILayout.Label($"{role} — {(_client is { Joined: true } ? "connected" : "connecting…")}" +
                                     (_mode == Mode.Hosting && _server != null ? $" — {_server.PlayerCount} player(s)" : ""));
+                if (_client is { WorldPaused: true })
+                    GUILayout.Label("⏸ HOST PAUSED — the world resumes when the host does (D19)");
 
                 if (_client != null)
                 {
@@ -723,6 +727,8 @@ public sealed class SessionController
             // v18 (02 §1): hoses/anglecocks/MU as server-validated discrete state; the reconcile
             // tick also SEEDS the host's pre-connected consists into the session.
             _couplerHardware = new CouplerHardwareSync(_client, _trains, _log);
+            // D19: the host's native ESC pause becomes a session state every peer freezes with.
+            _pauseSync = new PauseSync(_client, (paused, reason) => _server?.SetWorldPaused(paused, reason), _log);
             _mode = Mode.Hosting;
 
             _log($"[session] hosting on UDP {port} (game reports version '{PresenceShim.ReportedGameVersion}', handshake build '{PresenceShim.GameBuild}')");
@@ -794,6 +800,8 @@ public sealed class SessionController
             _handbrakes = new HandbrakeSync(_client, _trains, _log);
             // v18 (02 §1): hoses/anglecocks/MU discrete state — replicas rig up from the mirror.
             _couplerHardware = new CouplerHardwareSync(_client, _trains, _log);
+            // D19: freeze/unfreeze with the host's native pause (via DV's own pause-request system).
+            _pauseSync = new PauseSync(_client, setServerPaused: null, _log);
             _mode = Mode.Joined;
             _log($"[session] joining {_address}:{_portText}…");
         }
@@ -941,6 +949,8 @@ public sealed class SessionController
         _handbrakes = null;
         _couplerHardware?.Dispose();                   // unhooks the static hose/MU seams + cock hooks
         _couplerHardware = null;
+        _pauseSync?.Dispose();                         // releases a held pause request (never leave a world frozen)
+        _pauseSync = null;
         JobGenSuppressor.Active = false;               // DV's own generation resumes outside sessions
         SaveSuppressor.Active = false;                 // native saving resumes outside sessions
         CarSaveFilter.IsReplica = null;                // SP saves are unfiltered again (cleared before _trains dies)

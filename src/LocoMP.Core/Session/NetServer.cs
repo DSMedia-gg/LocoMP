@@ -262,6 +262,35 @@ public sealed class NetServer : IDisposable
             _transport.Send(id, payload, DeliveryMethod.ReliableUnordered);
     }
 
+    /// <summary>Is the shared world paused (D19 — the host's native ESC pause, made a session
+    /// state)? Always false on a dedicated server: nothing ever calls the setter there.</summary>
+    public bool WorldPaused { get; private set; }
+
+    /// <summary>D19: the HOST process reports its native pause state (host-embedded mode only — a
+    /// dedicated server has no host to pause and never calls this). The world source's sim is the
+    /// authoritative stream, so its pause becomes an acknowledged session state: every peer gets a
+    /// WorldPauseState (a joiner mid-pause gets it in the join burst), and the world CLOCK freezes
+    /// with it — a paused host's sky stops, so the flowing restatement must stop too.</summary>
+    public void SetWorldPaused(bool paused, string reason)
+    {
+        if (WorldPaused == paused) return;
+        WorldPaused = paused;
+        _worldPauseReason = reason ?? string.Empty;
+        if (paused) WorldTime.Freeze();
+        else WorldTime.Unfreeze();
+        byte[] payload = BuildWorldPauseState();
+        foreach (int id in _players.Keys)
+            _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);
+    }
+
+    private string _worldPauseReason = string.Empty;
+
+    private byte[] BuildWorldPauseState() => new PacketWriter(16)
+        .WriteByte((byte)MessageType.WorldPauseState)
+        .WriteByte(WorldPaused ? (byte)1 : (byte)0)
+        .WriteString(_worldPauseReason)
+        .ToArray();
+
     /// <summary>Anchor the world time-of-day from the SERVER PROCESS (a dedicated server's startup /
     /// console — the world-source report path is <see cref="MessageType.WorldTimeReport"/>) and push
     /// it to everyone. Returns false when the values are rejected (non-positive day length).</summary>
@@ -484,6 +513,8 @@ public sealed class NetServer : IDisposable
         Trains.OnPlayerAdmitted(peerId);                   // world burst: trainsets/junctions/grants
         if (WorldTime.HasValue)                            // the shared sun (v18) rides the world burst
             _transport.Send(peerId, BuildWorldTimeState(), DeliveryMethod.ReliableOrdered);
+        if (WorldPaused)                                   // a joiner mid-pause must freeze too (D19)
+            _transport.Send(peerId, BuildWorldPauseState(), DeliveryMethod.ReliableOrdered);
         Career.OnPlayerAdmitted(peerId, playerKey, name);  // career burst: your career + the board
         Items.OnPlayerAdmitted(peerId);                    // item burst: AFTER career maps peer↔key
         BroadcastRoster();                                 // roles+ping ride the burst for the newcomer
