@@ -52,6 +52,7 @@ public static class Main
         JunctionHook.Install(harmony, log);
         ChainHook.Install(harmony, log);
         OptimizerHook.Install(harmony, log);
+        WheelSlideHook.Install(harmony, log);
         JobGenSuppressor.Install(harmony, log);
         JobCapture.Install(harmony, log);
         WalletMirror.Install(harmony, log);
