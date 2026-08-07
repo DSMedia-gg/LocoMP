@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **The in-game Host Menu is here (M5.2 complete).** Hosting now has a real control room: a Host
+  Menu button on the multiplayer screen opens four panels — Players (live list with host/admin
+  badges and ping, kick / ban / promote), Session (password, player cap, pause-new-joins, Save &
+  Stop), World & Save (save now, autosave cadence, browse and restore backups, extract the world
+  file for a dedicated server), and Diagnostics (session health and network numbers, with a
+  copy-report button). Everything a host used to do through the developer panel or the log now has
+  a first-party surface.
 - **A host can retune the session while it runs (M5.2 session control).** The session owner can now
   change the password mid-session (players already in stay in — only new joins check it), raise or
   lower the player cap (raising it admits anyone waiting in the queue instantly; lowering it never
