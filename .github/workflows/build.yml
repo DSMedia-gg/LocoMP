@@ -51,7 +51,17 @@ jobs:
           key: dv-${{ env.DV_DEPOT }}-${{ steps.pin.outputs.manifest }}-${{ hashFiles('.ci/depot-filelist.txt') }}
 
       - name: Install DepotDownloader
-        run: dotnet tool install --global DepotDownloader
+        # Pinned GitHub release binary. The NuGet tool package line (2.7.x, 2022-era) is abandoned
+        # and its install crashes under current SDKs (the .store tools-path bug) — it took this
+        # workflow down on every run since 2026-07-20. Same CLI flags in 3.x; the zip ships a
+        # self-contained linux-x64 executable.
+        run: |
+          curl -fsSL -o /tmp/depotdownloader.zip \
+            https://github.com/SteamRE/DepotDownloader/releases/download/DepotDownloader_3.4.0/DepotDownloader-linux-x64.zip
+          mkdir -p "$HOME/depotdownloader"
+          unzip -qo /tmp/depotdownloader.zip -d "$HOME/depotdownloader"
+          chmod +x "$HOME/depotdownloader/DepotDownloader"
+          echo "$HOME/depotdownloader" >> "$GITHUB_PATH"
 
       - name: Generate Steam TOTP
         id: totp

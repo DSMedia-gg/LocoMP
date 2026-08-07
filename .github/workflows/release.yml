@@ -48,7 +48,14 @@ jobs:
         id: pin
         run: echo "manifest=$(jq -r '.manifest' .ci/depot.json)" >> "$GITHUB_OUTPUT"
       - name: Install DepotDownloader
-        run: dotnet tool install --global DepotDownloader
+        # Pinned GitHub release binary — see build.yml's twin step for why NuGet is unusable.
+        run: |
+          curl -fsSL -o /tmp/depotdownloader.zip \
+            https://github.com/SteamRE/DepotDownloader/releases/download/DepotDownloader_3.4.0/DepotDownloader-linux-x64.zip
+          mkdir -p "$HOME/depotdownloader"
+          unzip -qo /tmp/depotdownloader.zip -d "$HOME/depotdownloader"
+          chmod +x "$HOME/depotdownloader/DepotDownloader"
+          echo "$HOME/depotdownloader" >> "$GITHUB_PATH"
       - name: Generate Steam TOTP
         id: totp
         uses: CyberAndrii/steam-totp@v1
