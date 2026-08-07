@@ -49,6 +49,7 @@ public sealed class LocoMpUi
         _prefs = UiPrefs.Load(log);
         Gate = new ReadinessGate(_theme, log);
         Hud = new StatusHud(_theme);
+        Chat = new ChatOverlay(vm, _theme, log);
         _vm.Changed += OnVmChanged;
         _vm.JoinStageChanged += OnJoinStage;
         _vm.JoinRejected += OnJoinRejected;
@@ -61,6 +62,9 @@ public sealed class LocoMpUi
 
     /// <summary>The non-blocking status tier (stub until M5.1/M5.4 wire real net states).</summary>
     public StatusHud Hud { get; }
+
+    /// <summary>The M5.4 chat overlay — ambient (never modal), alive whenever a session is.</summary>
+    public ChatOverlay Chat { get; }
 
     public bool IsOpen => _canvas is { Alive: true };
 
@@ -91,10 +95,18 @@ public sealed class LocoMpUi
             ReleaseCursor();
             WidgetKit.ReleaseKeyboardFocus(); // a field destroyed while selected never fires onDeselect
         }
+        // M5.4: the Enter-to-talk feed. Gated off while a screen or the cover owns interaction —
+        // their fields must not race chat for the keyboard focus refcount.
+        Chat.Tick(allowOpen: !IsOpen && !Gate.Active);
         if (Input.GetKeyDown(KeyCode.Escape))
         {
             // UnityEngine.Input read — works even with Rewired's kb+mouse detached (gate lock).
-            if (Gate.Active)
+            if (Chat.InputOpen)
+            {
+                PauseGuardHook.NoteEscConsumed(); // typing cancelled ≠ open the pause menu
+                Chat.CloseInput();
+            }
+            else if (Gate.Active)
             {
                 Gate.ShowExplainEarly(); // break-glass: surface the choice, never a raw abort
             }
@@ -292,6 +304,7 @@ public sealed class LocoMpUi
         Close();
         Gate.Clear();
         Hud.Destroy();
+        Chat.Destroy();
     }
 
     private void RequestCursor()
