@@ -10,6 +10,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Everyone sees the same sun now (time-of-day sync).** The host's sky is the session's clock:
+  every player's time of day follows it, a sleep or fast-travel skip moves the sun for the whole
+  session at once, and a guest's own bed nap snaps back instead of forking the world's time. It's
+  drift-corrected quietly — under normal play your sky never visibly jumps. A dedicated server is
+  its own clock (new `--time-of-day HH:MM` and `--day-length` flags). (Network protocol bumped —
+  both sides must run this build.)
+- **Handbrakes are shared (parity floor).** Setting or releasing any car's handbrake is seen by
+  every player, arrives with the join data so a newcomer's cars read true, and works on ownerless
+  parked cuts too — securing a stray rake sticks for everyone. No cab access needed: it's exterior
+  hardware, so anyone standing at the wheel can work it, exactly like in the base game.
+- **Brake hoses, anglecocks and MU cables are shared (parity floor).** Connecting or parting the
+  hardware between cars — and opening or closing the anglecocks — now replicates to every player,
+  with the server refusing impossible connections (the classic multiplayer "phantom MU cable" bug
+  class). The host's already-rigged consists seed into the session automatically, and DV's own
+  brake physics derive the right train-pipe behaviour on every machine from the shared state.
+- **When the host pauses, the session pauses (D19).** The host's ESC pause used to silently freeze
+  the shared world for everyone else — trains stopping mid-run with no explanation. Now every
+  player's game pauses with the host (through DV's own pause system — no menu pops up), a clear
+  "HOST PAUSED" line says why, the shared clock stops with it, and everything resumes together the
+  moment the host does. Joining mid-pause works; leaving mid-pause can never strand you frozen.
 - **The player list now shows who's who — and how their connection is (M5.2 roster backend).** Every
   player in a session now sees the same live roster: who the host is, who has been promoted to admin,
   and each player's ping to the server, refreshed every few seconds. It arrives with the join data, so
