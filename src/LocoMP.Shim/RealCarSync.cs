@@ -138,6 +138,17 @@ public sealed class RealCarSync
     /// <summary>True for cars this class spawned — i.e. cars simulated by ANOTHER player.</summary>
     public bool IsRemoteCar(TrainCar car) => _serverIdByCar.ContainsKey(car);
 
+    /// <summary>Every live replica by server car id (v18 hardware sync walks these to hook/apply).
+    /// Snapshot-free enumeration — skip entries whose GameObject died since registration.</summary>
+    public IEnumerable<KeyValuePair<int, TrainCar>> CarsByServerId
+    {
+        get
+        {
+            foreach (KeyValuePair<int, TrainCar> kv in _carByServerId)
+                if (kv.Value != null) yield return kv;
+        }
+    }
+
     /// <summary>A chain gesture just applied a couple/uncouple to this pair NATIVELY and routed
     /// the intent to the sim owner (F1) — hold the reconcile's truth-assert for this one pair
     /// until the commit lands or the window expires (expiry = the def visibly wins).</summary>

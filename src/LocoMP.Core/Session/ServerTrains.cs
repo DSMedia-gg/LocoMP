@@ -544,15 +544,31 @@ public sealed class ServerTrains
         byte controlId = r.ReadByte();
         float value = r.ReadSingle();
 
-        // Only the grant holder may drive this cab's controls (03 §3 GRANT)...
-        if (!_grants.TryGetValue(carId, out int holder) || holder != peerId)
+        // Exterior hardware (v18, ids ≥ 200 — the handbrake wheel) is operated from the ground, so
+        // the CAB grant does not govern it; the acting client's game already required physical
+        // reach (the F8/comms-radio trust model). Cab controls keep the grant gate (03 §3 GRANT).
+        bool exterior = controlId >= VirtualControlId.ExteriorFloor;
+        if (!exterior && (!_grants.TryGetValue(carId, out int holder) || holder != peerId))
         {
             ProposalRejected?.Invoke(peerId, $"input: no control grant for car {carId}");
             return;
         }
-        // ...and the input is applied by whoever simulates the consist (03 §3 OWN). Same player →
-        // they already applied it locally; nothing to forward.
-        if (!Registry.TryFindCar(carId, out TrainsetDef set) || set.OwnerId == peerId || set.OwnerId == 0) return;
+        if (!Registry.TryFindCar(carId, out TrainsetDef set) || set.OwnerId == peerId) return;
+
+        if (set.OwnerId == 0)
+        {
+            // A parked set has no sim to route to. For exterior hardware the server commits the
+            // state itself (securing an ownerless cut's handbrakes is ordinary yard work — D21's
+            // parked-authority spirit); a cab input on a parked set stays dropped.
+            if (!exterior) return;
+            if (!_controls.TryGetValue(carId, out Dictionary<byte, float>? perCar))
+                _controls[carId] = perCar = new Dictionary<byte, float>();
+            perCar[controlId] = value;
+            byte[] committed = BuildControlState(carId, controlId, value);
+            foreach (int id in _connectedIds())
+                if (id != peerId) _transport.Send(id, committed, DeliveryMethod.ReliableOrdered);
+            return;
+        }
 
         byte[] payload = new PacketWriter(16)
             .WriteByte((byte)MessageType.ControlInput)
