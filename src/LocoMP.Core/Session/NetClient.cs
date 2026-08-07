@@ -245,6 +245,19 @@ public sealed class NetClient : IDisposable
     /// <summary>Ask the server to save the world now (M5.2 "Save now").</summary>
     public void SaveNow() => SendAdminAction(AdminActionKind.SaveNow);
 
+    /// <summary>Owner only: change the session password mid-session (empty = open). Present players
+    /// are untouched; only future joins check it (M5.2 session control).</summary>
+    public void SetSessionPassword(string password) => SendAdminAction(AdminActionKind.SetPassword, 0, password ?? "");
+
+    /// <summary>Owner only: change the player cap live (1-99). Raising it admits queued waiters
+    /// immediately; lowering it never evicts anyone (M5.2 session control).</summary>
+    public void SetMaxPlayers(int maxPlayers) =>
+        SendAdminAction(AdminActionKind.SetMaxPlayers, 0, maxPlayers.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+    /// <summary>Owner only: retune the autosave cadence live, in seconds (5-3600) (M5.2 session control).</summary>
+    public void SetAutosaveInterval(int seconds) =>
+        SendAdminAction(AdminActionKind.SetAutosaveInterval, 0, seconds.ToString(System.Globalization.CultureInfo.InvariantCulture));
+
     /// <summary>Advance the join stage, forward only — later traffic of an earlier family (ordinary
     /// in-session career/item messages) must never regress the display, and nothing but the server's
     /// sentinel may reach Complete.</summary>

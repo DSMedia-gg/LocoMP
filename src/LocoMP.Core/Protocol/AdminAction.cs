@@ -41,6 +41,23 @@ public enum AdminActionKind : byte
     /// raises its SaveRequested hook; the host / dedicated-server process does the actual write (the file
     /// IO is deliberately outside game-free Core).</summary>
     SaveNow = 9,
+
+    // ── M5.2 session-control settings (v18 arc). OWNER-only — admins moderate players, the owner
+    // reconfigures the session. The new value rides the targetKey string (parsed server-side). ──
+
+    /// <summary>Change the session password mid-session (owner only). Value = the new password;
+    /// empty = open. Present players are untouched — only future joins check it.</summary>
+    SetPassword = 10,
+
+    /// <summary>Change the player cap live (owner only). Value = the new cap as decimal text.
+    /// Raising it pumps the admission queue immediately; lowering it never evicts anyone — present
+    /// players stay, only new admissions are held.</summary>
+    SetMaxPlayers = 11,
+
+    /// <summary>Change the autosave interval live (owner only). Value = seconds as decimal text.
+    /// The server authorises + parses and raises AutosaveIntervalRequested; the host / dedicated
+    /// process retunes its Autosaver (the file IO layer stays outside game-free Core).</summary>
+    SetAutosaveInterval = 12,
 }
 
 /// <summary>
@@ -75,4 +92,8 @@ public enum AdminNoticeKind : byte
     /// "the host ended the session" instead of inferring a dead link. Arg = reason (may be empty).
     /// The link still drops moments later; this only re-words what the drop means.</summary>
     SessionEnded = 6,
+
+    /// <summary>Broadcast: a session setting changed (v18 arc — max players, autosave interval, or
+    /// "the session password changed/was removed"; never the password itself). Arg = display text.</summary>
+    SettingChanged = 7,
 }

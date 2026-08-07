@@ -41,9 +41,20 @@ public sealed class ServerConfig
     /// <summary>The protocol/build/mod fingerprint a joining client must match exactly.</summary>
     public HandshakeRequest Expected { get; }
 
-    /// <summary>Session password; null or empty means open. Checked after version compatibility.</summary>
-    public string? Password { get; }
+    /// <summary>Session password; null or empty means open. Checked after version compatibility.
+    /// Live-mutable via <see cref="NetServer.SetSessionPassword"/> (M5.2 session control) — present
+    /// players are untouched, only future joins check it.</summary>
+    public string? Password { get; private set; }
 
-    /// <summary>Player cap (D10 design ceiling ~32). Join is rejected when the roster is full.</summary>
-    public int MaxPlayers { get; }
+    /// <summary>Player cap (D10 design ceiling ~32). Join is rejected when the roster is full.
+    /// Live-mutable via <see cref="NetServer.SetMaxPlayers"/> (M5.2 session control).</summary>
+    public int MaxPlayers { get; private set; }
+
+    internal void OverridePassword(string? password) => Password = password;
+
+    internal void OverrideMaxPlayers(int maxPlayers)
+    {
+        if (maxPlayers < 1) throw new ArgumentOutOfRangeException(nameof(maxPlayers));
+        MaxPlayers = maxPlayers;
+    }
 }

@@ -145,6 +145,12 @@ server.SaveRequested += () =>
     Console.WriteLine("[server] admin requested a save");
     autosaver.SaveNow();
 };
+// M5.2 session control: the owner retuned the autosave cadence (already authorised + validated).
+server.AutosaveIntervalRequested += seconds =>
+{
+    autosaver.SetInterval(seconds * 1000L);
+    Console.WriteLine($"[server] autosave interval set to {seconds}s by the owner");
+};
 var admin = new ConsoleAdmin();
 
 server.Poll(); // prime the deterministic board (Career.Tick fills it) so the banner's job count is real

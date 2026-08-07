@@ -12,7 +12,7 @@ namespace LocoMP.Core.Persistence;
 public sealed class Autosaver
 {
     private readonly IClock _clock;
-    private readonly long _intervalMs;
+    private long _intervalMs;
     private readonly ISaveStorage _storage;
     private readonly Func<byte[]> _capture;
     private long _nextDueMs;
@@ -28,6 +28,19 @@ public sealed class Autosaver
     }
 
     public long SavesWritten { get; private set; }
+
+    /// <summary>The live interval (M5.2 session control reads it back for the panel).</summary>
+    public long IntervalMs => _intervalMs;
+
+    /// <summary>Retune the cadence live (M5.2 session control). The next save is re-scheduled from
+    /// NOW at the new interval — shortening it never fires an immediate save (a fat-fingered slider
+    /// mustn't thrash the disk), lengthening it never lets a stale short deadline linger.</summary>
+    public void SetInterval(long intervalMs)
+    {
+        if (intervalMs < 1) throw new ArgumentOutOfRangeException(nameof(intervalMs));
+        _intervalMs = intervalMs;
+        _nextDueMs = _clock.NowMs + intervalMs;
+    }
 
     /// <summary>Saves that threw instead of writing (unwritable path, disk full, AV lock).</summary>
     public long SaveFailures { get; private set; }

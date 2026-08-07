@@ -693,6 +693,14 @@ public sealed class SessionController
             {
                 if (_autosaver != null && _autosaver.SaveNow()) _log("[career] career saved (admin save-now)");
             };
+            // M5.2 session control: the owner retuned the autosave cadence (host or a remote owner
+            // on this host's server — already authorised + validated server-side).
+            _server.AutosaveIntervalRequested += seconds =>
+            {
+                _autosaver?.SetInterval(seconds * 1000L);
+                _autosaveSeconds = seconds;
+                _log($"[session] autosave interval set to {seconds}s");
+            };
 
             _client = MakeClient(_hub.Connect(out _)); // the host is just client #1, zero latency
             _trains = new TrainSync(_client, isHost: true, _log);

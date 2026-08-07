@@ -143,6 +143,46 @@ public sealed class NetServer : IDisposable
     /// + write — since the file IO lives outside game-free Core.</summary>
     public event Action? SaveRequested;
 
+    /// <summary>Raised with the new interval in SECONDS when the owner retunes the autosave cadence
+    /// (M5.2 session control). Already authorised + validated; the host / dedicated process applies it
+    /// to its <c>Autosaver</c> — the file IO layer stays outside game-free Core.</summary>
+    public event Action<int>? AutosaveIntervalRequested;
+
+    /// <summary>Change the session password mid-session (M5.2 session control; host UI calls this
+    /// directly, a remote owner arrives via <see cref="AdminActionKind.SetPassword"/>). Empty/null =
+    /// open. Present players are untouched — only future joins check it. The broadcast never carries
+    /// the password itself.</summary>
+    public void SetSessionPassword(string? password)
+    {
+        _config.OverridePassword(string.IsNullOrEmpty(password) ? null : password);
+        BroadcastAdminNotice(AdminNoticeKind.SettingChanged,
+            string.IsNullOrEmpty(password) ? "session password removed" : "session password changed");
+    }
+
+    /// <summary>Change the player cap live (M5.2 session control). Raising it pumps the admission
+    /// queue immediately (D18 waiters admit without re-joining); lowering it never evicts — present
+    /// players stay, only new admissions are held. False = out of range (1..99).</summary>
+    public bool SetMaxPlayers(int maxPlayers)
+    {
+        if (maxPlayers < 1 || maxPlayers > 99) return false;
+        bool raised = maxPlayers > _config.MaxPlayers;
+        _config.OverrideMaxPlayers(maxPlayers);
+        BroadcastAdminNotice(AdminNoticeKind.SettingChanged, $"max players: {maxPlayers}");
+        if (raised) PumpQueue();
+        return true;
+    }
+
+    /// <summary>Retune the autosave cadence (M5.2 session control): validate, announce, and raise
+    /// <see cref="AutosaveIntervalRequested"/> for the owning process. False = out of range
+    /// (5 s..1 h — a sub-5 s autosave is a disk-thrash foot-gun, not a setting).</summary>
+    public bool SetAutosaveIntervalSeconds(int seconds)
+    {
+        if (seconds < 5 || seconds > 3600) return false;
+        AutosaveIntervalRequested?.Invoke(seconds);
+        BroadcastAdminNotice(AdminNoticeKind.SettingChanged, $"autosave every {seconds}s");
+        return true;
+    }
+
     /// <summary>Pump the transport, then advance time-driven career state (claim TTLs, grace
     /// expiries, board refill) — cheap when nothing is due.</summary>
     public void Poll()
@@ -687,6 +727,25 @@ public sealed class NetServer : IDisposable
 
             case AdminActionKind.SaveNow:
                 SaveRequested?.Invoke(); // authorised; the host/server process does the write
+                break;
+
+            // Session-control settings (v18 arc): OWNER-only — admins moderate players, the owner
+            // reconfigures the session. The new value rides the targetKey string.
+            case AdminActionKind.SetPassword:
+                if (!_moderation.IsOwner(senderKey)) { SendAdminNotice(peerId, AdminNoticeKind.Rejected, "owner only"); return; }
+                SetSessionPassword(targetKey);
+                break;
+
+            case AdminActionKind.SetMaxPlayers:
+                if (!_moderation.IsOwner(senderKey)) { SendAdminNotice(peerId, AdminNoticeKind.Rejected, "owner only"); return; }
+                if (!int.TryParse(targetKey, out int cap) || !SetMaxPlayers(cap))
+                    SendAdminNotice(peerId, AdminNoticeKind.Rejected, "max players must be 1-99");
+                break;
+
+            case AdminActionKind.SetAutosaveInterval:
+                if (!_moderation.IsOwner(senderKey)) { SendAdminNotice(peerId, AdminNoticeKind.Rejected, "owner only"); return; }
+                if (!int.TryParse(targetKey, out int seconds) || !SetAutosaveIntervalSeconds(seconds))
+                    SendAdminNotice(peerId, AdminNoticeKind.Rejected, "autosave interval must be 5-3600 seconds");
                 break;
         }
     }
