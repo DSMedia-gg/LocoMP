@@ -582,10 +582,14 @@ public sealed class TrainSync : IDisposable
     {
         if (ownerId != _client.LocalId)
         {
-            // A set we simulate being reassigned under us has no legitimate path today (park/release
-            // are our own acts) — log it rather than fight it; the server is authoritative.
-            if (_bindings.ContainsKey(trainsetId))
-                _log($"[trains] WARNING: set {trainsetId} reassigned to owner {ownerId} while bound here — keeping local cars, no longer streaming");
+            // R4-I: ownership moved away while WE were simulating (release, heir hand-off, F7
+            // reassignment). The old behaviour kept the cars own-bound forever — every later
+            // handbrake/cab act then took the OWNER path, the server refused it ("not the sim
+            // owner"), and the parked-commit path was unreachable because the cars misclassified
+            // as ours. Disown is TryAdopt's inverse: unbind, unhook, and convert the live cars
+            // back to hardened replicas through the transaction-pool path.
+            if (_bindings.TryGetValue(trainsetId, out Binding? bound))
+                Disown(trainsetId, bound, ownerId);
             return;
         }
         if (_bindings.ContainsKey(trainsetId)) return; // already ours (our own claim echo)
@@ -608,6 +612,62 @@ public sealed class TrainSync : IDisposable
             _log($"[trains] claimed set {trainsetId} has no live cars here — releasing it back");
             _client.Trains.ReleaseOwnership(trainsetId);
         }
+    }
+
+    /// <summary>R4-I: adoption's inverse. Unbind the set, unhook its cars from the own-car event
+    /// seams, and hand the live TrainCars back to RealCarSync as a HARDENED replica set (the
+    /// transaction-pool path — same cars, no despawn/respawn). After this, handbrake and hardware
+    /// acts on these cars take the bystander branch again, so the parked-commit path is reachable
+    /// the moment the set parks.</summary>
+    private void Disown(int trainsetId, Binding bound, int newOwnerId)
+    {
+        _bindings.Remove(trainsetId);
+        RebuildCarSetIndex();
+
+        // The view's def is the freshest epoch; the binding's copy is the fallback if the view
+        // lost it (a remove racing the owner flip).
+        TrainsetDef def = _client.Trains.View.Sets.TryGetValue(trainsetId, out TrainsetDef current)
+            ? current : bound.Def;
+
+        var pool = new Dictionary<int, TrainCar>();
+        for (int i = 0; i < bound.Cars.Length && i < bound.Def.Cars.Count; i++)
+        {
+            TrainCar? car = bound.Cars[i];
+            if (car == null) continue;
+            int carId = bound.Def.Cars[i].Id;
+            UnhookCar(car);
+            _carById.Remove(carId);
+            _idByCar.Remove(car);
+            _wasDerailed.Remove(carId);
+            pool[carId] = car;
+        }
+
+        _remote.Disown(def, pool);
+        _log($"[trains] set {trainsetId} released to " +
+             (newOwnerId == 0 ? "parked" : $"owner {newOwnerId}") +
+             $" — {pool.Count} car(s) converted back to replicas");
+    }
+
+    /// <summary>Inverse of <see cref="HookCar"/> — coupler events and the destroy hook come off
+    /// when a car stops being ours (disown); RealCarSync re-arms its own replica bookkeeping.</summary>
+    private void UnhookCar(TrainCar car)
+    {
+        if (car == null || !_hookedCars.Remove(car)) return;
+        try
+        {
+            foreach (Coupler coupler in car.couplers)
+            {
+                if (coupler == null) continue;
+                coupler.Coupled -= OnCoupled;
+                coupler.Uncoupled -= OnUncoupled;
+            }
+            if (_destroyHooks.TryGetValue(car, out Action onGone))
+            {
+                car.OnCarAboutToBeDestroyed -= onGone;
+                _destroyHooks.Remove(car);
+            }
+        }
+        catch { /* car mid-destroy — its events die with it */ }
     }
 
     /// <summary>

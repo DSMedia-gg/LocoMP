@@ -58,6 +58,41 @@ public class TrainSessionTests
     }
 
     [Fact]
+    public void An_adopted_sets_owner_committed_state_survives_release_and_replays_to_a_rejoiner()
+    {
+        // R4-I chain, Core half: cab entry auto-claims (D21 adopt), so a loco handbrake ride the
+        // OWNER path — that value must fold into the server's control record and still be there for
+        // a rejoiner after the leave parks the set.
+        var (hub, clock, server, a, b, set) = SessionWithOneTrainset();
+        a.Trains.SendSnapshot(RailedSnapshot(set)); // materialised — a real parkable consist
+        Pump(server, new[] { a, b });
+
+        a.Leave();
+        Pump(server, new[] { a, b });
+        Assert.Equal(0, server.Trains.Registry.Sets[set.Id].OwnerId); // parked
+
+        b.Trains.RequestOwnership(set.Id); // the cab-entry auto-claim
+        Pump(server, new[] { b });
+        Assert.Equal(b.LocalId, server.Trains.Registry.Sets[set.Id].OwnerId);
+
+        b.Trains.SendControlState(set.Cars[0].Id, VirtualControlId.Handbrake, 0.85f); // owner path
+        Pump(server, new[] { b });
+
+        b.Leave(); // parks the adopted set again
+        Pump(server, new[] { b });
+        Assert.Equal(0, server.Trains.Registry.Sets[set.Id].OwnerId);
+
+        var seen = new List<(int carId, byte control, float value)>();
+        using var c = new NetClient(hub.Connect(out _), Identity, "Carol", clock);
+        c.Trains.ControlStateReceived += (carId, control, value) => seen.Add((carId, control, value));
+        Pump(server, new[] { c });
+
+        Assert.True(c.Joined);
+        Assert.Contains(seen, s =>
+            s.carId == set.Cars[0].Id && s.control == VirtualControlId.Handbrake && s.value > 0.84f);
+    }
+
+    [Fact]
     public void Registration_commits_on_the_server_and_mirrors_to_every_client()
     {
         var (_, _, server, a, b, _) = SessionWithOneTrainset();

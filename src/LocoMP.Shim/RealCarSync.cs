@@ -302,6 +302,18 @@ public sealed class RealCarSync
         return true;
     }
 
+    /// <summary>R4-I: <see cref="TryAdopt"/>'s inverse — ownership moved away from a set WE were
+    /// simulating (release, heir hand-off, reassignment), so its live cars come back as a HARDENED
+    /// replica set via the transaction-pool path (same TrainCars, no despawn/respawn). Position
+    /// targets re-establish on the set's next snapshot or baseline replay; until then the cars hold
+    /// their current transforms, which is exactly what a freshly parked cut should do.</summary>
+    public void Disown(TrainsetDef def, Dictionary<int, TrainCar> pool)
+    {
+        if (_sets.Remove(def.Id))
+            _log($"[trains] disown of set {def.Id} found a stale replica entry — replaced");
+        CreateSet(def, pool);
+    }
+
     public void Clear()
     {
         foreach (RemoteSet set in _sets.Values) DespawnEntries(set);
