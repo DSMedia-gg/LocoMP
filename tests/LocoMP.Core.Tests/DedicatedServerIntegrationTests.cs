@@ -88,6 +88,34 @@ public class DedicatedServerIntegrationTests
         }, 5000, pumps), "the client's replica of the server train should visibly move");
     }
 
+    /// <summary>
+    /// R4-H: Behind() resolves only from trail the walker has already walked, so a SPEED-0 server
+    /// train (parked props, `--train-speed 0`) never published a single snapshot — clients had no
+    /// baseline to spawn from, and the resync path had nothing to answer with either. The ctor
+    /// pre-roll (one consist-length of trail) makes the first Tick publish regardless of speed.
+    /// Regression-tested at the symptom: reverting the pre-roll fails the materialize wait.
+    /// </summary>
+    [Fact]
+    public void A_speed_zero_server_train_still_materializes_for_a_udp_client()
+    {
+        string? worldPath = new ServerOptions().ResolveWorldFile();
+        Assert.NotNull(worldPath);
+        WorldTopology topo = TopologyCodec.Read(File.ReadAllBytes(worldPath!));
+
+        using var serverT = LiteNetLibTransport.StartServer(0, Key);
+        using var server = new NetServer(serverT, new ServerConfig(Identity), new ManualClock());
+        var train = new ServerKinematicTrain(server.Trains, topo, carCount: 3, speed: 0, seed: 1);
+
+        using var cT = LiteNetLibTransport.ConnectClient("127.0.0.1", serverT.Port, Key);
+        using var c = new NetClient(cT, Identity, "Solo", new ManualClock(), playerKey: "k");
+        Action[] pumps = { () => { server.Poll(); train.Tick(0.1); }, c.Poll };
+
+        Assert.True(SpinUntil(
+            () => c.Joined && c.Trains.View.LatestSnapshots.ContainsKey(train.TrainsetId), 5000, pumps),
+            "a parked (speed-0) server train must still publish its baseline and materialize");
+        Assert.True(train.SnapshotsSent > 0);
+    }
+
     [Fact]
     public void The_world_survives_a_cold_restart_through_the_save_file()
     {

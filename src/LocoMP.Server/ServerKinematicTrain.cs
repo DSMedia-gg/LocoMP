@@ -34,6 +34,13 @@ public sealed class ServerKinematicTrain
         carCount = System.Math.Max(1, carCount);
         _walker = new TopologyWalker(topology, seed, tailCapacityM: carCount * CarLength + 100, startEdgeId);
 
+        // R4-H: pre-roll the walker by one consist length. Behind() only resolves from trail the
+        // head has already walked, so without this a SPEED-0 train never published a single
+        // snapshot (no trail → every Tick bailed → no baseline → clients never materialized it,
+        // and the baseline-replay path had nothing to answer with either) — and even a moving
+        // train streamed nothing for its first consist-length of travel.
+        _walker.Advance(carCount * CarLength + 1.0);
+
         var specs = new CarDef[carCount];
         for (int i = 0; i < carCount; i++)
             specs[i] = new CarDef(0, KindFor(i, liveries ?? System.Array.Empty<string>()));
