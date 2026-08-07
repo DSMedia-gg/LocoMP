@@ -322,4 +322,14 @@ public enum MessageType : byte
     /// <see cref="AdminActionKind.RequestBanList"/>. Payload: <see cref="AdminCodec.WriteBanList"/>
     /// (count + keys). Admin-gated at the request.</summary>
     AdminBanList = 70,
+
+    // ── M5.2 roster status (protocol v17): the player list's roles + latency column. ──
+
+    /// <summary>server → all admitted clients: the live roster status. Wire: [count:varuint] then per
+    /// admitted player [peerId:varuint][role:byte (<see cref="Presence.PlayerRole"/>)][pingPlus1:varuint
+    /// — 0 = unknown, else measured RTT ms + 1, so a genuine 0 ms link stays distinguishable].
+    /// Full-state with SELF INCLUDED, so one message renders the whole player list. Sent inside the
+    /// join burst, on any role change, and on a slow cadence for the ping refresh; clients prune
+    /// entries on PlayerLeft and dedupe no-change restatements.</summary>
+    RosterStatus = 71,
 }

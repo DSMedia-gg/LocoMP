@@ -225,6 +225,7 @@ while (!stopping)
     {
         lastTimeSync = now;
         server.BroadcastTime();
+        server.BroadcastRoster();   // M5.2: roles + per-player ping for everyone's player list
     }
     autosaver.Tick();
     if (admin.Drain(Status, () => autosaver.SaveNow())) stopping = true; // failure already logs via SaveFailed

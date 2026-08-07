@@ -1,3 +1,4 @@
+using System;
 using LocoMP.Core.Presence;
 
 namespace LocoMP.Core.Protocol;
@@ -28,4 +29,21 @@ internal static class PresenceCodec
 
     public static PlayerState ReadPlayer(PacketReader r) =>
         new((int)r.ReadVarUInt(), r.ReadString(), ReadPose(r));
+
+    public static void WriteStatus(PacketWriter w, PlayerStatus s)
+    {
+        w.WriteVarUInt((uint)s.Id);
+        w.WriteByte((byte)s.Role);
+        // ping + 1 so 0 can mean "unknown" (a null RTT): a live 0 ms loopback link must stay
+        // distinguishable from a peer the transport has no measurement for.
+        w.WriteVarUInt(s.PingMs is int ping ? (uint)Math.Min(ping, 600_000) + 1 : 0u);
+    }
+
+    public static PlayerStatus ReadStatus(PacketReader r)
+    {
+        int id = (int)r.ReadVarUInt();
+        var role = (PlayerRole)r.ReadByte();
+        uint pingPlus1 = r.ReadVarUInt();
+        return new PlayerStatus(id, role, pingPlus1 == 0 ? (int?)null : (int)(pingPlus1 - 1));
+    }
 }

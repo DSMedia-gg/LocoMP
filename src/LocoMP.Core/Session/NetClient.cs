@@ -20,6 +20,7 @@ public sealed class NetClient : IDisposable
     private readonly string _password;
     private readonly IClock _clock;
     private readonly Dictionary<int, PlayerState> _players = new();
+    private readonly Dictionary<int, PlayerStatus> _roster = new();
 
     public NetClient(ITransport transport, HandshakeRequest identity, string displayName, IClock clock,
         string? password = null, string? playerKey = null)
@@ -94,6 +95,18 @@ public sealed class NetClient : IDisposable
     /// <summary>The OTHER players in the session, keyed by id (excludes self).</summary>
     public IReadOnlyDictionary<int, PlayerState> Players => _players;
 
+    /// <summary>The live roster status (M5.2): role + measured server ping per admitted player, SELF
+    /// INCLUDED (unlike <see cref="Players"/>) — the player list renders from this plus the name
+    /// mirror. Fed by the server's <see cref="Protocol.MessageType.RosterStatus"/> pushes (join burst,
+    /// role changes, slow cadence); entries drop with PlayerLeft; empty until the join burst.</summary>
+    public IReadOnlyDictionary<int, PlayerStatus> Roster => _roster;
+
+    /// <summary>A player's session role from the last roster status (Player when unknown).</summary>
+    public PlayerRole RoleOf(int id) => _roster.TryGetValue(id, out PlayerStatus s) ? s.Role : PlayerRole.Player;
+
+    /// <summary>A player's measured server round-trip in ms from the last roster status (null = unknown).</summary>
+    public int? PingOf(int id) => _roster.TryGetValue(id, out PlayerStatus s) ? s.PingMs : null;
+
     public event Action<int>? Accepted;             // arg: local id
     public event Action<string>? Rejected;          // arg: reason (read RejectDetail for structure)
 
@@ -107,6 +120,10 @@ public sealed class NetClient : IDisposable
     public event Action<PlayerState>? PlayerJoined;
     public event Action<int>? PlayerLeft;
     public event Action<int, Pose>? PlayerMoved;    // args: id, new pose
+
+    /// <summary>The roster status changed — membership, a role, or a ping moved (M5.2). Repaint the
+    /// player list; no-change restatements are deduped and do not fire this.</summary>
+    public event Action? RosterChanged;
 
     /// <summary>The server hid a remote player who left our spatial relevance set (D10). Unlike
     /// <see cref="PlayerLeft"/> the player is still in the session — the Shim should hide the avatar
@@ -239,6 +256,7 @@ public sealed class NetClient : IDisposable
         LocalId = null;
         ClearQueue();
         _players.Clear();
+        _roster.Clear();   // silent — Disconnected below already tells the frontend everything is gone
         Trains.Reset();
         Career.Reset();
         Items.Reset();
@@ -273,6 +291,7 @@ public sealed class NetClient : IDisposable
                 case MessageType.AdminNotice: HandleAdminNotice(r); break;
                 case MessageType.AdminDiagnostics: DiagnosticsReceived?.Invoke(AdminCodec.ReadDiagnostics(r)); break;
                 case MessageType.AdminBanList: BanListReceived?.Invoke(AdminCodec.ReadBanList(r)); break;
+                case MessageType.RosterStatus: HandleRosterStatus(r); break;
                 default:
                     // Stage inference (M5.1): the burst is sent world → career → items on one ordered
                     // channel, so the first message a later family claims proves every earlier family
@@ -363,7 +382,33 @@ public sealed class NetClient : IDisposable
     private void HandlePlayerLeft(PacketReader r)
     {
         int id = (int)r.ReadVarUInt();
+        // The roster status only ever names live players, so prune here rather than waiting for the
+        // next status push — the list must never show a departed player's stale role/ping line.
+        bool pruned = _roster.Remove(id);
         if (_players.Remove(id)) PlayerLeft?.Invoke(id);
+        if (pruned) RosterChanged?.Invoke();
+    }
+
+    /// <summary>Mirror the server's full-state roster status (M5.2). Fires <see cref="RosterChanged"/>
+    /// only when something actually moved — the cadence re-push with identical pings (the loopback
+    /// case, always 0 ms) must not repaint anything.</summary>
+    private void HandleRosterStatus(PacketReader r)
+    {
+        int count = (int)r.ReadVarUInt();
+        bool changed = count != _roster.Count;
+        var next = new Dictionary<int, PlayerStatus>(count);
+        for (int i = 0; i < count; i++)
+        {
+            PlayerStatus s = PresenceCodec.ReadStatus(r);
+            next[s.Id] = s;
+            if (!changed &&
+                (!_roster.TryGetValue(s.Id, out PlayerStatus prev) || prev.Role != s.Role || prev.PingMs != s.PingMs))
+                changed = true;
+        }
+        if (!changed) return;
+        _roster.Clear();
+        foreach (KeyValuePair<int, PlayerStatus> kv in next) _roster[kv.Key] = kv.Value;
+        RosterChanged?.Invoke();
     }
 
     private void HandlePlayerPose(PacketReader r)

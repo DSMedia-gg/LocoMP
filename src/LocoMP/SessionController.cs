@@ -7,6 +7,7 @@ using LocoMP.Core.Career;
 using LocoMP.Core.Items;
 using LocoMP.Core.Net;
 using LocoMP.Core.Persistence;
+using LocoMP.Core.Presence;
 using LocoMP.Core.Protocol;
 using LocoMP.Core.Session;
 using LocoMP.Core.World;
@@ -215,6 +216,7 @@ public sealed class SessionController
             {
                 _timeAccum = 0;
                 _server.BroadcastTime();
+                _server.BroadcastRoster();   // M5.2: roles + per-player ping for everyone's player list
             }
         }
 
@@ -319,7 +321,16 @@ public sealed class SessionController
                 if (_client != null)
                 {
                     foreach (var p in _client.Players.Values)
-                        GUILayout.Label($"  • {p.Name} (id {p.Id}) @ {p.Pose}");
+                    {
+                        string badge = _client.RoleOf(p.Id) switch
+                        {
+                            PlayerRole.Owner => " [host]",
+                            PlayerRole.Admin => " [admin]",
+                            _ => "",
+                        };
+                        string ping = _client.PingOf(p.Id) is int ms ? $" — {ms} ms" : "";
+                        GUILayout.Label($"  • {p.Name} (id {p.Id}){badge}{ping} @ {p.Pose}");
+                    }
                     int worldItems = _client.Items.Items.Values.Count(i => i.Location == LocoMP.Core.Items.ItemLocationKind.World);
                     int heldItems = _client.Items.Items.Count - worldItems;
                     if (_client.Items.Items.Count > 0)
@@ -784,6 +795,8 @@ public sealed class SessionController
         // Only meaningful for JOINED sessions: the host's own loopback link can't drop. The
         // countdown (not an immediate declare) lets a transport re-handshake absorb load freezes.
         client.Disconnected += () => { if (_mode == Mode.Joined && _lostCountdown <= 0 && !_sessionLost) _lostCountdown = 3.0; };
+        // M5.2: the roster status (roles + ping) repaints the same list PlayersChanged drives.
+        client.RosterChanged += () => PlayersChanged?.Invoke();
         client.PlayerJoined += p =>
         {
             _avatars.AddOrUpdate(p.Id, p.Name, p.Pose);

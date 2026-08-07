@@ -199,6 +199,35 @@ public sealed class NetServer : IDisposable
     /// Live and per-peer, so it is NOT part of the <see cref="CaptureDiagnostics"/> snapshot.</summary>
     public int? RttMs(int peerId) => _transport.RttMs(peerId);
 
+    /// <summary>A player's session role (M5.2 roster) — owner beats admin beats player. Resolved through
+    /// the peer's stable key into the moderation state; only this peer-id projection ever goes on the
+    /// wire (keys are client-held secrets). A peer without a key (never admitted) reads Player.</summary>
+    public PlayerRole RoleOf(int peerId)
+    {
+        string? key = Career.KeyOf(peerId);
+        if (key is null) return PlayerRole.Player;
+        if (_moderation.IsOwner(key)) return PlayerRole.Owner;
+        return _moderation.IsAdmin(key) ? PlayerRole.Admin : PlayerRole.Player;
+    }
+
+    /// <summary>Push the live roster status — every admitted player's role + measured ping, self
+    /// included — to every admitted player (M5.2: the player list's roles/latency column). Full-state
+    /// and idempotent: the server sends it in the join burst and on role changes, the frontends call it
+    /// on a slow cadence for the ping refresh (the TimeSync tick is fine), and clients dedupe
+    /// no-change restatements.</summary>
+    public void BroadcastRoster()
+    {
+        if (_players.Count == 0) return;
+        var w = new PacketWriter(8 + _players.Count * 8)
+            .WriteByte((byte)MessageType.RosterStatus)
+            .WriteVarUInt((uint)_players.Count);
+        foreach (int id in _players.Keys)
+            PresenceCodec.WriteStatus(w, new PlayerStatus(id, RoleOf(id), RttMs(id)));
+        byte[] payload = w.ToArray();
+        foreach (int id in _players.Keys)
+            _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);
+    }
+
     /// <summary>Push the authoritative clock to every admitted player (call on a slow cadence).</summary>
     public void BroadcastTime()
     {
@@ -388,6 +417,8 @@ public sealed class NetServer : IDisposable
         Trains.OnPlayerAdmitted(peerId);                   // world burst: trainsets/junctions/grants
         Career.OnPlayerAdmitted(peerId, playerKey, name);  // career burst: your career + the board
         Items.OnPlayerAdmitted(peerId);                    // item burst: AFTER career maps peer↔key
+        BroadcastRoster();                                 // roles+ping ride the burst for the newcomer
+                                                           // AND update everyone else's player list
         SendJoinBurstComplete(peerId);                     // MUST be the last send of the burst — the
                                                            // ordered channel makes it a true barrier
         PlayerAdmitted?.Invoke(state);
@@ -526,8 +557,11 @@ public sealed class NetServer : IDisposable
                 if (victimKey is null) { SendAdminNotice(peerId, AdminNoticeKind.Rejected, "no such player"); return; }
                 bool changed = kind == AdminActionKind.Promote ? _moderation.Promote(victimKey) : _moderation.Demote(victimKey);
                 if (changed)
+                {
                     SendAdminNotice(targetPeerId, AdminNoticeKind.RoleChanged,
                         kind == AdminActionKind.Promote ? "admin" : "player");
+                    BroadcastRoster();                     // everyone's player list shows the new badge
+                }
                 break;
 
             case AdminActionKind.PauseJoins:

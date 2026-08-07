@@ -70,5 +70,8 @@ public static class ProtocolVersion
     /// traffic counters (bytes/messages sent+received) appended after the existing fields, so a v15 peer
     /// would misparse it — a deliberate incompatible bump. Per-peer RTT is served live via NetServer.RttMs
     /// (roster ping), not in this snapshot.</remarks>
-    public const int Current = 16;
+    /// <remarks>v17 (M5.2 roster status): RosterStatus (MessageType 71) pushes every admitted player's
+    /// role and measured ping to all clients (join burst + role changes + a slow cadence). A v16 peer
+    /// wouldn't know the new message, so this is a deliberate incompatible bump, per v7/v11 precedent.</remarks>
+    public const int Current = 17;
 }
