@@ -306,6 +306,21 @@ public sealed class RemoteActor
         if (_claimRetryAccum < 2.0) return; // scan at most every 2 s — no claim spam
         _claimRetryAccum = 0;
 
+        // R3-5: a same-key reconnect restores our claim server-side, but its arming JobChanged can
+        // land during the join burst BEFORE this actor's handlers exist (JoinAccepted and the career
+        // burst often share one poll batch) — and nothing re-fires it, so the bot sat mute holding a
+        // claim it never reported on. The board mirror always has the state; re-arm from it first.
+        foreach (ClientJob job in client.Career.Jobs.Values.OrderBy(j => j.Def.Id))
+        {
+            if (job.State != JobLifecycle.Claimed || job.ClaimantPeerId != client.LocalId) continue;
+            _claimedJobId = job.Def.Id;
+            _sinceClaim = 0;
+            _sinceReport = 0;
+            _log($"[{_name}] restored claim on job {job.Def.Id} ({job.Def.JobType} {job.Def.Origin}→" +
+                 $"{job.Def.Destination}) found on the board — resuming delivery reports");
+            return;
+        }
+
         foreach (ClientJob job in client.Career.Jobs.Values.OrderBy(j => j.Def.Id))
         {
             if (job.State != JobLifecycle.Available || _refusedJobs.Contains(job.Def.Id)) continue;

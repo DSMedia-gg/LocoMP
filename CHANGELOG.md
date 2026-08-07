@@ -105,6 +105,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   train's visible lag collapses toward zero, with no protocol change.
 
 ### Fixed
+- **Test rig: a relaunched claimant bot no longer goes silent on its restored job.** When a
+  `--claim-first` bot reconnected with the same player key, the server correctly restored its job
+  claim — but the bot only noticed via a network event that could land before its handlers were
+  wired, and when it missed it the bot held the claim without ever reporting delivery (so the job
+  could never complete). The bot now also re-checks the job board itself and resumes reporting on
+  any claim that is already its own.
 - **Hosting no longer bloats your save with other players' trains.** While you host, the game spawns
   every joined player's (and every test bot's) consist as real cars in your world — and an autosave
   during the session used to write those foreign trains into your own single-player save, so they came

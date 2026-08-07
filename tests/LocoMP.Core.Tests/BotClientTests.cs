@@ -1,4 +1,6 @@
+using System.Collections.Generic;
 using LocoMP.Bot;
+using LocoMP.Core.Career;
 using LocoMP.Core.Presence;
 using LocoMP.Core.Protocol;
 using LocoMP.Core.Session;
@@ -115,5 +117,52 @@ public class BotClientTests
         Assert.False(bot.Joined);
         Assert.Null(bot.RejectReason);                   // no server ≠ rejected — keep trying
         Assert.True(attempts >= 3, $"expected repeated attempts, got {attempts}");
+    }
+
+    [Fact]
+    public void A_reconnecting_claimant_re_arms_from_the_board_and_resumes_reporting()
+    {
+        // R3-5: on Loopback the whole join burst — including the restored claim's JobState — is
+        // ingested in the reconnecting bot's FIRST Poll, before its first SessionTick can wire the
+        // RemoteActor's handlers. That is the live race's losing side, deterministic here: without
+        // the board re-scan the relaunched claimant holds its claim mute and never reports.
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        var career = new CareerConfig
+        {
+            Preset = ProgressionPreset.PerPlayer,
+            StartingBalanceCents = 500_00,
+            ClaimTtlMs = 60_000,
+            ReconnectGraceMs = 10_000,
+            TargetAvailableJobs = 3,
+            JobSeed = 7,
+            Stations = new[] { "SM", "GF", "HB" },
+            JobTypes = new[] { new JobTypeSpec("FH", "steel", 100_00, 2, 4) },
+        };
+        using var server = new NetServer(hub.Server, new ServerConfig(Identity, career: career), clock);
+
+        var logs = new List<string>();
+        var claimOnly = new BotOptions { ClaimFirst = true };            // claim, but never report —
+        var actor = new RemoteActor(claimOnly, "Claimer", logs.Add);     // the job must survive phase 1
+        using (var bot = new BotClient("Claimer", () => hub.Connect(out _), Identity,
+                   new IdleBehavior(Pose.Identity), clock, logs.Add, playerKey: "claimer-key"))
+        {
+            bot.SessionTick = actor.Tick;
+            Pump(server, bot, clock, rounds: 12, msPerRound: 500);
+            Assert.Contains(logs, l => l.Contains("claimed job"));
+        }
+        server.Poll();                                                   // graceful leave → grace hold
+        Assert.Contains(server.Career.Registry.Jobs.Values, j => j.State == JobLifecycle.Claimed);
+
+        logs.Clear();
+        var reporting = new BotOptions { ClaimFirst = true, ReportIntervalSeconds = 1 };
+        var actor2 = new RemoteActor(reporting, "Claimer", logs.Add);    // fresh process, same key
+        using var bot2 = new BotClient("Claimer", () => hub.Connect(out _), Identity,
+            new IdleBehavior(Pose.Identity), clock, logs.Add, playerKey: "claimer-key");
+        bot2.SessionTick = actor2.Tick;
+        Pump(server, bot2, clock, rounds: 40, msPerRound: 100);
+
+        Assert.Contains(logs, l => l.Contains("restored claim on job"));
+        Assert.Contains(logs, l => l.Contains("reporting delivery on job"));
     }
 }
