@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Remote locos start coming alive (M6-A1.1).** The first slice of loco-sim fidelity: a friend's
+  loco now streams the visible outputs of its simulation — exhaust/steam plume intensity, sander
+  flow, engine rpm and whether the prime mover is even running — and your replica drives the game's
+  own particle and gauge machinery from them. Cab levers, headlights and wipers were already
+  mirrored; this adds the effects only the owner's simulation computes. Coarse, low-rate, and only
+  for trains near you. (Network protocol bumped — both sides must run this build.)
+
 - **Steam friend sessions — no port forwarding (M5.5).** Hosting now also listens on Valve's Steam
   relay through the game's own Steam client: friends join from the new Friends tab (it lists your
   Steam friends currently running LocoMP, with Join and Invite buttons) or straight from the Steam
@@ -33,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bound to J by default (rebindable in Settings).
 
 ### Fixed
+- **Entering a freshly-spawned remote loco no longer throws.** A one-frame gap while the game
+  assigns a new car its trainset could interrupt cab entry with an error right after joining
+  (visible as a camera hiccup); the wheel-slide observer now waits its turn.
 - **Adopting a parked consist no longer breaks it.** Walking into a parked train's cab (which claims
   it for you) used to release wound-up coupler springs all at once — shattered windscreens, broken
   couplings, even derailments on a stationary rake. The cars now ease back to their natural coupled
