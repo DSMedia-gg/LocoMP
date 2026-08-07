@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **In-game chat (M5.4).** Press Enter to talk: a quiet bottom-left feed shows player messages and
+  the session's own events — who joined, who left, and (only the server knows the difference) who
+  was kicked or banned. Your own line appears when the server confirms it, so what you see is what
+  everyone saw. Lines fade after a few seconds; ESC cancels a draft without opening the pause menu,
+  and typing never fires game controls. Flooding is rate-limited server-side, and a dedicated
+  server can speak to the session with `say <text>` on its console. (Network protocol bumped —
+  both sides must run this build.)
+- **A real Settings tab (M5.3).** The multiplayer screen's Settings tab now works: default player
+  name, UI scale for every LocoMP panel, remote-train smoothing, chat options (on/off, fade time,
+  chat key), and an optional in-game hotkey that opens the multiplayer screens without touching the
+  pause menu. Everything saves to disk, survives a restart, and applies live — no session relaunch,
+  no game restart.
 - **The in-game Host Menu is here (M5.2 complete).** Hosting now has a real control room: a Host
   Menu button on the multiplayer screen opens four panels — Players (live list with host/admin
   badges and ping, kick / ban / promote), Session (password, player cap, pause-new-joins, Save &
