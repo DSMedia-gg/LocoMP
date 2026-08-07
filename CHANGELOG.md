@@ -10,6 +10,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Session bans you can see and lift.** The Host Menu's Players panel now lists who is banned this
+  session with an Unban button per entry, and a dedicated server gets `bans` + `unban <id>` console
+  commands. Under the hood the ban list stopped carrying player identity keys (they are credentials);
+  it names people instead. (Network protocol bumped — both sides must run this build.)
+- **Parked-set radio actions now cost money everywhere.** Deleting a parked car via the radio charges
+  the $100 fee again (it had become free through the scan-assist path), and rerailing a parked wreck
+  bills a flat fee at claim time — including on dedicated servers, where guest fees used to be waived
+  entirely. Can't afford it → the action refuses by name; nothing ever overdrafts.
+- **The multiplayer screens open on J out of the box.** Since the host's ESC now pauses the whole
+  session, reaching the LocoMP screens must not require the pause menu — the in-game hotkey ships
+  bound to J by default (rebindable in Settings).
+
+### Fixed
+- **Adopting a parked consist no longer breaks it.** Walking into a parked train's cab (which claims
+  it for you) used to release wound-up coupler springs all at once — shattered windscreens, broken
+  couplings, even derailments on a stationary rake. The cars now ease back to their natural coupled
+  spacing before physics takes over, anchored at the car you're standing in.
+- **Parted hoses and closed anglecocks stay parted.** Deliberately disconnecting brake hoses or
+  closing cocks on a parked consist survives leaving and rejoining — the rejoin used to silently
+  re-rig everything back to connected.
+- **Loco handbrakes set from the cab now stick.** Releasing a claimed consist used to strand its
+  cars in a state where handbrake and hardware changes silently went nowhere; ownership hand-backs
+  now convert the cars cleanly back to replicas, so everything you set keeps committing.
+- **A dedicated server's `stop` says goodbye properly.** Players now see "session ended by the host"
+  instead of a dead-connection error when the server shuts down cleanly — and headless test bots log
+  it too.
+- **Parked server-side trains actually appear.** A dedicated server's own trains configured with
+  speed 0 (static props/scenery) never showed up for anyone; they now stream their position from the
+  first tick at any speed.
+- **Chat lines dissolve instead of blinking out.** Expiring chat fades over its last 1.5 seconds.
 - **In-game chat (M5.4).** Press Enter to talk: a quiet bottom-left feed shows player messages and
   the session's own events — who joined, who left, and (only the server knows the difference) who
   was kicked or banned. Your own line appears when the server confirms it, so what you see is what
