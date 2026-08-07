@@ -165,6 +165,45 @@ public class PersistenceTests
     }
 
     [Fact]
+    public void Backups_are_listable_and_a_restore_is_itself_undoable()
+    {
+        // M5.2 backup view/restore: the panel/console lists the rotation, and a restore promotes a
+        // backup through Save() — so the displaced current becomes .1 and nothing is ever destroyed.
+        string dir = Path.Combine(Path.GetTempPath(), "locomp-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            string path = Path.Combine(dir, "world.lmps");
+            var storage = new FileSaveStorage(path, backups: 2);
+
+            Assert.Empty(storage.ListBackups());
+            Assert.False(storage.TryRestoreBackup(1, out string? why)); // nothing to restore yet
+            Assert.Contains("no backup", why);
+            Assert.False(storage.TryRestoreBackup(9, out why));         // out of the rotation's range
+            Assert.Contains("1-2", why);
+
+            storage.Save(new byte[] { 1 });
+            storage.Save(new byte[] { 2 });
+            storage.Save(new byte[] { 3 });
+
+            var backups = storage.ListBackups();
+            Assert.Equal(2, backups.Count);
+            Assert.Equal(1, backups[0].Index);          // newest first
+            Assert.Equal(1, backups[0].SizeBytes);
+
+            Assert.True(storage.TryRestoreBackup(2, out _));            // roll back to the oldest (bytes {1})
+            Assert.Equal(new byte[] { 1 }, storage.TryLoad());          // it is the current save now
+            Assert.Equal(new byte[] { 3 }, File.ReadAllBytes(path + ".1")); // the displaced world survived
+
+            Assert.True(storage.TryRestoreBackup(1, out _));            // and the restore itself undoes
+            Assert.Equal(new byte[] { 3 }, storage.TryLoad());
+        }
+        finally
+        {
+            if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Autosaver_writes_on_the_interval_and_on_demand()
     {
         var clock = new ManualClock();

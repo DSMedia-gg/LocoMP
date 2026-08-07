@@ -1,7 +1,23 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 
 namespace LocoMP.Core.Persistence;
+
+/// <summary>One rotated backup beside the current save (M5.2 backup view). Index 1 = newest.</summary>
+public readonly struct SaveBackupInfo
+{
+    public SaveBackupInfo(int index, long sizeBytes, DateTime lastWriteUtc)
+    {
+        Index = index;
+        SizeBytes = sizeBytes;
+        LastWriteUtc = lastWriteUtc;
+    }
+
+    public int Index { get; }
+    public long SizeBytes { get; }
+    public DateTime LastWriteUtc { get; }
+}
 
 /// <summary>Where save bytes live. Abstracted so persistence logic is tested in-memory and the
 /// two frontends (host-embedded mod, headless server) choose their own paths (03 §11).</summary>
@@ -63,5 +79,51 @@ public sealed class FileSaveStorage : ISaveStorage
             }
         }
         File.Move(tmp, _path);
+    }
+
+    /// <summary>The rotated backups that exist right now, newest (.1) first (M5.2 backup view).</summary>
+    public IReadOnlyList<SaveBackupInfo> ListBackups()
+    {
+        var result = new List<SaveBackupInfo>();
+        for (int i = 1; i <= _backups; i++)
+        {
+            var f = new FileInfo($"{_path}.{i}");
+            if (!f.Exists) continue;
+            result.Add(new SaveBackupInfo(i, f.Length, f.LastWriteTimeUtc));
+        }
+        return result;
+    }
+
+    /// <summary>Make backup .<paramref name="index"/> the CURRENT save (M5.2 restore). Runs through
+    /// <see cref="Save"/>, so the displaced current enters the rotation as .1 — a restore can itself
+    /// be undone and never destroys anything. The caller owns the session semantics: restoring under
+    /// a RUNNING server only sticks if nothing autosaves afterwards (the dedicated console's
+    /// <c>restore</c> command stops without the final save for exactly this reason).</summary>
+    public bool TryRestoreBackup(int index, out string? reason)
+    {
+        reason = null;
+        if (index < 1 || index > _backups)
+        {
+            reason = $"backup index must be 1-{_backups}";
+            return false;
+        }
+        string file = $"{_path}.{index}";
+        if (!File.Exists(file))
+        {
+            reason = $"no backup {index} exists";
+            return false;
+        }
+        byte[] bytes;
+        try
+        {
+            bytes = File.ReadAllBytes(file); // read FIRST — Save() shifts the rotation underneath
+        }
+        catch (Exception e)
+        {
+            reason = e.Message;
+            return false;
+        }
+        Save(bytes);
+        return true;
     }
 }

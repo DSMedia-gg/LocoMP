@@ -27,24 +27,48 @@ public sealed class ConsoleAdmin
             _lines.Enqueue(line.Trim());
     }
 
+    /// <summary>A restore command ran: the world on disk is now the chosen backup, so the shutdown
+    /// path must SKIP its final save (it would overwrite the restore with the live state).</summary>
+    public bool RestorePerformed { get; private set; }
+
     /// <summary>Drain queued commands on the calling (main-loop) thread. Returns true if a stop/quit
     /// command was seen, so the loop can exit.</summary>
-    public bool Drain(Func<string> status, Action saveNow)
+    public bool Drain(Func<string> status, Action saveNow,
+                      Func<string>? listBackups = null, Func<int, (bool ok, string message)>? restore = null)
     {
         bool stop = false;
         while (_lines.TryDequeue(out string? cmd))
         {
-            switch (cmd.ToLowerInvariant())
+            string lower = cmd.ToLowerInvariant();
+            switch (lower)
             {
                 case "": break;
                 case "status": Console.WriteLine(status()); break;
                 case "save": saveNow(); Console.WriteLine("[admin] saved."); break;
                 case "stop" or "quit" or "exit": stop = true; break;
+                case "backups":
+                    Console.WriteLine(listBackups is null ? "[admin] no backup storage attached" : listBackups());
+                    break;
                 case "help" or "?":
-                    Console.WriteLine("commands: status | save | stop | help");
+                    Console.WriteLine("commands: status | save | backups | restore <n> | stop | help");
                     break;
                 default:
-                    Console.WriteLine($"[admin] unknown command '{cmd}' — try: status | save | stop | help");
+                    // M5.2 restore: roll the world back to backup n, then STOP without the final
+                    // save — the next start loads the restored world. Everything is rotation-safe
+                    // (the displaced current became .1), so a mistaken restore is itself undoable.
+                    if (lower.StartsWith("restore ", StringComparison.Ordinal) && restore != null &&
+                        int.TryParse(lower.Substring("restore ".Length).Trim(), out int index))
+                    {
+                        (bool ok, string message) = restore(index);
+                        Console.WriteLine("[admin] " + message);
+                        if (ok)
+                        {
+                            RestorePerformed = true;
+                            stop = true;
+                        }
+                        break;
+                    }
+                    Console.WriteLine($"[admin] unknown command '{cmd}' — try: status | save | backups | restore <n> | stop | help");
                     break;
             }
         }

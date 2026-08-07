@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using LocoMP.Core.Career;
 using LocoMP.Core.Persistence;
 using LocoMP.Core.Protocol;
@@ -249,7 +250,20 @@ while (!stopping)
         server.BroadcastWorldTime(); // v18: restate the flowing world clock
     }
     autosaver.Tick();
-    if (admin.Drain(Status, () => autosaver.SaveNow())) stopping = true; // failure already logs via SaveFailed
+    if (admin.Drain(Status, () => autosaver.SaveNow(),
+        listBackups: () =>
+        {
+            IReadOnlyList<SaveBackupInfo> backups = storage.ListBackups();
+            if (backups.Count == 0) return "no backups yet (one rotates in at each save)";
+            var sb = new StringBuilder("backups (newest first):");
+            foreach (SaveBackupInfo b in backups)
+                sb.Append($"\n  {b.Index}: {b.SizeBytes:N0} bytes, {(DateTime.UtcNow - b.LastWriteUtc).TotalMinutes:F0} min old — 'restore {b.Index}' rolls back to it");
+            return sb.ToString();
+        },
+        restore: index => storage.TryRestoreBackup(index, out string? why)
+            ? (true, $"restored backup {index} — stopping WITHOUT the final save so it sticks; restart to load it (the displaced world survives as .1)")
+            : (false, $"restore failed: {why}")))
+        stopping = true; // failure already logs via SaveFailed
 
     // Only gather the sample when a report is actually due — it queries process memory and forces a
     // full collection, so Due() keeps that cost on the report cadence rather than on every tick.
@@ -270,9 +284,11 @@ while (!stopping)
     if (elapsed < tickMs) Thread.Sleep((int)(tickMs - elapsed));
 }
 
-Console.WriteLine("[server] shutting down — saving world…");
+Console.WriteLine(admin.RestorePerformed
+    ? "[server] shutting down — final save SKIPPED (a backup was just restored; saving would overwrite it)…"
+    : "[server] shutting down — saving world…");
 server.AnnounceSessionEnd("server shutting down"); // clean-end notice; flushes while the save runs below
-bool finalSaved = autosaver.SaveNow(); // capture reads the live registries, so save BEFORE disposing
+bool finalSaved = admin.RestorePerformed || autosaver.SaveNow(); // capture reads live registries — save BEFORE disposing
 server.Dispose();
 udp.Dispose();
 Thread.Sleep(150);                 // let LiteNetLib flush the disconnects
