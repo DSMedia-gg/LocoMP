@@ -25,7 +25,10 @@ namespace LocoMP.Core.Session;
 public sealed class ServerModeration
 {
     private readonly HashSet<string> _admins = new(StringComparer.Ordinal);
-    private readonly HashSet<string> _banned = new(StringComparer.Ordinal);
+    // key → its ban entry. The entry (opaque id + display name) is what surfaces (R4-A) — the key
+    // itself never leaves the server: it is a credential (F7 takeover, D3 wallet identity).
+    private readonly Dictionary<string, Protocol.SessionBan> _banned = new(StringComparer.Ordinal);
+    private int _nextBanId = 1;
     private string? _owner;
 
     /// <summary>The session owner's key — the first player admitted, auto-admin and immune to
@@ -54,7 +57,7 @@ public sealed class ServerModeration
 
     public bool IsAdmin(string key) => !string.IsNullOrEmpty(key) && _admins.Contains(key);
 
-    public bool IsBanned(string key) => !string.IsNullOrEmpty(key) && _banned.Contains(key);
+    public bool IsBanned(string key) => !string.IsNullOrEmpty(key) && _banned.ContainsKey(key);
 
     /// <summary>Grant admin to a key (promote-to-admin). Returns true if it changed anything.</summary>
     public bool Promote(string key)
@@ -70,21 +73,39 @@ public sealed class ServerModeration
         return _admins.Remove(key);
     }
 
-    /// <summary>Add a key to the session ban list. The owner can never be banned. Returns true if it was
-    /// newly banned. (Disconnecting the live peer is <see cref="NetServer"/>'s job — this only records the
-    /// ban so a rejoin is refused; a ban also implies eviction, done by the caller.)</summary>
-    public bool Ban(string key)
+    /// <summary>Add a key to the session ban list, minting a surfaced entry (opaque id + the display
+    /// name as of the ban, R4-A). The owner can never be banned. Returns true if it was newly banned.
+    /// (Disconnecting the live peer is <see cref="NetServer"/>'s job — this only records the ban so a
+    /// rejoin is refused; a ban also implies eviction, done by the caller.)</summary>
+    public bool Ban(string key, string name = "")
     {
-        if (string.IsNullOrEmpty(key) || IsOwner(key)) return false;
-        return _banned.Add(key);
+        if (string.IsNullOrEmpty(key) || IsOwner(key) || _banned.ContainsKey(key)) return false;
+        _banned[key] = new Protocol.SessionBan(_nextBanId++, string.IsNullOrEmpty(name) ? "(unknown)" : name);
+        return true;
     }
 
-    /// <summary>Lift a session ban. Returns true if the key was banned.</summary>
+    /// <summary>Lift a session ban by key. Returns true if the key was banned.</summary>
     public bool Unban(string key) => !string.IsNullOrEmpty(key) && _banned.Remove(key);
+
+    /// <summary>Lift a session ban by its surfaced entry id (the Host Menu / console / remote-admin
+    /// unban target — those views never hold keys). Returns true if an entry matched.</summary>
+    public bool UnbanById(int id)
+    {
+        foreach (KeyValuePair<string, Protocol.SessionBan> kv in _banned)
+        {
+            if (kv.Value.Id != id) continue;
+            _banned.Remove(kv.Key);
+            return true;
+        }
+        return false;
+    }
 
     /// <summary>The current admin keys — host-UI / diagnostics snapshot.</summary>
     public IReadOnlyCollection<string> Admins => _admins;
 
-    /// <summary>The current session-ban keys — host-UI / diagnostics snapshot.</summary>
-    public IReadOnlyCollection<string> BannedKeys => _banned;
+    /// <summary>The current session-ban keys — the JOIN GATE's view (server-internal only).</summary>
+    public IReadOnlyCollection<string> BannedKeys => _banned.Keys;
+
+    /// <summary>The surfaced ban entries (id + name, never keys) — what every UI lists (R4-A).</summary>
+    public IReadOnlyCollection<Protocol.SessionBan> Bans => _banned.Values;
 }

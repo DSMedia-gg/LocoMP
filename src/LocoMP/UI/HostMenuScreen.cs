@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using LocoMP.Core.Persistence;
 using LocoMP.Core.Presence;
+using LocoMP.Core.Protocol;
 using LocoMP.Core.Session;
 using TMPro;
 using UnityEngine;
@@ -144,6 +145,22 @@ public sealed class HostMenuScreen : IScreen
             kit.Button(row, "Kick", () => { _vm.Kick(id); Note($"kicked {p.Name}"); }, width: 90f);
             kit.Button(row, "Ban", () => { _vm.Ban(id); Note($"banned {p.Name} for this session"); }, width: 90f);
         }
+
+        // R4-A: the session-ban list + unban — entries are (name, opaque id); the server never
+        // shares keys. The request below refreshes the snapshot; an unchanged reply is deduped
+        // upstream, so this rebuild-triggered re-request cannot repaint-loop.
+        kit.Label(column, "Session bans (die with the session — U3)", dim: true);
+        if (_vm.Bans.Count == 0)
+            kit.Label(column, "No session bans.", dim: true);
+        foreach (SessionBan b in _vm.Bans)
+        {
+            RectTransform row = kit.Row(column, "Ban " + b.Id);
+            TMP_Text line = kit.Label(row, $"{b.Name}  (ban {b.Id})");
+            line.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
+            SessionBan entry = b;
+            kit.Button(row, "Unban", () => { _vm.Unban(entry.Id); Note($"unbanned {entry.Name}"); }, width: 110f);
+        }
+        _vm.RequestBanList();
     }
 
     private string Badge(PlayerRole role) => role switch

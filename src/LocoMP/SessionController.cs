@@ -127,6 +127,21 @@ public sealed class SessionController
     /// <see cref="NetClient.ChatLog"/> when this fires; the overlay appends, the log has a copy.</summary>
     public event Action<ChatEntry>? ChatReceived;
 
+    /// <summary>R4-A: the latest session-ban list (entry id + display name — keys never reach the
+    /// client). Populated by <see cref="RequestBanList"/> replies and the server's push after an
+    /// unban; empty outside a session.</summary>
+    public IReadOnlyList<SessionBan> SessionBans { get; private set; } = Array.Empty<SessionBan>();
+
+    /// <summary>R4-A: <see cref="SessionBans"/> just refreshed — the Host Menu repaints its list.</summary>
+    public event Action? BanListChanged;
+
+    /// <summary>Ask the server for the current ban list (admin-only; reply lands in
+    /// <see cref="SessionBans"/> + <see cref="BanListChanged"/>).</summary>
+    public void RequestBanList() => _client?.RequestBanList();
+
+    /// <summary>Lift a session ban by entry id. The server pushes the refreshed list on success.</summary>
+    public void Unban(int banId) => _client?.Unban(banId);
+
     // ── M5.1 join progress + structured refusal ──────────────────────────────────────────────
 
     /// <summary>Where the join burst is (<see cref="Core.Session.JoinStage.None"/> when no client
@@ -881,6 +896,24 @@ public sealed class SessionController
             });
             ChatReceived?.Invoke(e);
         };
+        // R4-A: the ban list snapshot backs the Host Menu's unban surface; it also refreshes when
+        // the server pushes the list after a successful unban. No-change replies are DEDUPED (the
+        // roster's precedent) — the screen re-requests on every rebuild, and an undeduped reply
+        // would repaint → re-request → reply forever.
+        client.BanListReceived += list =>
+        {
+            bool same = list.Count == SessionBans.Count;
+            if (same)
+                for (int i = 0; i < list.Count; i++)
+                    if (list[i].Id != SessionBans[i].Id ||
+                        !string.Equals(list[i].Name, SessionBans[i].Name, StringComparison.Ordinal))
+                    {
+                        same = false;
+                        break;
+                    }
+            SessionBans = list;
+            if (!same) BanListChanged?.Invoke();
+        };
         client.AdminNotice += (kind, arg) =>
         {
             if (kind != AdminNoticeKind.SessionEnded) return;
@@ -1041,6 +1074,7 @@ public sealed class SessionController
         _avatars.Clear();
         _sessionLost = false;
         _hostEndedSession = false;
+        SessionBans = Array.Empty<SessionBan>(); // session-scoped by definition (U3)
         _lostCountdown = 0;
         _mode = Mode.Idle;
         SyncPhase();

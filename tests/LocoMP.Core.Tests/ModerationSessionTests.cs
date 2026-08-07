@@ -109,7 +109,10 @@ public class ModerationSessionTests
         host.Ban(bobId);
         Pump(server, new[] { host, bob1 });
 
-        host.Unban("kB");
+        // v20: the unban names the surfaced ban-entry id (keys never reach clients, R4-A).
+        SessionBan entry = Assert.Single(server.Moderation.Bans);
+        Assert.Equal("Bob", entry.Name);
+        host.Unban(entry.Id);
         Pump(server, new[] { host });
         Assert.False(server.Moderation.IsBanned("kB"));
 

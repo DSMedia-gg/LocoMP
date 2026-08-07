@@ -92,5 +92,11 @@ public static class ProtocolVersion
     /// bystanders otherwise see one uniform PlayerLeft) and dedicated-console "say" lines. The first
     /// family on the reliable-unordered tier the 03 §5 split reserved for chat. A v18 peer wouldn't
     /// know the new messages, so this is a deliberate incompatible bump, per v7/v11 precedent.</remarks>
-    public const int Current = 19;
+    /// <remarks>v20 (R4-A ban surface): AdminBanList (70) now carries (opaque entry id, display name)
+    /// pairs instead of raw player KEYS — a key is a credential (F7 credentialed takeover, D3 wallet
+    /// identity), and v19 leaked every banned key to every admin. AdminAction Unban correspondingly
+    /// targets the entry id (in the targetPeerId slot) instead of a key, and a successful unban
+    /// pushes the refreshed list back to the actor. A v19 peer would misread both payloads, so this
+    /// is a deliberate incompatible bump, per v7/v11 precedent.</remarks>
+    public const int Current = 20;
 }

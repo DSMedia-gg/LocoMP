@@ -745,7 +745,9 @@ public sealed class NetServer : IDisposable
                 if (victimKey is null) { SendAdminNotice(peerId, AdminNoticeKind.Rejected, "no such player"); return; }
                 if (_moderation.IsOwner(victimKey)) { SendAdminNotice(peerId, AdminNoticeKind.Rejected, "cannot target the owner"); return; }
                 // Record the ban BEFORE eviction so an instantaneous rejoin race is already refused.
-                if (kind == AdminActionKind.Ban) _moderation.Ban(victimKey);
+                // The display name rides into the ban entry — it is what every unban surface lists (R4-A).
+                if (kind == AdminActionKind.Ban)
+                    _moderation.Ban(victimKey, _players.TryGetValue(targetPeerId, out PlayerState? victim) ? victim.Name : "");
                 SendAdminNotice(targetPeerId,
                     kind == AdminActionKind.Ban ? AdminNoticeKind.Banned : AdminNoticeKind.Kicked, "");
                 // A genuine vacancy: Remove pumps the queue (unlike an F7 handover). Then close the
@@ -777,9 +779,15 @@ public sealed class NetServer : IDisposable
                 break;
 
             case AdminActionKind.Unban:
-                // Offline target: the key comes on the wire (from the ban-list view), no live peer. The
-                // host UI re-reads Moderation.BannedKeys, so no notice is needed for success.
-                _moderation.Unban(targetKey);
+                // Offline target, named by its opaque ban-entry ID (v20, R4-A — keys never ride the
+                // wire; the ban-list view only ever held ids+names). The refreshed list goes straight
+                // back so the acting admin's view updates without a second query.
+                if (!_moderation.UnbanById(targetPeerId))
+                {
+                    SendAdminNotice(peerId, AdminNoticeKind.Rejected, "no such ban");
+                    return;
+                }
+                SendAdminBanList(peerId);
                 break;
 
             case AdminActionKind.RequestDiagnostics:
@@ -825,9 +833,17 @@ public sealed class NetServer : IDisposable
     private void SendAdminBanList(int peerId)
     {
         var w = new PacketWriter(48).WriteByte((byte)MessageType.AdminBanList);
-        AdminCodec.WriteBanList(w, _moderation.BannedKeys);
+        AdminCodec.WriteBanList(w, _moderation.Bans); // ids + names only — never keys (R4-A)
         _transport.Send(peerId, w.ToArray(), DeliveryMethod.ReliableOrdered);
     }
+
+    /// <summary>The surfaced session-ban entries (id + name) — the host UI's and the dedicated
+    /// console's direct view (R4-A). Remote admins get the same via RequestBanList.</summary>
+    public IReadOnlyCollection<SessionBan> SessionBans => _moderation.Bans;
+
+    /// <summary>Lift a session ban by its surfaced entry id — the dedicated console's unban
+    /// (`unban &lt;id&gt;`) and the host UI's button both land here or on the wire verb.</summary>
+    public bool UnbanSessionBan(int id) => _moderation.UnbanById(id);
 
     private void SendAdminNotice(int peerId, AdminNoticeKind kind, string arg)
     {

@@ -17,8 +17,8 @@ LocoMP.Server --port 8877 --spawn-trains 3
 
 Binds UDP 8877, generates a small built-in job board, **drives 3 trains of its own** along the extracted
 world topology, and persists to `locomp-server.save` beside the exe (autosave every 60 s + a save on clean
-exit). Type `help` at the prompt for console commands (`status`, `save`, `say`, `backups`, `restore`,
-`stop`). Drop `--spawn-trains` for
+exit). Type `help` at the prompt for console commands (`status`, `save`, `say`, `bans`, `unban`,
+`backups`, `restore`, `stop`). Drop `--spawn-trains` for
 a bare server (presence + jobs only).
 
 Build/run from source:

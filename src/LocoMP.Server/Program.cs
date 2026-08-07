@@ -273,7 +273,15 @@ while (!stopping)
         restore: index => storage.TryRestoreBackup(index, out string? why)
             ? (true, $"restored backup {index} — stopping WITHOUT the final save so it sticks; restart to load it (the displaced world survives as .1)")
             : (false, $"restore failed: {why}"),
-        say: text => server.BroadcastServerChat(text)))
+        say: text => server.BroadcastServerChat(text),
+        bans: () =>
+        {
+            if (server.SessionBans.Count == 0) return "no session bans";
+            var sb = new StringBuilder("session bans (id: name — 'unban <id>' lifts one):");
+            foreach (LocoMP.Core.Protocol.SessionBan b in server.SessionBans) sb.Append($"\n  {b.Id}: {b.Name}");
+            return sb.ToString();
+        },
+        unban: id => server.UnbanSessionBan(id)))
         stopping = true; // failure already logs via SaveFailed
 
     // Only gather the sample when a report is actually due — it queries process memory and forces a

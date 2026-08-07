@@ -35,7 +35,8 @@ public sealed class ConsoleAdmin
     /// command was seen, so the loop can exit.</summary>
     public bool Drain(Func<string> status, Action saveNow,
                       Func<string>? listBackups = null, Func<int, (bool ok, string message)>? restore = null,
-                      Action<string>? say = null)
+                      Action<string>? say = null,
+                      Func<string>? bans = null, Func<int, bool>? unban = null)
     {
         bool stop = false;
         while (_lines.TryDequeue(out string? cmd))
@@ -50,10 +51,22 @@ public sealed class ConsoleAdmin
                 case "backups":
                     Console.WriteLine(listBackups is null ? "[admin] no backup storage attached" : listBackups());
                     break;
+                case "bans":
+                    // R4-A: the dedicated operator's ban surface — entries are (id, name); keys never print.
+                    Console.WriteLine(bans is null ? "[admin] no moderation attached" : bans());
+                    break;
                 case "help" or "?":
-                    Console.WriteLine("commands: status | save | say <text> | backups | restore <n> | stop | help");
+                    Console.WriteLine("commands: status | save | say <text> | bans | unban <id> | backups | restore <n> | stop | help");
                     break;
                 default:
+                    if (lower.StartsWith("unban ", StringComparison.Ordinal) && unban != null &&
+                        int.TryParse(lower.Substring("unban ".Length).Trim(), out int banId))
+                    {
+                        Console.WriteLine(unban(banId)
+                            ? $"[admin] ban {banId} lifted — they can rejoin."
+                            : $"[admin] no session ban with id {banId} (try 'bans').");
+                        break;
+                    }
                     // M5.4: talk to the session as THE SERVER (players see a [server] chat line).
                     // Case-preserving — the original cmd is sliced, not the lowered copy.
                     if (lower.StartsWith("say ", StringComparison.Ordinal) && say != null)
@@ -76,7 +89,7 @@ public sealed class ConsoleAdmin
                         }
                         break;
                     }
-                    Console.WriteLine($"[admin] unknown command '{cmd}' — try: status | save | say <text> | backups | restore <n> | stop | help");
+                    Console.WriteLine($"[admin] unknown command '{cmd}' — try: status | save | say <text> | bans | unban <id> | backups | restore <n> | stop | help");
                     break;
             }
         }

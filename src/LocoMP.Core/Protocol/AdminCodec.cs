@@ -55,18 +55,28 @@ public static class AdminCodec
             bytesSent, bytesReceived, messagesSent, messagesReceived);
     }
 
-    /// <summary>Serialise the session ban list (count then each banned key).</summary>
-    public static void WriteBanList(PacketWriter w, IReadOnlyCollection<string> keys)
+    /// <summary>Serialise the session ban list (v20): count then each entry's opaque id + display
+    /// name. Keys deliberately never ride this message — a key is a credential (R4-A).</summary>
+    public static void WriteBanList(PacketWriter w, IReadOnlyCollection<SessionBan> bans)
     {
-        w.WriteVarUInt((uint)keys.Count);
-        foreach (string k in keys) w.WriteString(k);
+        w.WriteVarUInt((uint)bans.Count);
+        foreach (SessionBan b in bans)
+        {
+            w.WriteVarUInt((uint)b.Id);
+            w.WriteString(b.Name);
+        }
     }
 
-    public static IReadOnlyList<string> ReadBanList(PacketReader r)
+    public static IReadOnlyList<SessionBan> ReadBanList(PacketReader r)
     {
         int count = (int)r.ReadVarUInt();
-        var keys = new List<string>(count);
-        for (int i = 0; i < count; i++) keys.Add(r.ReadString());
-        return keys;
+        var bans = new List<SessionBan>(count);
+        for (int i = 0; i < count; i++)
+        {
+            int id = (int)r.ReadVarUInt();
+            string name = r.ReadString();
+            bans.Add(new SessionBan(id, name));
+        }
+        return bans;
     }
 }

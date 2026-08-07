@@ -61,6 +61,29 @@ public enum AdminActionKind : byte
 }
 
 /// <summary>
+/// One session-ban entry as the admin channel carries it (v20, R4-A): an opaque per-session ban id
+/// plus the banned player's display NAME. The banned player's KEY deliberately never leaves the
+/// server — a key is a credential (F7 credentialed takeover, D3 wallet identity), and the v19 ban
+/// list leaked it to every admin. Unban targets the id.
+/// </summary>
+public readonly struct SessionBan
+{
+    public SessionBan(int id, string name)
+    {
+        Id = id;
+        Name = name;
+    }
+
+    /// <summary>Session-scoped opaque id, minted at ban time — the unban target.</summary>
+    public int Id { get; }
+
+    /// <summary>The banned player's display name as it was when they were banned.</summary>
+    public string Name { get; }
+
+    public override string ToString() => $"{Id}: {Name}";
+}
+
+/// <summary>
 /// The server → client consequences of moderation (M5.2). First byte of an
 /// <see cref="MessageType.AdminNotice"/> packet, followed by a string argument whose meaning depends on
 /// the kind. Display-only: the authoritative effect (disconnect, role change, pause state) has already

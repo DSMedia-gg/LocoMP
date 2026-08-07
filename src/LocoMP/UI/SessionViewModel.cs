@@ -34,6 +34,7 @@ public sealed class SessionViewModel
         c.JoinRejected += r => { JoinRejected?.Invoke(r); Raise(); };
         c.QueueChanged += (position, total) => { QueueChanged?.Invoke(position, total); Raise(); };
         c.ChatReceived += e => { ChatReceived?.Invoke(e); Raise(); };
+        c.BanListChanged += Raise; // R4-A: the Host Menu's ban list repaints on refresh/unban
     }
 
     public SessionPhase Phase => _c.Phase;
@@ -131,6 +132,12 @@ public sealed class SessionViewModel
     public void Ban(int id) => _c.Client?.Ban(id);
     public void Promote(int id) => _c.Client?.Promote(id);
     public void Demote(int id) => _c.Client?.Demote(id);
+
+    /// <summary>R4-A: the session-ban entries (id + name — keys never reach the UI). Refresh with
+    /// <see cref="RequestBanList"/>; repaints via Changed when the reply/unban push lands.</summary>
+    public IReadOnlyList<SessionBan> Bans => _c.SessionBans;
+    public void RequestBanList() => _c.RequestBanList();
+    public void Unban(int banId) => _c.Unban(banId);
     public void SetJoinsPaused(bool paused)
     {
         if (paused) _c.Client?.PauseJoins();

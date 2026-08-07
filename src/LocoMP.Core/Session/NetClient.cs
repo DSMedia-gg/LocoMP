@@ -166,8 +166,9 @@ public sealed class NetClient : IDisposable
     /// <summary>server → admin: a diagnostics snapshot, in reply to <see cref="RequestDiagnostics"/> (M5.2).</summary>
     public event Action<ServerDiagnostics>? DiagnosticsReceived;
 
-    /// <summary>server → admin: the session ban list, in reply to <see cref="RequestBanList"/> (M5.2).</summary>
-    public event Action<IReadOnlyList<string>>? BanListReceived;
+    /// <summary>server → admin: the session ban list (v20: opaque entry ids + display names — never
+    /// keys), in reply to <see cref="RequestBanList"/> and pushed after a successful unban (M5.2/R4-A).</summary>
+    public event Action<IReadOnlyList<SessionBan>>? BanListReceived;
 
     /// <summary>The committed world time-of-day arrived (v18, 02 §3): (OADate, dayLengthMinutes).
     /// The value is CURRENT as of its send (the server flows its clock), so the Shim corrects the
@@ -248,8 +249,9 @@ public sealed class NetClient : IDisposable
     /// <summary>Resume admitting new players.</summary>
     public void ResumeJoins() => SendAdminAction(AdminActionKind.ResumeJoins);
 
-    /// <summary>Lift a session ban on a key (from the ban-list view).</summary>
-    public void Unban(string targetKey) => SendAdminAction(AdminActionKind.Unban, 0, targetKey);
+    /// <summary>Lift a session ban by its entry id (from the ban-list view — v20 lists ids + names;
+    /// keys never reach clients). The server replies with the refreshed list on success.</summary>
+    public void Unban(int banId) => SendAdminAction(AdminActionKind.Unban, banId);
 
     /// <summary>Ask the server for a fresh diagnostics snapshot (reply via <see cref="DiagnosticsReceived"/>).</summary>
     public void RequestDiagnostics() => SendAdminAction(AdminActionKind.RequestDiagnostics);

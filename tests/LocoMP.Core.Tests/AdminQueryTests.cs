@@ -59,11 +59,12 @@ public class AdminQueryTests
     [Fact]
     public void The_ban_list_survives_a_codec_round_trip()
     {
-        var keys = new[] { "kA", "kB", "kC" };
+        // v20 (R4-A): entries are (opaque id, display name) — keys never ride this message.
+        var bans = new[] { new SessionBan(1, "Alice"), new SessionBan(2, "Bob"), new SessionBan(7, "Carol") };
         var w = new PacketWriter(32);
-        AdminCodec.WriteBanList(w, keys);
-        IReadOnlyList<string> back = AdminCodec.ReadBanList(new PacketReader(w.ToArray()));
-        Assert.Equal(keys, back);
+        AdminCodec.WriteBanList(w, bans);
+        IReadOnlyList<SessionBan> back = AdminCodec.ReadBanList(new PacketReader(w.ToArray()));
+        Assert.Equal(bans.Select(b => (b.Id, b.Name)), back.Select(b => (b.Id, b.Name)));
     }
 
     [Fact]
@@ -127,13 +128,56 @@ public class AdminQueryTests
         host.Ban(bobId);
         Pump(server, new[] { host, bob });
 
-        IReadOnlyList<string>? list = null;
+        IReadOnlyList<SessionBan>? list = null;
         host.BanListReceived += l => list = l;
         host.RequestBanList();
         Pump(server, new[] { host });
 
         Assert.NotNull(list);
-        Assert.Contains("kB", list!);
+        SessionBan entry = Assert.Single(list!);
+        // v20 (R4-A): entries carry the display NAME and an opaque id — never the key. The key is
+        // a credential (F7 takeover, D3 wallet); v19 leaked it to every admin.
+        Assert.Equal("Bob", entry.Name);
+        Assert.True(entry.Id > 0);
+        Assert.DoesNotContain(list!, b => b.Name.Contains("kB"));
+    }
+
+    [Fact]
+    public void An_unban_by_entry_id_lifts_the_ban_and_pushes_the_refreshed_list()
+    {
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        using var server = new NetServer(hub.Server, new ServerConfig(Identity), clock);
+
+        using var host = new NetClient(hub.Connect(out _), Identity, "Host", clock, playerKey: "kH");
+        Pump(server, new[] { host });
+        using var bob = new NetClient(hub.Connect(out int bobId), Identity, "Bob", clock, playerKey: "kB");
+        Pump(server, new[] { host, bob });
+        host.Ban(bobId);
+        Pump(server, new[] { host, bob });
+        SessionBan entry = Assert.Single(server.Moderation.Bans);
+
+        var pushes = new List<IReadOnlyList<SessionBan>>();
+        host.BanListReceived += l => pushes.Add(l);
+        var notices = new List<AdminNoticeKind>();
+        host.AdminNotice += (k, _) => notices.Add(k);
+
+        // A wrong id refuses by name and lifts nothing.
+        host.Unban(entry.Id + 99);
+        Pump(server, new[] { host });
+        Assert.Contains(AdminNoticeKind.Rejected, notices);
+        Assert.True(server.Moderation.IsBanned("kB"));
+
+        // The right id lifts it AND the refreshed (now empty) list arrives unasked.
+        host.Unban(entry.Id);
+        Pump(server, new[] { host });
+        Assert.False(server.Moderation.IsBanned("kB"));
+        Assert.Empty(pushes[pushes.Count - 1]);
+
+        // The unbanned key can join again.
+        using var bob2 = new NetClient(hub.Connect(out _), Identity, "Bob", clock, playerKey: "kB");
+        Pump(server, new[] { host, bob2 });
+        Assert.True(bob2.Joined);
     }
 
     [Fact]
