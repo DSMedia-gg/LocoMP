@@ -756,26 +756,38 @@ public sealed class RealCarSync
     /// a bystander: the consist spawned near the host's train and chained itself to it.</summary>
     private void CoupleAdjacent(RemoteSet set)
     {
-        for (int i = 0; i + 1 < set.Cars.Length; i++)
+        // R4-K: the non-chain CoupleTo below force-connects hoses and opens both cocks as a side
+        // effect — replica maintenance, not world truth. Silence hardware capture for the duration;
+        // CouplerHardwareSync's reconcile imposes the mirror's recorded state (including deliberate
+        // parts) over whatever this rig did.
+        CouplerHardwareSync.MaintenanceDepth++;
+        try
         {
-            TrainCar? a = set.Cars[i].Car, b = set.Cars[i + 1].Car;
-            if (a == null || b == null) continue;
-            int idA = set.Cars[i].Def.Id, idB = set.Cars[i + 1].Def.Id;
-            if (IsPairAssertSuppressed(idA, idB))
-                continue; // an in-flight uncouple request holds this exact pair (F1)
-            Coupler? mine = NearestCoupler(a, b.transform.position);
-            Coupler? theirs = NearestCoupler(b, a.transform.position);
-            if (mine == null || theirs == null || mine.IsCoupled() || theirs.IsCoupled()) continue;
-            if ((mine.transform.position - theirs.transform.position).sqrMagnitude > 8f * 8f) continue;
-            try
+            for (int i = 0; i + 1 < set.Cars.Length; i++)
             {
-                mine.CoupleTo(theirs, playAudio: false, viaChainInteraction: false);
-                _log($"[trains] coupled def-adjacent cars {idA}+{idB}");
+                TrainCar? a = set.Cars[i].Car, b = set.Cars[i + 1].Car;
+                if (a == null || b == null) continue;
+                int idA = set.Cars[i].Def.Id, idB = set.Cars[i + 1].Def.Id;
+                if (IsPairAssertSuppressed(idA, idB))
+                    continue; // an in-flight uncouple request holds this exact pair (F1)
+                Coupler? mine = NearestCoupler(a, b.transform.position);
+                Coupler? theirs = NearestCoupler(b, a.transform.position);
+                if (mine == null || theirs == null || mine.IsCoupled() || theirs.IsCoupled()) continue;
+                if ((mine.transform.position - theirs.transform.position).sqrMagnitude > 8f * 8f) continue;
+                try
+                {
+                    mine.CoupleTo(theirs, playAudio: false, viaChainInteraction: false);
+                    _log($"[trains] coupled def-adjacent cars {idA}+{idB}");
+                }
+                catch (Exception e)
+                {
+                    _log($"[trains] couple of def-adjacent cars {idA}+{idB} FAILED ({e.Message})");
+                }
             }
-            catch (Exception e)
-            {
-                _log($"[trains] couple of def-adjacent cars {idA}+{idB} FAILED ({e.Message})");
-            }
+        }
+        finally
+        {
+            CouplerHardwareSync.MaintenanceDepth--;
         }
     }
 
@@ -845,6 +857,10 @@ public sealed class RealCarSync
                         continue; // an in-flight couple request holds this exact pair (F1)
                     // Every action logs — the 08-04 gauntlet spent a session unable to tell
                     // "sweep never acted" from "sweep acted invisibly" from "sweep threw".
+                    // Maintenance scope (R4-K): this uncouple's native hose-disconnect is repair
+                    // fallout, not a player part — captured, it would tombstone a pair the server
+                    // still holds connected, and the reconcile would then break the hose for good.
+                    CouplerHardwareSync.MaintenanceDepth++;
                     try
                     {
                         coupler.Uncouple(playAudio: false, calledOnOtherCoupler: false, dueToBrokenCouple: false, viaChainInteraction: false);
@@ -854,6 +870,10 @@ public sealed class RealCarSync
                     catch (Exception e)
                     {
                         _log($"[trains] reconcile: detach on car {myId} FAILED ({e.Message})");
+                    }
+                    finally
+                    {
+                        CouplerHardwareSync.MaintenanceDepth--;
                     }
                 }
             }

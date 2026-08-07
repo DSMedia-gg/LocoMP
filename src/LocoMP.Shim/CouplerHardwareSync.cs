@@ -34,6 +34,16 @@ public sealed class CouplerHardwareSync : IDisposable
 {
     private const float ReconcileIntervalSeconds = 2.0f;
 
+    /// <summary>R4-K: replica MAINTENANCE (RealCarSync's respawn CoupleAdjacent, the drift-repair
+    /// uncouple) drives DV's non-chain couple path, which force-connects hoses and opens both cocks
+    /// as a side effect. Those are artifacts of rebuilding a replica, not world truth — captured and
+    /// re-reported, they clobbered the server's recorded parts on every rejoin. RealCarSync brackets
+    /// its programmatic CoupleTo/Uncouple calls with this depth counter; while it is raised, capture
+    /// stays silent and the reconcile tick later imposes the mirror's truth (including tombstoned
+    /// parts) onto whatever the rig did. Player acts and TrainSync's routed couple/uncouple applies
+    /// stay unguarded on purpose: their hardware consequences ARE world truth and must report.</summary>
+    internal static int MaintenanceDepth;
+
     private readonly NetClient _client;
     private readonly TrainSync _trains;
     private readonly Action<string> _log;
@@ -78,7 +88,7 @@ public sealed class CouplerHardwareSync : IDisposable
 
     private void OnHoseChanged(bool connected, HoseAndCock a, HoseAndCock b)
     {
-        if (_applying) return;
+        if (_applying || MaintenanceDepth > 0) return;
         if (!TryEnd(a, out int carA, out CoupleEnd endA) || !TryEnd(b, out int carB, out CoupleEnd endB)) return;
         CouplerHardwareRegistry mirror = _client.Trains.Hardware;
         if (connected)
@@ -95,7 +105,7 @@ public sealed class CouplerHardwareSync : IDisposable
 
     private void OnMuChanged(bool connected, MultipleUnitCable a, MultipleUnitCable b)
     {
-        if (_applying) return;
+        if (_applying || MaintenanceDepth > 0) return;
         if (!TryEnd(a, out int carA, out CoupleEnd endA) || !TryEnd(b, out int carB, out CoupleEnd endB)) return;
         CouplerHardwareRegistry mirror = _client.Trains.Hardware;
         if (connected)
@@ -112,7 +122,7 @@ public sealed class CouplerHardwareSync : IDisposable
 
     private void OnCockChanged(int carId, CoupleEnd end, bool open)
     {
-        if (_applying) return;
+        if (_applying || MaintenanceDepth > 0) return;
         if (_client.Trains.Hardware.CockOpen(carId, end) == open) return;
         Send(new CouplerHardwareReport(CouplerHardwareKind.CockSet, carId, end, flag: open));
     }
@@ -204,8 +214,21 @@ public sealed class CouplerHardwareSync : IDisposable
                 (int car, CoupleEnd end)? mirrored = mirror.HoseAt(carId, end);
                 if (hose.IsHoseConnected)
                 {
-                    if (TryEnd(hose.connectedTo, out int pc, out CoupleEnd pe) && mirrored is null)
-                        Send(new CouplerHardwareReport(CouplerHardwareKind.HoseConnect, carId, end, pc, pe)); // seed
+                    if (TryEnd(hose.connectedTo, out int pc, out CoupleEnd pe))
+                    {
+                        // R4-K: a tombstoned end means the server KNOWS this is parted — the local
+                        // connection is a respawn re-rig (DV's non-chain CoupleTo), so impose the
+                        // part instead of re-seeding it over the record.
+                        if (mirror.HoseParted(carId, end) || mirror.HoseParted(pc, pe))
+                        {
+                            _applying = true;
+                            try { hose.Disconnect(); } finally { _applying = false; }
+                        }
+                        else if (mirrored is null)
+                        {
+                            Send(new CouplerHardwareReport(CouplerHardwareKind.HoseConnect, carId, end, pc, pe)); // seed
+                        }
+                    }
                 }
                 else if (mirrored is (int mc, CoupleEnd me))
                 {
@@ -221,7 +244,17 @@ public sealed class CouplerHardwareSync : IDisposable
                 bool mirroredOpen = mirror.CockOpen(carId, end);
                 if (open && !mirroredOpen)
                 {
-                    Send(new CouplerHardwareReport(CouplerHardwareKind.CockSet, carId, end, flag: true)); // seed
+                    // Explicitly closed on record → the respawn rig opened it; impose the close.
+                    // Unknown to the mirror → a pre-rigged local consist; seed it (R4-K tri-state).
+                    if (mirror.CockExplicitlyClosed(carId, end))
+                    {
+                        _applying = true;
+                        try { hose.SetCock(false); } finally { _applying = false; }
+                    }
+                    else
+                    {
+                        Send(new CouplerHardwareReport(CouplerHardwareKind.CockSet, carId, end, flag: true)); // seed
+                    }
                 }
                 else if (!open && mirroredOpen)
                 {
@@ -236,8 +269,18 @@ public sealed class CouplerHardwareSync : IDisposable
                 (int car, CoupleEnd end)? mirrored = mirror.MuAt(carId, end);
                 if (cable.IsConnected)
                 {
-                    if (TryEnd(cable.connectedTo, out int pc, out CoupleEnd pe) && mirrored is null)
-                        Send(new CouplerHardwareReport(CouplerHardwareKind.MuConnect, carId, end, pc, pe)); // seed
+                    if (TryEnd(cable.connectedTo, out int pc, out CoupleEnd pe))
+                    {
+                        if (mirror.MuParted(carId, end) || mirror.MuParted(pc, pe))
+                        {
+                            _applying = true;
+                            try { cable.Disconnect(playAudio: false); } finally { _applying = false; }
+                        }
+                        else if (mirrored is null)
+                        {
+                            Send(new CouplerHardwareReport(CouplerHardwareKind.MuConnect, carId, end, pc, pe)); // seed
+                        }
+                    }
                 }
                 else if (mirrored is (int mc, CoupleEnd me))
                 {

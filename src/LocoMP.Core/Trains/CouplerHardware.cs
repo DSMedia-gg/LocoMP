@@ -87,6 +87,16 @@ public sealed class CouplerHardwareRegistry
     private readonly Dictionary<(int car, CoupleEnd end), (int car, CoupleEnd end)> _mu = new();
     private readonly HashSet<(int car, CoupleEnd end)> _openCocks = new();
 
+    // R4-K: deliberate absence is STATE, not a missing record. A committed disconnect leaves a
+    // tombstone at each freed end, and an explicitly closed cock is distinct from a default-closed
+    // one — because a replica RESPAWN natively re-rigs hoses and re-opens cocks (DV's non-chain
+    // CoupleTo does both), and without these a rejoining client's world re-seeded that rig straight
+    // over the recorded part. Tombstones ride the join burst as disconnect/closed lines, so the
+    // Shim can IMPOSE the part on a freshly rigged replica instead of re-reporting the rig.
+    private readonly HashSet<(int car, CoupleEnd end)> _partedHoses = new();
+    private readonly HashSet<(int car, CoupleEnd end)> _partedMu = new();
+    private readonly HashSet<(int car, CoupleEnd end)> _closedCocks = new();
+
     /// <summary>The hose partner at a car end, or null.</summary>
     public (int car, CoupleEnd end)? HoseAt(int car, CoupleEnd end) =>
         _hoses.TryGetValue((car, end), out (int, CoupleEnd) p) ? p : ((int, CoupleEnd)?)null;
@@ -97,6 +107,17 @@ public sealed class CouplerHardwareRegistry
 
     /// <summary>Is the anglecock at a car end open? (Closed is the default/absent state.)</summary>
     public bool CockOpen(int car, CoupleEnd end) => _openCocks.Contains((car, end));
+
+    /// <summary>Was the hose at this end deliberately parted (a committed disconnect, not just
+    /// never-connected)? A respawn re-rig must be imposed away, never re-seeded.</summary>
+    public bool HoseParted(int car, CoupleEnd end) => _partedHoses.Contains((car, end));
+
+    /// <summary>Was the MU cable at this end deliberately parted?</summary>
+    public bool MuParted(int car, CoupleEnd end) => _partedMu.Contains((car, end));
+
+    /// <summary>Was the anglecock at this end EXPLICITLY closed (a committed close, not the spawn
+    /// default)? Distinct from <see cref="CockOpen"/> being false.</summary>
+    public bool CockExplicitlyClosed(int car, CoupleEnd end) => _closedCocks.Contains((car, end));
 
     /// <summary>Server path: validate a client's report against consist state and apply.</summary>
     public HardwareApplyResult TryApply(in CouplerHardwareReport report, TrainsetRegistry registry,
@@ -143,6 +164,9 @@ public sealed class CouplerHardwareRegistry
                 }
                 layer[a] = b;
                 layer[b] = a;
+                HashSet<(int, CoupleEnd)> partedOnConnect = Parted(report.Kind);
+                partedOnConnect.Remove(a); // a live connection retires the tombstones
+                partedOnConnect.Remove(b);
                 return HardwareApplyResult.Committed;
             }
 
@@ -154,6 +178,9 @@ public sealed class CouplerHardwareRegistry
                     return HardwareApplyResult.Redundant; // native auto-breaks race in from N clients
                 layer.Remove((report.CarA, report.EndA));
                 layer.Remove(partner);
+                HashSet<(int, CoupleEnd)> parted = Parted(report.Kind);
+                parted.Add((report.CarA, report.EndA)); // R4-K: the part is state, not absence
+                parted.Add(partner);
                 return HardwareApplyResult.Committed;
             }
 
@@ -162,8 +189,8 @@ public sealed class CouplerHardwareRegistry
                 (int, CoupleEnd) key = (report.CarA, report.EndA);
                 bool open = _openCocks.Contains(key);
                 if (open == report.Flag) return HardwareApplyResult.Redundant;
-                if (report.Flag) _openCocks.Add(key);
-                else _openCocks.Remove(key);
+                if (report.Flag) { _openCocks.Add(key); _closedCocks.Remove(key); }
+                else { _openCocks.Remove(key); _closedCocks.Add(key); } // explicit close = state (R4-K)
                 return HardwareApplyResult.Committed;
             }
 
@@ -184,22 +211,29 @@ public sealed class CouplerHardwareRegistry
                 Dictionary<(int, CoupleEnd), (int, CoupleEnd)> layer = Layer(report.Kind);
                 layer[(report.CarA, report.EndA)] = (report.CarB, report.EndB);
                 layer[(report.CarB, report.EndB)] = (report.CarA, report.EndA);
+                HashSet<(int, CoupleEnd)> partedOnConnect = Parted(report.Kind);
+                partedOnConnect.Remove((report.CarA, report.EndA));
+                partedOnConnect.Remove((report.CarB, report.EndB));
                 break;
             }
             case CouplerHardwareKind.HoseDisconnect:
             case CouplerHardwareKind.MuDisconnect:
             {
                 Dictionary<(int, CoupleEnd), (int, CoupleEnd)> layer = Layer(report.Kind);
+                HashSet<(int, CoupleEnd)> parted = Parted(report.Kind);
                 if (layer.TryGetValue((report.CarA, report.EndA), out (int, CoupleEnd) partner))
                 {
                     layer.Remove((report.CarA, report.EndA));
                     layer.Remove(partner);
+                    parted.Add(partner);
                 }
+                // A join-burst tombstone line carries only its own end (CarB = 0) — record it as-is.
+                parted.Add((report.CarA, report.EndA));
                 break;
             }
             case CouplerHardwareKind.CockSet:
-                if (report.Flag) _openCocks.Add((report.CarA, report.EndA));
-                else _openCocks.Remove((report.CarA, report.EndA));
+                if (report.Flag) { _openCocks.Add((report.CarA, report.EndA)); _closedCocks.Remove((report.CarA, report.EndA)); }
+                else { _openCocks.Remove((report.CarA, report.EndA)); _closedCocks.Add((report.CarA, report.EndA)); }
                 break;
         }
     }
@@ -209,8 +243,15 @@ public sealed class CouplerHardwareRegistry
     /// breaks its own hoses on despawn.</summary>
     public void PruneCar(int carId)
     {
-        _openCocks.Remove((carId, CoupleEnd.Front));
-        _openCocks.Remove((carId, CoupleEnd.Rear));
+        foreach (CoupleEnd end in new[] { CoupleEnd.Front, CoupleEnd.Rear })
+        {
+            _openCocks.Remove((carId, end));
+            _closedCocks.Remove((carId, end));
+            // A despawn is not a deliberate part — the dying car's tombstones go with it (the
+            // partner's own tombstone, if any, is its own record and survives on its own terms).
+            _partedHoses.Remove((carId, end));
+            _partedMu.Remove((carId, end));
+        }
         PruneFromLayer(_hoses, carId);
         PruneFromLayer(_mu, carId);
     }
@@ -228,6 +269,14 @@ public sealed class CouplerHardwareRegistry
             if (IsCanonical(kv))
                 yield return new CouplerHardwareReport(CouplerHardwareKind.MuConnect,
                     kv.Key.car, kv.Key.end, kv.Value.car, kv.Value.end);
+        // R4-K: deliberate absence replays too — one line per tombstoned end (partner implied
+        // absent, CarB = 0), so a rejoining client can impose the part over the respawn re-rig.
+        foreach ((int car, CoupleEnd end) parted in _partedHoses)
+            yield return new CouplerHardwareReport(CouplerHardwareKind.HoseDisconnect, parted.car, parted.end);
+        foreach ((int car, CoupleEnd end) parted in _partedMu)
+            yield return new CouplerHardwareReport(CouplerHardwareKind.MuDisconnect, parted.car, parted.end);
+        foreach ((int car, CoupleEnd end) cock in _closedCocks)
+            yield return new CouplerHardwareReport(CouplerHardwareKind.CockSet, cock.car, cock.end, flag: false);
     }
 
     /// <summary>Wipe everything (client mirror reset on disconnect).</summary>
@@ -236,10 +285,16 @@ public sealed class CouplerHardwareRegistry
         _hoses.Clear();
         _mu.Clear();
         _openCocks.Clear();
+        _partedHoses.Clear();
+        _partedMu.Clear();
+        _closedCocks.Clear();
     }
 
     private Dictionary<(int, CoupleEnd), (int, CoupleEnd)> Layer(CouplerHardwareKind kind) =>
         kind is CouplerHardwareKind.HoseConnect or CouplerHardwareKind.HoseDisconnect ? _hoses : _mu;
+
+    private HashSet<(int, CoupleEnd)> Parted(CouplerHardwareKind kind) =>
+        kind is CouplerHardwareKind.HoseConnect or CouplerHardwareKind.HoseDisconnect ? _partedHoses : _partedMu;
 
     private static bool IsCanonical(KeyValuePair<(int car, CoupleEnd end), (int car, CoupleEnd end)> kv) =>
         kv.Key.car < kv.Value.car || (kv.Key.car == kv.Value.car && kv.Key.end < kv.Value.end);

@@ -178,6 +178,123 @@ public class CouplerHardwareTests
         Assert.Single(hw.EnumerateState()); // just car1's open cock
     }
 
+    // ── R4-K: deliberate absence is state (tombstones + tri-state cocks) ──
+
+    [Fact]
+    public void A_deliberate_part_leaves_tombstones_and_a_reconnect_retires_them()
+    {
+        var registry = new TrainsetRegistry(new ManualClock());
+        TrainsetDef set = registry.Register(1, Specs("loco", "boxcar"));
+        int car0 = set.Cars[0].Id, car1 = set.Cars[1].Id;
+        var hw = new CouplerHardwareRegistry();
+
+        // Never-connected is NOT parted — a redundant disconnect must not fabricate a tombstone.
+        hw.TryApply(new CouplerHardwareReport(CouplerHardwareKind.HoseDisconnect, car0, CoupleEnd.Rear), registry, out _);
+        Assert.False(hw.HoseParted(car0, CoupleEnd.Rear));
+
+        hw.TryApply(Hose(car0, CoupleEnd.Rear, car1, CoupleEnd.Front), registry, out _);
+        hw.TryApply(new CouplerHardwareReport(CouplerHardwareKind.HoseDisconnect, car0, CoupleEnd.Rear), registry, out _);
+        Assert.True(hw.HoseParted(car0, CoupleEnd.Rear));
+        Assert.True(hw.HoseParted(car1, CoupleEnd.Front)); // both freed ends remember the part
+
+        // The join burst replays the part: one HoseDisconnect line per tombstoned end.
+        Assert.Equal(2, hw.EnumerateState().Count(l => l.Kind == CouplerHardwareKind.HoseDisconnect));
+
+        // A live reconnect is the one thing that retires a tombstone.
+        hw.TryApply(Hose(car0, CoupleEnd.Rear, car1, CoupleEnd.Front), registry, out _);
+        Assert.False(hw.HoseParted(car0, CoupleEnd.Rear));
+        Assert.False(hw.HoseParted(car1, CoupleEnd.Front));
+        Assert.DoesNotContain(hw.EnumerateState(), l => l.Kind == CouplerHardwareKind.HoseDisconnect);
+    }
+
+    [Fact]
+    public void An_explicitly_closed_cock_is_state_not_absence()
+    {
+        var registry = new TrainsetRegistry(new ManualClock());
+        TrainsetDef set = registry.Register(1, Specs("boxcar"));
+        int car = set.Cars[0].Id;
+        var hw = new CouplerHardwareRegistry();
+
+        // Default-closed stays invisible: a redundant close creates no record (a fresh replica's
+        // spawn state must not enumerate).
+        hw.TryApply(new CouplerHardwareReport(CouplerHardwareKind.CockSet, car, CoupleEnd.Front, flag: false), registry, out _);
+        Assert.False(hw.CockExplicitlyClosed(car, CoupleEnd.Front));
+        Assert.Empty(hw.EnumerateState());
+
+        // Open then deliberately close: that close is state and rides the join burst.
+        hw.TryApply(new CouplerHardwareReport(CouplerHardwareKind.CockSet, car, CoupleEnd.Front, flag: true), registry, out _);
+        hw.TryApply(new CouplerHardwareReport(CouplerHardwareKind.CockSet, car, CoupleEnd.Front, flag: false), registry, out _);
+        Assert.True(hw.CockExplicitlyClosed(car, CoupleEnd.Front));
+        CouplerHardwareReport line = Assert.Single(hw.EnumerateState());
+        Assert.Equal(CouplerHardwareKind.CockSet, line.Kind);
+        Assert.False(line.Flag);
+
+        // Re-opening retires the explicit close.
+        hw.TryApply(new CouplerHardwareReport(CouplerHardwareKind.CockSet, car, CoupleEnd.Front, flag: true), registry, out _);
+        Assert.False(hw.CockExplicitlyClosed(car, CoupleEnd.Front));
+    }
+
+    [Fact]
+    public void The_client_mirror_records_a_burst_tombstone_line_and_pruning_drops_tombstones()
+    {
+        var hw = new CouplerHardwareRegistry();
+
+        // A join-burst tombstone line names only its own end (CarB = 0) — the mirror must still
+        // record the part so the Shim can impose it over a respawn re-rig.
+        hw.ApplyCommitted(new CouplerHardwareReport(CouplerHardwareKind.HoseDisconnect, 7, CoupleEnd.Rear));
+        Assert.True(hw.HoseParted(7, CoupleEnd.Rear));
+
+        // A committed connect through the mirror path retires it.
+        hw.ApplyCommitted(new CouplerHardwareReport(CouplerHardwareKind.HoseConnect, 7, CoupleEnd.Rear, 8, CoupleEnd.Front));
+        Assert.False(hw.HoseParted(7, CoupleEnd.Rear));
+
+        // And a despawn is not a part: pruning clears the DYING car's tombstones and explicit
+        // closes; the partner's tombstone is its own record and survives on its own terms.
+        hw.ApplyCommitted(new CouplerHardwareReport(CouplerHardwareKind.HoseDisconnect, 7, CoupleEnd.Rear));
+        hw.ApplyCommitted(new CouplerHardwareReport(CouplerHardwareKind.CockSet, 7, CoupleEnd.Rear, flag: false));
+        hw.PruneCar(7);
+        Assert.False(hw.HoseParted(7, CoupleEnd.Rear));
+        Assert.False(hw.CockExplicitlyClosed(7, CoupleEnd.Rear));
+        Assert.True(hw.HoseParted(8, CoupleEnd.Front)); // the surviving end is still deliberately free
+        hw.PruneCar(8);
+        Assert.Empty(hw.EnumerateState());
+    }
+
+    [Fact]
+    public void A_parted_hose_and_closed_cock_survive_a_rejoin_via_the_join_burst()
+    {
+        // The R4-K scenario end-to-end: part committed, the client leaves and rejoins — the fresh
+        // mirror must KNOW the pair is parted (tombstone) and the cock explicitly closed, so the
+        // Shim imposes that over the respawn re-rig instead of re-seeding the rig.
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        using var server = new NetServer(hub.Server, new ServerConfig(Identity), clock);
+
+        using var owner = new NetClient(hub.Connect(out _), Identity, "Owner", clock, playerKey: "kO");
+        Pump(server, new[] { owner });
+        owner.Trains.RegisterTrainset(token: 1, Specs("loco", "boxcar"));
+        Pump(server, new[] { owner });
+        TrainsetDef set = owner.Trains.View.Sets.Values.Single();
+        int car0 = set.Cars[0].Id, car1 = set.Cars[1].Id;
+
+        owner.Trains.ReportCouplerHardware(Hose(car0, CoupleEnd.Rear, car1, CoupleEnd.Front));
+        owner.Trains.ReportCouplerHardware(new CouplerHardwareReport(CouplerHardwareKind.CockSet, car0, CoupleEnd.Rear, flag: true));
+        Pump(server, new[] { owner });
+        owner.Trains.ReportCouplerHardware(new CouplerHardwareReport(CouplerHardwareKind.HoseDisconnect, car0, CoupleEnd.Rear, car1, CoupleEnd.Front));
+        owner.Trains.ReportCouplerHardware(new CouplerHardwareReport(CouplerHardwareKind.CockSet, car0, CoupleEnd.Rear, flag: false));
+        Pump(server, new[] { owner });
+
+        using var rejoiner = new NetClient(hub.Connect(out _), Identity, "Rejoiner", clock, playerKey: "kR");
+        Pump(server, new[] { owner, rejoiner });
+
+        Assert.True(rejoiner.Joined);
+        Assert.Null(rejoiner.Trains.Hardware.HoseAt(car0, CoupleEnd.Rear));
+        Assert.True(rejoiner.Trains.Hardware.HoseParted(car0, CoupleEnd.Rear));
+        Assert.True(rejoiner.Trains.Hardware.HoseParted(car1, CoupleEnd.Front));
+        Assert.False(rejoiner.Trains.Hardware.CockOpen(car0, CoupleEnd.Rear));
+        Assert.True(rejoiner.Trains.Hardware.CockExplicitlyClosed(car0, CoupleEnd.Rear));
+    }
+
     // ── session wiring over Loopback ──
 
     [Fact]
