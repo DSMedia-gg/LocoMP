@@ -138,6 +138,13 @@ server.ProfileEvicted += key => Console.WriteLine($"[career] evicted pristine pr
 var autosaver = new Autosaver(clock, opts.AutosaveSeconds * 1000L, storage, () => SaveCodec.Write(server.CaptureSave()));
 autosaver.SaveFailed += e => Console.WriteLine(
     $"[server] WARNING: save failed — {e.Message} (world changes since the last good save are not on disk)");
+// M5.2 save-now: a remote admin's SaveNow verb lands here — the server has already authorised it,
+// this process owns the file. Failure logs through SaveFailed above.
+server.SaveRequested += () =>
+{
+    Console.WriteLine("[server] admin requested a save");
+    autosaver.SaveNow();
+};
 var admin = new ConsoleAdmin();
 
 server.Poll(); // prime the deterministic board (Career.Tick fills it) so the banner's job count is real
@@ -250,6 +257,7 @@ while (!stopping)
 }
 
 Console.WriteLine("[server] shutting down — saving world…");
+server.AnnounceSessionEnd("server shutting down"); // clean-end notice; flushes while the save runs below
 bool finalSaved = autosaver.SaveNow(); // capture reads the live registries, so save BEFORE disposing
 server.Dispose();
 udp.Dispose();

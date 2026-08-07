@@ -50,6 +50,7 @@ public sealed class SessionController
     private bool _worldUnloaded;
     private double _lostCountdown; // > 0: the server link dropped; grace before declaring it dead
     private bool _sessionLost;     // declared dead — panel shows the leave-to-restore prompt
+    private bool _hostEndedSession; // the drop was ANNOUNCED (M5.2 Save & Stop) — clean end, not a loss
 
     // M3 career state
     private string? _playerKey;
@@ -313,7 +314,9 @@ public sealed class SessionController
             case Mode.Joined:
                 string role = _mode == Mode.Hosting ? $"Hosting on UDP {_portText}" : $"Joined {_address}:{_portText}";
                 if (_sessionLost)
-                    GUILayout.Label("⚠ SESSION LOST — the host is gone. Leave to restore your world, then reload your save.");
+                    GUILayout.Label(_hostEndedSession
+                        ? "The host ended the session. Leave to restore your world, then reload your save."
+                        : "⚠ SESSION LOST — the host is gone. Leave to restore your world, then reload your save.");
                 else
                     GUILayout.Label($"{role} — {(_client is { Joined: true } ? "connected" : "connecting…")}" +
                                     (_mode == Mode.Hosting && _server != null ? $" — {_server.PlayerCount} player(s)" : ""));
@@ -338,7 +341,11 @@ public sealed class SessionController
                 }
                 DrawCareer();
                 DrawShop();
+                GUILayout.BeginHorizontal();
                 if (GUILayout.Button("Leave", GUILayout.Width(100))) Leave();
+                if (_mode == Mode.Hosting && GUILayout.Button("Save & stop session", GUILayout.Width(160)))
+                    SaveAndStop();
+                GUILayout.EndHorizontal();
                 break;
         }
 
@@ -567,6 +574,7 @@ public sealed class SessionController
         {
             _lastError = "";
             LastReject = null;
+            _hostEndedSession = false;
             int port = o.Port is > 0 and < 65536 ? o.Port : NetDefaults.Port;
             _playerName = o.PlayerName;
             _portText = port.ToString(CultureInfo.InvariantCulture);
@@ -668,6 +676,12 @@ public sealed class SessionController
                 () => SaveCodec.Write(_server!.CaptureSave()));
             _autosaver.SaveFailed += e =>
                 _log($"[career] save FAILED — {e.Message} (changes since the last good save are not on disk)");
+            // M5.2 save-now: a remote admin's SaveNow verb lands here — the server has already
+            // authorised it, the host process owns the file. Failure logs through SaveFailed above.
+            _server.SaveRequested += () =>
+            {
+                if (_autosaver != null && _autosaver.SaveNow()) _log("[career] career saved (admin save-now)");
+            };
 
             _client = MakeClient(_hub.Connect(out _)); // the host is just client #1, zero latency
             _trains = new TrainSync(_client, isHost: true, _log);
@@ -727,6 +741,7 @@ public sealed class SessionController
         {
             _lastError = "";
             LastReject = null;
+            _hostEndedSession = false;
             int port = o.Port is > 0 and < 65536 ? o.Port : NetDefaults.Port;
             _playerName = o.PlayerName;
             _address = o.Address;
@@ -794,9 +809,28 @@ public sealed class SessionController
         };
         // Only meaningful for JOINED sessions: the host's own loopback link can't drop. The
         // countdown (not an immediate declare) lets a transport re-handshake absorb load freezes.
-        client.Disconnected += () => { if (_mode == Mode.Joined && _lostCountdown <= 0 && !_sessionLost) _lostCountdown = 3.0; };
+        client.Disconnected += () =>
+        {
+            if (_mode != Mode.Joined || _sessionLost) return;
+            if (_hostEndedSession)
+            {
+                // The end was ANNOUNCED (Save & Stop), so the drop is expected — no self-heal grace,
+                // declare it now with the clean wording. Restore still requires Leave (native saving
+                // stays blocked until then), exactly like an unannounced loss.
+                _sessionLost = true;
+                SetError("session ended by the host — leave to restore your world.");
+                _log("[session] the host ended the session — press Leave to restore your world, then reload your save.");
+            }
+            else if (_lostCountdown <= 0) _lostCountdown = 3.0;
+        };
         // M5.2: the roster status (roles + ping) repaints the same list PlayersChanged drives.
         client.RosterChanged += () => PlayersChanged?.Invoke();
+        client.AdminNotice += (kind, arg) =>
+        {
+            if (kind != AdminNoticeKind.SessionEnded) return;
+            _hostEndedSession = true;
+            _log("[session] the host ended the session" + (arg.Length > 0 ? $" — {arg}" : ""));
+        };
         client.PlayerJoined += p =>
         {
             _avatars.AddOrUpdate(p.Id, p.Name, p.Pose);
@@ -836,6 +870,24 @@ public sealed class SessionController
     private static string CareerSavePath(ProgressionPreset preset) =>
         // Per-preset files: wallet migration between presets is undefined, so they never collide.
         Path.Combine(Application.persistentDataPath, $"locomp-career-{preset}.lmps");
+
+    /// <summary>M5.2 Save &amp; Stop (host only): announce the clean end to every joined player —
+    /// their screen says "session ended by the host" instead of inferring a dead link — give the
+    /// notice a moment to flush, then run the ordinary <see cref="Leave"/> (final career save +
+    /// native-world restore). Falls through to a plain Leave when not hosting, so the uGUI overlay
+    /// can bind it unconditionally.</summary>
+    public void SaveAndStop()
+    {
+        if (_mode == Mode.Hosting && _server != null)
+        {
+            _server.AnnounceSessionEnd("the host ended the session");
+            _server.Poll();                        // the loopback leg delivers immediately
+            _client?.Poll();
+            System.Threading.Thread.Sleep(150);    // let LiteNetLib flush the notice before the links die
+            _log("[session] save & stop — session end announced to all players");
+        }
+        Leave();
+    }
 
     /// <summary>Tear the whole session down (also called on mod toggle-off). Safe when idle.</summary>
     public void Leave()
@@ -883,6 +935,7 @@ public sealed class SessionController
         _hub = null;
         _avatars.Clear();
         _sessionLost = false;
+        _hostEndedSession = false;
         _lostCountdown = 0;
         _mode = Mode.Idle;
         SyncPhase();

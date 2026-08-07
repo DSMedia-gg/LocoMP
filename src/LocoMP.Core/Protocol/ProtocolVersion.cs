@@ -72,6 +72,8 @@ public static class ProtocolVersion
     /// (roster ping), not in this snapshot.</remarks>
     /// <remarks>v17 (M5.2 roster status): RosterStatus (MessageType 71) pushes every admitted player's
     /// role and measured ping to all clients (join burst + role changes + a slow cadence). A v16 peer
-    /// wouldn't know the new message, so this is a deliberate incompatible bump, per v7/v11 precedent.</remarks>
+    /// wouldn't know the new message, so this is a deliberate incompatible bump, per v7/v11 precedent.
+    /// AdminNotice also gains SessionEnded — the clean "host ended the session" announcement Save &amp;
+    /// Stop and dedicated-server shutdown broadcast before the links drop (same v17 bump).</remarks>
     public const int Current = 17;
 }

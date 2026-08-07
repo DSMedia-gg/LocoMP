@@ -228,6 +228,23 @@ public sealed class NetServer : IDisposable
             _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);
     }
 
+    /// <summary>Announce a clean session end (M5.2 Save &amp; Stop / dedicated shutdown) to every
+    /// admitted AND queued peer, so their UI can say "the host ended the session" instead of inferring
+    /// a dead link. Announce-only by design: state teardown stays with the caller's ordinary
+    /// save-then-dispose path (saving FIRST keeps the final save identical to a plain leave), and the
+    /// links are deliberately left up so the notice can outrun the transport teardown — dispose the
+    /// transport a moment later to actually drop them.</summary>
+    public void AnnounceSessionEnd(string reason)
+    {
+        byte[] payload = new PacketWriter(16)
+            .WriteByte((byte)MessageType.AdminNotice)
+            .WriteByte((byte)AdminNoticeKind.SessionEnded)
+            .WriteString(reason ?? string.Empty)
+            .ToArray();
+        foreach (int id in _players.Keys) _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);
+        foreach (QueuedJoin q in _queue) _transport.Send(q.PeerId, payload, DeliveryMethod.ReliableOrdered);
+    }
+
     /// <summary>Push the authoritative clock to every admitted player (call on a slow cadence).</summary>
     public void BroadcastTime()
     {

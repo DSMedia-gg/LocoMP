@@ -69,4 +69,10 @@ public enum AdminNoticeKind : byte
     /// <summary>To the acting admin: the action could not be performed. Arg = reason (e.g. "not allowed",
     /// "no such player", "cannot target the owner").</summary>
     Rejected = 5,
+
+    /// <summary>To every admitted AND queued peer, immediately before a clean session end (M5.2
+    /// Save &amp; Stop, dedicated-server shutdown): the session is over ON PURPOSE — the UI should say
+    /// "the host ended the session" instead of inferring a dead link. Arg = reason (may be empty).
+    /// The link still drops moments later; this only re-words what the drop means.</summary>
+    SessionEnded = 6,
 }
