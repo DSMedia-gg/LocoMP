@@ -45,8 +45,11 @@ public sealed class UiPrefs
     public float ChatFadeSeconds = 12f;
     public KeyCode ChatKey = KeyCode.Return;
 
-    /// <summary>Optional in-game hotkey opening the LocoMP screens (None = menu buttons only).</summary>
-    public KeyCode MenuKey = KeyCode.None;
+    /// <summary>In-game hotkey opening the LocoMP screens (None = menu buttons only). Ships BOUND
+    /// (R4 UX call): D19 makes the host's ESC pause everyone, so ESC-diving to reach the screens is
+    /// session-hostile — the default must not require it. J = the key Cody picked live (free in DV's
+    /// default bindings); rebindable in Settings.</summary>
+    public KeyCode MenuKey = KeyCode.J;
 
     /// <summary>Remote-train smoothing rate per second (the Shim's RealCarSync lerp) — higher =
     /// tighter tracking, lower = softer under jitter. The 08-05 live verdict tuned the default.</summary>

@@ -189,22 +189,43 @@ public sealed class ChatOverlay
 
         var sb = new StringBuilder();
         int shown = 0;
+        bool ramping = false;      // R4-L: something is mid-fade — repaint fast until it settles
+        float maxAlpha = 0f;       // the most-visible line drives the background's alpha
         int max = InputOpen ? OpenMaxLines : PassiveMaxLines;
         int start = Math.Max(0, _lines.Count - max);
         for (int i = start; i < _lines.Count; i++)
         {
             (ChatEntry entry, float at) = _lines[i];
-            if (!InputOpen && now - at >= _prefs.ChatFadeSeconds) continue;
+            float age = now - at;
+            if (!InputOpen && age >= _prefs.ChatFadeSeconds) continue;
+            // R4-L: the old fade was a hard blink-out at expiry. Each line now ramps its alpha to
+            // zero over the final stretch instead (TMP alpha tag — our own markup; user text is
+            // already escaped). While the input is open everything reads solid.
+            float alpha = 1f;
+            if (!InputOpen && age > _prefs.ChatFadeSeconds - FadeRampSeconds)
+            {
+                alpha = Mathf.Clamp01((_prefs.ChatFadeSeconds - age) / FadeRampSeconds);
+                ramping = true;
+            }
+            if (alpha > maxAlpha) maxAlpha = alpha;
             if (shown++ > 0) sb.Append('\n');
+            sb.Append("<alpha=#").Append(((int)(alpha * 255f)).ToString("X2")).Append('>');
             AppendLine(sb, entry);
         }
 
+        if (ramping) _nextRepaint = now + 0.05f; // smooth ramp; quiet feeds stay at the 1 Hz tick
+
         _feed!.text = sb.ToString();
-        // Quiet and closed = fully invisible: no background rectangle squatting on the HUD.
+        // Quiet and closed = fully invisible: no background rectangle squatting on the HUD. The
+        // background follows the brightest line down so the panel doesn't outlive its last line.
         _background!.enabled = InputOpen || shown > 0;
         if (_background.enabled)
-            _background.color = InputOpen ? _theme.Panel : new Color(0f, 0f, 0f, 0.45f);
+            _background.color = InputOpen ? _theme.Panel : new Color(0f, 0f, 0f, 0.45f * maxAlpha);
     }
+
+    /// <summary>Seconds over which an expiring line ramps to invisible (R4-L; expiry itself stays
+    /// <see cref="UiPrefs.ChatFadeSeconds"/>).</summary>
+    private const float FadeRampSeconds = 1.5f;
 
     private void AppendLine(StringBuilder sb, ChatEntry e)
     {
