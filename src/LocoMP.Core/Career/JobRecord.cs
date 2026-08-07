@@ -38,5 +38,10 @@ public sealed class JobRecord
     /// while Claimed. Persisted as REMAINING time — the monotonic clock restarts with the process.</summary>
     public long ClaimExpiresAtMs { get; internal set; }
 
+    /// <summary>The registry's pause-frozen job clock at claim time (D23) — the anchor the bonus
+    /// window is measured from, like DV's own <c>startTime</c> stamped at TakeJob. Re-claims
+    /// re-stamp it (a released job's next claimant gets a fresh window, as in DV).</summary>
+    public double ClaimedAtJobSeconds { get; internal set; }
+
     public override string ToString() => $"{Def} [{State}]";
 }

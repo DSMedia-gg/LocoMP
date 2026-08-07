@@ -166,6 +166,12 @@ public sealed class JobCapture : IDisposable
 
         string[] licenses = JobLicenseType_v2.ToV2List(job.requiredLicenses).Select(v2 => v2.id).ToArray();
         long payoutCents = (long)(job.GetBasePaymentForTheJob() * 100f);
+        // D23: carry the native bonus too — the game's own potential bonus (base × 0.5) and its
+        // TimeLimit window; the SERVER times the window on its pause-frozen job clock and pays
+        // base + bonus on an on-time turn-in, exactly as a native turn-in would have. A job with
+        // no time limit carries no window (0), matching "no bonus" rather than "free bonus".
+        long bonusCents = (long)(job.GetPotentialBonusPaymentForTheJob() * 100f);
+        int bonusTimeSeconds = job.TimeLimit > 0f ? (int)job.TimeLimit : 0;
         string destination = job.chainData.chainDestinationYardId;
         // The task param carries the REAL route (tracks, load/unload steps) read from the native
         // task tree — the info the printed booklet would show. Without it a remote claimant (who
@@ -173,7 +179,8 @@ public sealed class JobCapture : IDisposable
         string route = DescribeTaskTree(job);
         var tasks = new[] { new JobTaskDef(JobTaskKind.Haul, route.Length > 0 ? route : destination) };
         return new JobDef(0, job.jobType.ToString(), job.chainData.chainOriginYardId, destination,
-            "cars", carCount, payoutCents, licenses, tasks, job.ID);
+            "cars", carCount, payoutCents, licenses, tasks, job.ID,
+            bonusPayoutCents: bonusTimeSeconds > 0 ? bonusCents : 0, bonusTimeSeconds: bonusTimeSeconds);
     }
 
     /// <summary>The booklet's essence as one line: every leaf task in order, with its real track

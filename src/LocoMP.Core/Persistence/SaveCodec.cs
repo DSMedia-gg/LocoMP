@@ -29,8 +29,11 @@ public static class SaveCodec
     /// counter, so a cold restart resumes both. Same no-migration policy (a v3 file is refused
     /// cleanly and the host starts fresh; backups keep the old bytes).
     /// v6: each item gains a provenance byte (host-native vs LocoMP-minted — the involuntary-release
-    /// schedule when a holder departs). Same no-migration policy.</remarks>
-    public const uint SchemaVersion = 6;
+    /// schedule when a holder departs). Same no-migration policy.
+    /// v7 (D23): JobDef carries the bonus payout + window (via CareerCodec) and each claimed job
+    /// saves its elapsed job-clock seconds, so a restart resumes the bonus window instead of
+    /// refreshing it. Same no-migration policy.</remarks>
+    public const uint SchemaVersion = 7;
 
     private const int MaxCollection = 100_000; // hygiene cap for any one saved collection
 
@@ -98,6 +101,7 @@ public static class SaveCodec
             w.WriteString(j.ClaimantKey);
             w.WriteVarUInt((uint)j.NextTaskIndex);
             w.WriteInt64(j.ClaimRemainingMs);
+            w.WriteSingle((float)j.ClaimedElapsedSeconds); // v7 (D23)
         }
 
         w.WriteVarUInt((uint)c.GraceRemainingMs.Count);
@@ -144,7 +148,8 @@ public static class SaveCodec
             string claimant = r.ReadString();
             int nextTask = (int)r.ReadVarUInt();
             long remaining = r.ReadInt64();
-            c.Jobs.Add(new JobSave(def, state, claimant, nextTask, remaining));
+            float claimedElapsed = r.ReadSingle();       // v7 (D23)
+            c.Jobs.Add(new JobSave(def, state, claimant, nextTask, remaining, claimedElapsed));
         }
 
         int grace = ReadCount(r, "grace holds");

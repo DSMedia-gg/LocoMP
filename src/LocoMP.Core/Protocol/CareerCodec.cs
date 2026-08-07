@@ -52,6 +52,8 @@ internal static class CareerCodec
         w.WriteString(def.CargoKind);
         w.WriteVarUInt((uint)def.CarCount);
         w.WriteInt64(def.PayoutCents);
+        w.WriteInt64(def.BonusPayoutCents);              // v22 (D23): on-time bonus + its window
+        w.WriteVarUInt((uint)def.BonusTimeSeconds);
         WriteLicenses(w, def.RequiredLicenses);
         w.WriteVarUInt((uint)def.Tasks.Count);
         foreach (JobTaskDef task in def.Tasks)
@@ -74,6 +76,9 @@ internal static class CareerCodec
             throw new InvalidDataException($"car count {carCount} out of range");
         long payout = r.ReadInt64();
         if (payout < 0) throw new InvalidDataException("negative payout");
+        long bonus = r.ReadInt64();                      // v22 (D23)
+        if (bonus < 0) throw new InvalidDataException("negative bonus payout");
+        int bonusTime = (int)r.ReadVarUInt();
         IReadOnlyList<string> licenses = ReadLicenses(r);
         int taskCount = (int)r.ReadVarUInt();
         if (taskCount < 1 || taskCount > MaxTasksPerJob)
@@ -86,7 +91,8 @@ internal static class CareerCodec
             tasks[i] = new JobTaskDef(kind, param);
         }
         string gameId = r.ReadString();
-        return new JobDef(id, jobType, origin, destination, cargoKind, carCount, payout, licenses, tasks, gameId);
+        return new JobDef(id, jobType, origin, destination, cargoKind, carCount, payout, licenses, tasks,
+            gameId, bonus, bonusTime);
     }
 
     public static void WriteLicenses(PacketWriter w, IReadOnlyCollection<string> licenses)

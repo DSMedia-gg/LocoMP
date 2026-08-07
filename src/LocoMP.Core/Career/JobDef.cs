@@ -36,10 +36,12 @@ public sealed class JobDef
 {
     public JobDef(int id, string jobType, string origin, string destination, string cargoKind,
         int carCount, long payoutCents, IReadOnlyList<string> requiredLicenses, IReadOnlyList<JobTaskDef> tasks,
-        string gameId = "")
+        string gameId = "", long bonusPayoutCents = 0, int bonusTimeSeconds = 0)
     {
         if (carCount < 1) throw new ArgumentOutOfRangeException(nameof(carCount));
         if (payoutCents < 0) throw new ArgumentOutOfRangeException(nameof(payoutCents));
+        if (bonusPayoutCents < 0) throw new ArgumentOutOfRangeException(nameof(bonusPayoutCents));
+        if (bonusTimeSeconds < 0) throw new ArgumentOutOfRangeException(nameof(bonusTimeSeconds));
         if (tasks is null || tasks.Count == 0) throw new ArgumentException("a job has at least one task", nameof(tasks));
         Id = id;
         JobType = jobType ?? throw new ArgumentNullException(nameof(jobType));
@@ -51,6 +53,8 @@ public sealed class JobDef
         RequiredLicenses = requiredLicenses ?? throw new ArgumentNullException(nameof(requiredLicenses));
         Tasks = tasks;
         GameId = gameId ?? string.Empty;
+        BonusPayoutCents = bonusPayoutCents;
+        BonusTimeSeconds = bonusTimeSeconds;
     }
 
     /// <summary>Server-assigned job id, unique for the world (persists across restarts).</summary>
@@ -64,6 +68,16 @@ public sealed class JobDef
     public string CargoKind { get; }
     public int CarCount { get; }
     public long PayoutCents { get; }
+
+    /// <summary>On-time completion bonus (D23): paid ON TOP of <see cref="PayoutCents"/> when the
+    /// claim-to-completion time fits <see cref="BonusTimeSeconds"/> (+ the DV grace). DV parity:
+    /// the native bonus is base × 0.5, so an on-time job pays ×1.5 total. 0 = no bonus.</summary>
+    public long BonusPayoutCents { get; }
+
+    /// <summary>The bonus time window in seconds of UNPAUSED session time (D19: the job clock
+    /// freezes while the world is paused, exactly as DV's own JobsManager clock freezes under a
+    /// native pause). 0 = no window — the bonus is never paid.</summary>
+    public int BonusTimeSeconds { get; }
 
     /// <summary>Licenses the claimant's scope must hold — gated server-side at claim time (02 §4).</summary>
     public IReadOnlyList<string> RequiredLicenses { get; }

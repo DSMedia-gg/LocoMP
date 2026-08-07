@@ -103,5 +103,9 @@ public static class ProtocolVersion
     /// Per-car latest-wins on the reliable-unordered tier, interest-gated, replayed in the join
     /// burst. A v20 peer wouldn't know the new message, so this is a deliberate incompatible bump,
     /// per v7/v11 precedent.</remarks>
-    public const int Current = 21;
+    /// <remarks>v22 (D23 job bonuses): JobDef grew BonusPayoutCents + BonusTimeSeconds on the wire
+    /// (JobCreated/board sync) — on-time completion now pays base + bonus (DV parity: ×1.5), timed
+    /// on a pause-frozen job clock. A v21 peer would misparse every job def, so this is a
+    /// deliberate incompatible bump, per v7/v11 precedent.</remarks>
+    public const int Current = 22;
 }

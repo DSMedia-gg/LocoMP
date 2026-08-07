@@ -376,6 +376,7 @@ public sealed class NetServer : IDisposable
         _worldPauseReason = reason ?? string.Empty;
         if (paused) WorldTime.Freeze();
         else WorldTime.Unfreeze();
+        Career.Registry.JobClockPaused = paused; // D23: bonus windows freeze with the world
         byte[] payload = BuildWorldPauseState();
         foreach (int id in _players.Keys)
             _transport.Send(id, payload, DeliveryMethod.ReliableOrdered);

@@ -26,13 +26,15 @@ public sealed class ProfileSave
 /// run would be meaningless (or instantly expired) after a restart.</summary>
 public sealed class JobSave
 {
-    public JobSave(JobDef def, JobLifecycle state, string claimantKey, int nextTaskIndex, long claimRemainingMs)
+    public JobSave(JobDef def, JobLifecycle state, string claimantKey, int nextTaskIndex, long claimRemainingMs,
+        double claimedElapsedSeconds = 0)
     {
         Def = def;
         State = state;
         ClaimantKey = claimantKey;
         NextTaskIndex = nextTaskIndex;
         ClaimRemainingMs = claimRemainingMs;
+        ClaimedElapsedSeconds = claimedElapsedSeconds;
     }
 
     public JobDef Def { get; }
@@ -43,6 +45,11 @@ public sealed class JobSave
 
     public int NextTaskIndex { get; }
     public long ClaimRemainingMs { get; }
+
+    /// <summary>Job-clock seconds already spent on the claim at save time (D23, v7) — restored as
+    /// elapsed-so-far so a restart resumes the bonus window instead of refreshing it. Stored as
+    /// ELAPSED for the same reason deadlines store REMAINING: the clock restarts with the process.</summary>
+    public double ClaimedElapsedSeconds { get; }
 }
 
 /// <summary>The career half of a server save (03 §7 contents: jobs + per-player profiles + meta).</summary>

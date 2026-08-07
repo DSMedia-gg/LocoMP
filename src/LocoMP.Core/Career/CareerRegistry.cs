@@ -43,6 +43,24 @@ public sealed class CareerRegistry
     private uint _rng;
     private bool _sharedGrantIssued;
 
+    // ── the job clock (D23): seconds of UNPAUSED session time, advanced by Tick() ──
+    // DV parity: the native bonus window runs on JobsManager.Time, which advances by frame delta
+    // and therefore FREEZES under a pause. D19 makes pauses ordinary session events (host ESC),
+    // so a wall clock here would eat bonuses every time the host opened a menu.
+    private double _jobSeconds;
+    private long _lastJobClockMs = -1;
+
+    /// <summary>DV's turn-in grace on the bonus window (Job.GetBonusPaymentForTheJob: elapsed ≤
+    /// TimeLimit + 60 s) — the walk from the parked train to the office stays free.</summary>
+    public const double BonusGraceSeconds = 60.0;
+
+    /// <summary>Freeze/unfreeze the job clock (D19 world pause). The session layer sets this from
+    /// the pause state; a dedicated server never pauses and never touches it.</summary>
+    public bool JobClockPaused { get; set; }
+
+    /// <summary>Seconds of unpaused session time — the clock bonus windows are measured on.</summary>
+    public double JobSeconds => _jobSeconds;
+
     public CareerRegistry(CareerConfig config, IClock clock, CareerSaveData? restore = null)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
@@ -192,6 +210,13 @@ public sealed class CareerRegistry
         var tick = new CareerTick();
         long now = _clock.NowMs;
 
+        // Advance the job clock by the real time since the last tick — unless paused, when the
+        // span simply doesn't count (a pause BETWEEN polls is quantised to the poll cadence,
+        // same as DV quantising to frames).
+        if (_lastJobClockMs >= 0 && !JobClockPaused && now > _lastJobClockMs)
+            _jobSeconds += (now - _lastJobClockMs) / 1000.0;
+        _lastJobClockMs = now;
+
         // Collect before releasing: an external job's release REMOVES it from the board (below),
         // and removing while iterating _jobs.Values would throw.
         List<JobRecord>? due = null;
@@ -263,6 +288,7 @@ public sealed class CareerRegistry
         record.ClaimantKey = playerKey;
         record.NextTaskIndex = 0;
         record.ClaimExpiresAtMs = _clock.NowMs + _config.ClaimTtlMs;
+        record.ClaimedAtJobSeconds = _jobSeconds; // D23: the bonus window opens at claim commit
         job = record;
         reason = null;
         return true;
@@ -298,6 +324,14 @@ public sealed class CareerRegistry
             record.State = JobLifecycle.Completed;
             _jobs.Remove(jobId);
             payoutCents = record.Def.PayoutCents;
+            // D23: the on-time bonus, DV-parity (Job.GetBonusPaymentForTheJob — bonus iff the
+            // claim-to-completion span fits the window + grace, measured on the pause-frozen job
+            // clock). Minted with the base in ONE mint: a single conservation event per job.
+            if (record.Def.BonusPayoutCents > 0 && record.Def.BonusTimeSeconds > 0 &&
+                _jobSeconds - record.ClaimedAtJobSeconds <= record.Def.BonusTimeSeconds + BonusGraceSeconds)
+            {
+                payoutCents += record.Def.BonusPayoutCents;
+            }
             Ledger.Mint(Policy.WalletAccountFor(playerKey), payoutCents);
             completed = true;
         }
@@ -473,7 +507,10 @@ public sealed class CareerRegistry
             // external jobs still persist — the reconnect-grace story needs them.
             if (job.Def.GameId.Length > 0 && job.State == JobLifecycle.Available) continue;
             long remaining = job.State == JobLifecycle.Claimed ? Math.Max(0, job.ClaimExpiresAtMs - now) : 0;
-            save.Jobs.Add(new JobSave(job.Def, job.State, job.ClaimantKey ?? string.Empty, job.NextTaskIndex, remaining));
+            double claimedElapsed = job.State == JobLifecycle.Claimed
+                ? Math.Max(0, _jobSeconds - job.ClaimedAtJobSeconds) : 0;
+            save.Jobs.Add(new JobSave(job.Def, job.State, job.ClaimantKey ?? string.Empty, job.NextTaskIndex,
+                remaining, claimedElapsed));
         }
         foreach (KeyValuePair<string, long> kv in _graceUntilMs)
             save.GraceRemainingMs[kv.Key] = Math.Max(0, kv.Value - now);
@@ -508,7 +545,13 @@ public sealed class CareerRegistry
                 ClaimantKey = js.ClaimantKey.Length == 0 ? null : js.ClaimantKey,
                 NextTaskIndex = js.NextTaskIndex,
             };
-            if (record.State == JobLifecycle.Claimed) record.ClaimExpiresAtMs = now + js.ClaimRemainingMs;
+            if (record.State == JobLifecycle.Claimed)
+            {
+                record.ClaimExpiresAtMs = now + js.ClaimRemainingMs;
+                // D23: resume the bonus window where it stood — the fresh clock starts at 0, so
+                // the anchor goes negative by exactly the elapsed span already spent.
+                record.ClaimedAtJobSeconds = _jobSeconds - js.ClaimedElapsedSeconds;
+            }
             _jobs[record.Def.Id] = record;
         }
 
@@ -575,8 +618,16 @@ public sealed class CareerRegistry
             new JobTaskDef(JobTaskKind.Haul, destination),
             new JobTaskDef(JobTaskKind.Unload, destination),
         };
+        long payout = payoutPerCar * cars;
+        // D23, DV parity for core-generated jobs too: bonus = base × 0.5; haul window =
+        // round(km × 7.5) minutes (JobPaymentCalculator.CalculateHaulBonusTimeLimit with the
+        // license/game modifiers at 1 — the server has neither). Unknown distance (0 km) means no
+        // window rather than an unwinnable 0-second one.
+        float km = DistanceKm(origin, destination);
+        int bonusTime = km > 0f ? (int)Math.Round(km * 7.5) * 60 : 0;
         var def = new JobDef(_nextJobId++, spec.JobType, origin, destination, spec.CargoKind, cars,
-            payoutPerCar * cars, spec.RequiredLicenses, tasks);
+            payout, spec.RequiredLicenses, tasks,
+            bonusPayoutCents: bonusTime > 0 ? payout / 2 : 0, bonusTimeSeconds: bonusTime);
         return new JobRecord(def);
     }
 
