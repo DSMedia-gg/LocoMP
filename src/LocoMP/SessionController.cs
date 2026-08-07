@@ -12,6 +12,7 @@ using LocoMP.Core.Presence;
 using LocoMP.Core.Protocol;
 using LocoMP.Core.Session;
 using LocoMP.Core.World;
+using LocoMP.Net;
 using LocoMP.Shim;
 using LocoMP.Transport;
 using UnityEngine;
@@ -67,6 +68,8 @@ public sealed class SessionController
     private CouplerHardwareSync? _couplerHardware;
     private PauseSync? _pauseSync;
     private FileSaveStorage? _storage;   // hosting only — the career save's backup rotation (M5.2)
+    private BanStore? _banStore;         // hosting only — persistent (U3) bans, host-wide file (M5.5)
+    private bool _steamRelayOpen;        // hosting only — the optional third link is up (M5.5)
     private bool _skipFinalSave;         // a restored backup must not be overwritten on the way down
     private string _careerToast = "";
 
@@ -222,6 +225,19 @@ public sealed class SessionController
         // because a cash register still held the player's deposited money must be written once that cash comes
         // back, and that can happen long after the session ended. See WalletMirror.PumpPendingRestore.
         WalletMirror.PumpPendingRestore();
+
+        // M5.5: an overlay "Join Game" click lands here (main thread; the Steam callback only
+        // stashed it). Joinable only from a loaded world while idle — same gate as the Join tab;
+        // otherwise say why instead of silently eating the click.
+        if (SteamPresence.TryTakeJoinRequest(out ulong overlayHost))
+        {
+            if (_mode == Mode.Idle && PresenceShim.WorldAlive)
+                JoinSteamSession(overlayHost, _playerName, password: null);
+            else
+                _log(_mode == Mode.Idle
+                    ? "[session] Steam join request — load your world first, then join from the pause menu"
+                    : "[session] Steam join request ignored — already in a session (leave it first)");
+        }
 
         _server?.Poll();
         _client?.Poll();
@@ -652,7 +668,31 @@ public sealed class SessionController
 
             _hub = new LoopbackNetwork();
             var udp = LiteNetLibTransport.StartServer(port, NetDefaults.ConnectKey);
-            _serverTransport = new CompositeTransport(_hub.Server, udp);
+            // M5.5: persistent bans (U3) — one host-wide file beside the career saves (deliberately
+            // NOT per-preset: a banned identity is banned from this host, not from a wallet).
+            BanStore banStore = new(Path.Combine(Application.persistentDataPath, "locomp-bans.txt"));
+            _banStore = banStore;
+            // M5.5: the optional third link — Valve's relay through the game's own Steam client.
+            // Friends join with no port forwarding; a banned SteamId64 is refused at the relay door
+            // (the local capture keeps the admit closure valid even after Leave nulls the field).
+            SteamRelayTransport? relay = null;
+            _steamRelayOpen = false;
+            if (SteamPresence.Available)
+            {
+                try
+                {
+                    relay = SteamRelayTransport.Server(FacepunchRelaySocket.Host(),
+                        admit: id => !banStore.IsBanned(id));
+                    _steamRelayOpen = true;
+                }
+                catch (Exception e)
+                {
+                    _log($"[session] Steam relay unavailable ({e.Message}) — hosting UDP-only");
+                }
+            }
+            _serverTransport = relay != null
+                ? new CompositeTransport(_hub.Server, udp, relay)
+                : new CompositeTransport(_hub.Server, udp);
             // Host-native items (D13 posture): the host's real world items ARE the world source, so
             // the server must accept its registrations. No proximity gate for now (0 = off). The shop
             // catalog is read from the live world (M4 shops): a client's purchase debits its OWN
@@ -687,7 +727,8 @@ public sealed class SessionController
 
             _server = new NetServer(_serverTransport,
                 new ServerConfig(Identity(), _password.Length > 0 ? _password : null, maxPlayers: _maxPlayers,
-                                 career: careerConfig, items: itemConfig, interest: interestConfig),
+                                 career: careerConfig, items: itemConfig, interest: interestConfig,
+                                 banStore: _banStore),
                 _clock, restore, topology);
             if (_interest)
             {
@@ -763,6 +804,13 @@ public sealed class SessionController
             _mode = Mode.Hosting;
 
             _log($"[session] hosting on UDP {port} (game reports version '{PresenceShim.ReportedGameVersion}', handshake build '{PresenceShim.GameBuild}')");
+            if (_steamRelayOpen)
+            {
+                // Presence AFTER the server exists: the connect string invites joins, so it must
+                // never precede something to join.
+                SteamPresence.SetSessionPresence(SteamPresence.LocalSteamId, hosting: true);
+                _log("[session] Steam relay OPEN — friends join via the overlay or the Friends tab, no port forwarding");
+            }
             if (PresenceShim.TryCaptureLocalPose(out var here))
                 _log($"[session] your absolute position: --at {here.Px:F0},{here.Py:F0},{here.Pz:F0}  ← paste into LocoMP.Bot");
         }
@@ -800,40 +848,7 @@ public sealed class SessionController
             _password = o.Password ?? "";
 
             _clientTransport = LiteNetLibTransport.ConnectClient(o.Address, port, NetDefaults.ConnectKey);
-            _client = MakeClient(_clientTransport);
-            _trains = new TrainSync(_client, isHost: false, _log);
-            _trains.WorldUnloaded += OnWorldUnloaded;
-            _cabControls = new CabControlSync(_client, _trains, _log);
-            // Symmetric with the host arm: on a client SaveSuppressor blocks the save before this runs,
-            // but wiring it keeps the guard correct if that ever changes (every host car is a replica here).
-            CarSaveFilter.IsReplica = _trains.Remote.IsRemoteCar;
-            JobGenSuppressor.Active = true;            // clients never generate either (02 §4)
-            JobGenSuppressor.StopAll(_log);
-            // M3.5b: the joined world is session-modified (own cars cleared, host's spawned in) —
-            // native saves are blocked until Leave so it can't leak into the player's SP save.
-            SaveSuppressor.Active = true;
-            // M4.2: spawn replicas of the host's world items (a joined client is not the world
-            // source, so it only materializes — never registers).
-            _itemSync = new ItemSync(_client, isHost: false, _log);
-            // M4: mirror the LocoMP wallet onto native money so the client's money display and its
-            // comms-radio affordability are correct (it never reports its own register purchases).
-            _walletMirror = new WalletMirror(_client, isHost: false, _log);
-            // M4 comms radio: a joined player's rerail/delete on a host-owned car is intercepted and
-            // routed to the host (remote summon is banked).
-            _commsRadio = new CommsRadioSync(_client, _trains, isHost: false, _log);
-            // Constructed for a symmetric lifecycle; on a client the guard stays disarmed (the only
-            // serviceable cars in a session are the host's, and a self-scope fee bills the host).
-            _manualService = new ManualServiceSync(_client, isHost: false, _log);
-            // v18 (02 §3): follow the session's sun — correct the local sky only past the drift
-            // threshold, so steady state never visibly snaps.
-            _worldTime = new WorldTimeSync(_client, isHost: false, _log);
-            // v18 (02 §1): per-car handbrakes over the control-state machinery (id 200).
-            _handbrakes = new HandbrakeSync(_client, _trains, _log);
-            // v18 (02 §1): hoses/anglecocks/MU discrete state — replicas rig up from the mirror.
-            _couplerHardware = new CouplerHardwareSync(_client, _trains, _log);
-            // D19: freeze/unfreeze with the host's native pause (via DV's own pause-request system).
-            _pauseSync = new PauseSync(_client, setServerPaused: null, _log);
-            _mode = Mode.Joined;
+            StartJoinedStack();
             _log($"[session] joining {_address}:{_portText}…");
         }
         catch (Exception e)
@@ -843,6 +858,76 @@ public sealed class SessionController
             Leave();
         }
         SyncPhase();
+    }
+
+    /// <summary>Join a session by the host's SteamId64 over Valve's relay (M5.5) — the Friends tab's
+    /// Join button and the Steam overlay's "Join Game" both land here. No address, no port, no
+    /// forwarding; the identity IS the endpoint. Same client stack as a direct join — the transport
+    /// difference ends at the seam.</summary>
+    public void JoinSteamSession(ulong hostSteamId, string playerName, string? password)
+    {
+        try
+        {
+            _lastError = "";
+            LastReject = null;
+            _hostEndedSession = false;
+            _playerName = playerName.Length > 0 ? playerName : _playerName;
+            _password = password ?? "";
+
+            _clientTransport = SteamRelayTransport.Client(FacepunchRelaySocket.Connect(hostSteamId));
+            StartJoinedStack();
+            // Guests carry the connect string too — a friend can join the session through ANY member,
+            // and the string always names the host (where the relay listens).
+            SteamPresence.SetSessionPresence(hostSteamId, hosting: false);
+            _log($"[session] joining {hostSteamId} over the Steam relay…");
+        }
+        catch (Exception e)
+        {
+            SetError($"join failed: {e.Message}");
+            _log("[session] " + _lastError);
+            Leave();
+        }
+        SyncPhase();
+    }
+
+    /// <summary>The joined-client stack shared by every join flavour (direct UDP / Steam relay).
+    /// Assumes <see cref="_clientTransport"/> was just created; the caller owns logging + presence.</summary>
+    private void StartJoinedStack()
+    {
+        _client = MakeClient(_clientTransport!);
+        _trains = new TrainSync(_client, isHost: false, _log);
+        _trains.WorldUnloaded += OnWorldUnloaded;
+        _cabControls = new CabControlSync(_client, _trains, _log);
+        // Symmetric with the host arm: on a client SaveSuppressor blocks the save before this runs,
+        // but wiring it keeps the guard correct if that ever changes (every host car is a replica here).
+        CarSaveFilter.IsReplica = _trains.Remote.IsRemoteCar;
+        JobGenSuppressor.Active = true;            // clients never generate either (02 §4)
+        JobGenSuppressor.StopAll(_log);
+        // M3.5b: the joined world is session-modified (own cars cleared, host's spawned in) —
+        // native saves are blocked until Leave so it can't leak into the player's SP save.
+        SaveSuppressor.Active = true;
+        // M4.2: spawn replicas of the host's world items (a joined client is not the world
+        // source, so it only materializes — never registers).
+        _itemSync = new ItemSync(_client, isHost: false, _log);
+        // M4: mirror the LocoMP wallet onto native money so the client's money display and its
+        // comms-radio affordability are correct (it never reports its own register purchases).
+        _walletMirror = new WalletMirror(_client, isHost: false, _log);
+        // M4 comms radio: a joined player's rerail/delete on a host-owned car is intercepted and
+        // routed to the host (remote summon is banked).
+        _commsRadio = new CommsRadioSync(_client, _trains, isHost: false, _log);
+        // Constructed for a symmetric lifecycle; on a client the guard stays disarmed (the only
+        // serviceable cars in a session are the host's, and a self-scope fee bills the host).
+        _manualService = new ManualServiceSync(_client, isHost: false, _log);
+        // v18 (02 §3): follow the session's sun — correct the local sky only past the drift
+        // threshold, so steady state never visibly snaps.
+        _worldTime = new WorldTimeSync(_client, isHost: false, _log);
+        // v18 (02 §1): per-car handbrakes over the control-state machinery (id 200).
+        _handbrakes = new HandbrakeSync(_client, _trains, _log);
+        // v18 (02 §1): hoses/anglecocks/MU discrete state — replicas rig up from the mirror.
+        _couplerHardware = new CouplerHardwareSync(_client, _trains, _log);
+        // D19: freeze/unfreeze with the host's native pause (via DV's own pause-request system).
+        _pauseSync = new PauseSync(_client, setServerPaused: null, _log);
+        _mode = Mode.Joined;
     }
 
     private NetClient MakeClient(ITransport transport)
@@ -1075,6 +1160,11 @@ public sealed class SessionController
         _sessionLost = false;
         _hostEndedSession = false;
         SessionBans = Array.Empty<SessionBan>(); // session-scoped by definition (U3)
+        _banStore = null;                        // the FILE persists (U3); only the handle dies
+        _steamRelayOpen = false;
+        // Out of the session: drop the connect string (nothing to join) but stay discoverable as a
+        // LocoMP player. No-op on a Steam-less launch.
+        SteamPresence.SetIdlePresence();
         _lostCountdown = 0;
         _mode = Mode.Idle;
         SyncPhase();

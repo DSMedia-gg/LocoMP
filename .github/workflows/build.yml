@@ -130,6 +130,7 @@ jobs:
               <Reference Include="DV.Interaction"><HintPath>$(DvManaged)/DV.Interaction.dll</HintPath><Private>false</Private></Reference>
               <Reference Include="DV.WeatherSystem"><HintPath>$(DvManaged)/DV.WeatherSystem.dll</HintPath><Private>false</Private></Reference>
               <Reference Include="DV.BrakeSystem"><HintPath>$(DvManaged)/DV.BrakeSystem.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="Facepunch.Steamworks.Win64"><HintPath>$(DvManaged)/Facepunch.Steamworks.Win64.dll</HintPath><Private>false</Private></Reference>
             </ItemGroup>
           </Project>
           EOF

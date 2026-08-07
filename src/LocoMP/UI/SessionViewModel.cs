@@ -104,6 +104,15 @@ public sealed class SessionViewModel
         JoinInitiatedFromUi = true; // before the call — JoinSession raises PhaseChanged synchronously
         _c.JoinSession(options);
     }
+
+    /// <summary>M5.5: join by the host's SteamId64 over the relay (the Friends tab's Join). Rides
+    /// the same uGUI join flow (cover, mismatch screen, queue) as a direct join.</summary>
+    public void JoinSteam(ulong hostSteamId, string playerName, string? password)
+    {
+        JoinInitiatedFromUi = true;
+        _c.JoinSteamSession(hostSteamId, playerName, password);
+    }
+
     public void Leave() => _c.Leave();
 
     // ── M5.2 host-menu surface (the overlay's four utility groups bind ONLY these) ────────────

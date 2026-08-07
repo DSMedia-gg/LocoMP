@@ -138,6 +138,11 @@
       <HintPath>$(DvManaged)\DV.BrakeSystem.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- M5.5 Steam relay + presence: the game's own Facepunch client (never SteamClient.Init). -->
+    <Reference Include="Facepunch.Steamworks.Win64">
+      <HintPath>$(DvManaged)\Facepunch.Steamworks.Win64.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
 </Project>

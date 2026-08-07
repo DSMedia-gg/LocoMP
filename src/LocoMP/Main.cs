@@ -85,6 +85,11 @@ public static class Main
         PauseGuardHook.ModalProbe = () => _active && _ui is { ModalActive: true };
         PauseGuardHook.Install(harmony, log);
 
+        // M5.5: overlay-join hook + the "runs LocoMP" presence marker. Both silently no-op on a
+        // Steam-less launch — the Friends tab explains itself, everything else is UDP as before.
+        LocoMP.Net.SteamPresence.Install(log);
+        LocoMP.Net.SteamPresence.SetIdlePresence();
+
         modEntry.OnToggle = (_, value) =>
         {
             _active = value;
@@ -92,6 +97,13 @@ public static class Main
             {
                 _session?.Leave(); // toggling the mod off ends any live session cleanly
                 _ui?.Dispose();
+                LocoMP.Net.SteamPresence.Uninstall();
+                LocoMP.Net.SteamPresence.ClearPresence();
+            }
+            else
+            {
+                LocoMP.Net.SteamPresence.Install(log);
+                LocoMP.Net.SteamPresence.SetIdlePresence();
             }
             log($"[mod] {(value ? "enabled" : "disabled — session closed")}.");
             return true;
