@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Steam friend sessions — no port forwarding (M5.5).** Hosting now also listens on Valve's Steam
+  relay through the game's own Steam client: friends join from the new Friends tab (it lists your
+  Steam friends currently running LocoMP, with Join and Invite buttons) or straight from the Steam
+  overlay's "Join Game", with no router setup on either side. Direct IP joins and dedicated servers
+  keep working exactly as before; on a Steam-less launch everything simply stays UDP.
+- **Bans that survive the session.** Banning a player who joined over Steam now also records their
+  Steam identity in a host-wide ban file — they stay banned across re-hosts, and reconnecting with
+  a fresh profile doesn't help. The Host Menu and the console list and lift these alongside session
+  bans (persistent entries have ids of 1000000 and up). Joins over plain UDP keep today's
+  session-only bans — there is no reliable identity to pin them to there.
 - **Session bans you can see and lift.** The Host Menu's Players panel now lists who is banned this
   session with an Unban button per entry, and a dedicated server gets `bans` + `unban <id>` console
   commands. Under the hood the ban list stopped carrying player identity keys (they are credentials);
