@@ -131,7 +131,7 @@ public class ParkedAuthorityTests
 
         var commands = new List<(CommsActionKind kind, int carId, Pose dest, int initiator)>();
         var ownerAtCommand = new List<int>(); // the ordering contract: owner flip BEFORE command
-        g.Trains.CommsActionCommanded += (kind, carId, dest, initiator) =>
+        g.Trains.CommsActionCommanded += (kind, carId, dest, initiator, _) =>
         {
             commands.Add((kind, carId, dest, initiator));
             ownerAtCommand.Add(g.Trains.View.Sets[head.Id].OwnerId);

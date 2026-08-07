@@ -220,22 +220,31 @@ public sealed class CommsRadioSync : IDisposable
 
     // ── execute a comms action the server routed here (we simulate the target car) ──
 
-    private void OnCommanded(CommsActionKind kind, int carId, Pose dest, int initiator)
+    private void OnCommanded(CommsActionKind kind, int carId, Pose dest, int initiator, bool serverBilled)
     {
         // Own cars ONLY: the server routes commands to the sim owner, and for the D21 rerail claim
         // the adoption landed on the same ordered channel just before this — a car that is still a
         // replica here means a stray or a mis-route, and acting on a replica is never correct.
         if (!_trains.TryGetOwnCar(carId, out TrainCar car) || car == null)
         {
-            _log($"[comms] remote {kind} for car {carId}: not simulated here (streamed out / not adopted) — ignored");
+            // D24 note: a server-billed command that dies here is the paid-but-failed edge the
+            // route-time billing accepts (same as the parked rerail) — this line is its audit trail.
+            _log($"[comms] remote {kind} for car {carId}: not simulated here (streamed out / not adopted) — ignored" +
+                 (serverBilled ? " (initiator was server-billed)" : ""));
             return;
         }
+        _commandServerBilled = serverBilled;
         switch (kind)
         {
             case CommsActionKind.Rerail: ExecuteRemoteRerail(car, carId, dest, initiator); break;
             case CommsActionKind.Delete: ExecuteRemoteDelete(car, carId, initiator); break;
         }
+        _commandServerBilled = false;
     }
+
+    /// <summary>True while executing a command the SERVER already billed (D24) — the executor's
+    /// own charge must skip or the initiator pays twice.</summary>
+    private bool _commandServerBilled;
 
     private void ExecuteRemoteRerail(TrainCar car, int carId, Pose dest, int initiator)
     {
@@ -285,14 +294,18 @@ public sealed class CommsRadioSync : IDisposable
     {
         long cents = (long)Math.Round(priceDollars * 100.0);
         if (cents <= 0) return;
-        if (initiator == _client.LocalId)
+        if (_commandServerBilled)
         {
-            _log($"[comms] {label}: server-billed (parked-set fee table) — no executor report");
+            // D24: the server burned its table fee at route/claim time — reporting on top would
+            // double-bill (and a non-world-source report would bounce off the fee gate anyway).
+            _log($"[comms] {label}: server-billed — no executor report");
             return;
         }
         if (!_isHost)
         {
-            _log($"[comms] {label}: fee waived (${priceDollars:F2} — an owner-routed action on a non-host executor; server-side billing for this path is banked)");
+            // Defensive: post-D24 the server bills every command routed to a non-host executor,
+            // so an unbilled command here should not exist — log loudly rather than bill blind.
+            _log($"[comms] {label}: UNBILLED command on a non-host executor (${priceDollars:F2}) — waived; this is a bug if it appears post-D24");
             return;
         }
         _client.Career.ReportExternalFee(cents, label, initiator);

@@ -168,7 +168,7 @@ public class TrainSessionTests
         CommsActionKind? kind = null;
         int carSeen = 0, initiator = 0;
         Pose destSeen = default;
-        a.Trains.CommsActionCommanded += (k, car, dest, init) => { kind = k; carSeen = car; destSeen = dest; initiator = init; };
+        a.Trains.CommsActionCommanded += (k, car, dest, init, _) => { kind = k; carSeen = car; destSeen = dest; initiator = init; };
 
         b.Trains.RequestCommsAction(CommsActionKind.Rerail, set.Cars[0].Id, new Pose(1f, 2f, 3f, 0f, 0f, 0f, 1f));
         Pump(server, new[] { a, b });

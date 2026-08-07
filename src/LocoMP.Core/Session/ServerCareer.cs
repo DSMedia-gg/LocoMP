@@ -36,6 +36,13 @@ public sealed class ServerCareer
     /// joins.</summary>
     internal int WorldSourcePeer => _worldSourcePeer;
 
+    /// <summary>D24: will THIS executor bill a routed comms action natively? True only for the
+    /// embedded host's own client (the world source on a session that accepts external jobs — a
+    /// dedicated server's "first admitted" is just a player and bills nothing). Everyone else's
+    /// FeeExternal report would be refused at the gate above, so the server must bill for them.</summary>
+    internal bool ExecutorBillsNatively(int peerId) =>
+        peerId != 0 && peerId == _worldSourcePeer && _config.AcceptExternalJobs;
+
     // Deferred completion reports on captured jobs (M3.5c): a remote claimant's "done" is not
     // trusted — the world source's game validates its own task tree and answers. Keyed by job id;
     // claimants are held by KEY (they may disconnect while the query is in flight).

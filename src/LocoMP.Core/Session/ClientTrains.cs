@@ -66,10 +66,12 @@ public sealed class ClientTrains
     /// coupler — perform the real uncouple; the native event then proposes the split (M3.5c).</summary>
     public event Action<int, CoupleEnd>? UncoupleRequested; // (carId, end — the car's own coupler)
 
-    /// <summary>We are the world source and a remote player used their comms radio on a car we own —
-    /// perform the real action (rerail to the pose, or delete the car); the native event then drives
-    /// the normal path, and we charge <c>initiatorPeer</c> the fee (M4). (kind, carId, dest, initiator)</summary>
-    public event Action<CommsActionKind, int, Pose, int>? CommsActionCommanded;
+    /// <summary>A remote player used their comms radio on a car we own — perform the real action
+    /// (rerail to the pose, or delete the car); the native event then drives the normal path.
+    /// (kind, carId, dest, initiator, serverBilled). serverBilled (D24): the server already burned
+    /// the fee from the initiator's wallet (we are not the natively-billing world source, or this
+    /// is a parked claim-then-execute) — the executor must NOT charge on top.</summary>
+    public event Action<CommsActionKind, int, Pose, int, bool>? CommsActionCommanded;
 
     /// <summary>The server committed a coupler-hardware change (v18) — already folded into
     /// <see cref="Hardware"/>; the Shim applies it to live replicas (its reconcile tick catches
@@ -423,7 +425,8 @@ public sealed class ClientTrains
                 int carId = (int)r.ReadVarUInt();
                 Pose dest = PresenceCodec.ReadPose(r);
                 int initiator = (int)r.ReadVarUInt();
-                CommsActionCommanded?.Invoke(kind, carId, dest, initiator);
+                bool serverBilled = r.ReadByte() != 0; // v22 (D24)
+                CommsActionCommanded?.Invoke(kind, carId, dest, initiator, serverBilled);
                 return true;
             }
             case MessageType.CouplerHardwareState:

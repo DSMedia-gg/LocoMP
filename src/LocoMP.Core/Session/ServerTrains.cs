@@ -851,12 +851,40 @@ public sealed class ServerTrains
         if (set.OwnerId == 0) { HandleParkedCommsAction(peerId, (CommsActionKind)kind, carId, set, dest); return; }
         if (set.OwnerId == peerId) return; // the requester simulates it — they act locally, nothing to route
 
+        // D24: fees are honoured whoever executes. The embedded host bills the native price after
+        // executing (the richer number — distance-scaled rerail, free player-spawned deletes); any
+        // OTHER owner-executor cannot bill (their FeeExternal would be refused at the world-source
+        // gate), so the server bills its flat table up front, refuse-on-poor, exactly like the
+        // parked paths (R4-M). Same paid-but-failed edge as the parked rerail: the executor's
+        // failure log is the audit trail. Closes the dedicated-server "guest fees all waived" gap
+        // for routed actions too — a dedicated session has no natively-billing executor at all.
+        bool serverBilled = false;
+        if (_fees != null && _career != null && !_career.ExecutorBillsNatively(set.OwnerId))
+        {
+            long fee = (CommsActionKind)kind switch
+            {
+                CommsActionKind.Delete => _fees.DeleteCarCents,
+                CommsActionKind.Rerail => _fees.RerailFlatCents,
+                _ => 0,
+            };
+            if (fee > 0)
+            {
+                if (!TryChargeCommsFee(peerId, fee, out string? feeWhy))
+                {
+                    ProposalRejected?.Invoke(peerId, $"comms: {feeWhy}");
+                    return;
+                }
+                serverBilled = true;
+            }
+        }
+
         var w = new PacketWriter(32)
             .WriteByte((byte)MessageType.CommsActionCommand)
             .WriteByte(kind)
             .WriteVarUInt((uint)carId);
         PresenceCodec.WritePose(w, dest);
         w.WriteVarUInt((uint)peerId); // initiator — whose wallet the owner charges
+        w.WriteByte(serverBilled ? (byte)1 : (byte)0); // v22 (D24): 1 = executor must NOT bill
         _transport.Send(set.OwnerId, w.ToArray(), DeliveryMethod.ReliableOrdered);
     }
 
@@ -924,6 +952,7 @@ public sealed class ServerTrains
                     .WriteVarUInt((uint)carId);
                 PresenceCodec.WritePose(w, dest);
                 w.WriteVarUInt((uint)peerId); // initiator == executor — the fee lands on themselves
+                w.WriteByte(1);               // v22 (D24): billed at claim time, executor skips
                 _transport.Send(peerId, w.ToArray(), DeliveryMethod.ReliableOrdered);
                 return;
 

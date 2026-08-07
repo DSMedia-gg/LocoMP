@@ -248,9 +248,12 @@ public enum MessageType : byte
     /// Carries the action kind, the target car id, and a destination pose (rerail only).</summary>
     CommsActionRequest = 60,
 
-    /// <summary>server → world source: perform this comms-radio action natively (the initiator can't,
-    /// the car is yours). Same payload plus the initiator peer id, so the owner charges the right
-    /// wallet via <see cref="FeeExternal"/> with a target.</summary>
+    /// <summary>server → the car's sim owner: perform this comms-radio action natively (the
+    /// initiator can't, the car is yours). Same payload plus the initiator peer id, so a
+    /// natively-billing executor (the embedded host) charges the right wallet via
+    /// <see cref="FeeExternal"/> with a target, plus a serverBilled byte (v22, D24): 1 = the
+    /// server already burned its flat table fee from the initiator (non-world-source executor, or
+    /// the parked claim-then-execute) and the executor must NOT bill on top.</summary>
     CommsActionCommand = 61,
 
     /// <summary>world source → server: a car was deleted natively (comms-radio Clear) — remove it from
