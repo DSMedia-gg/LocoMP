@@ -128,6 +128,8 @@ jobs:
               <Reference Include="DV.UI"><HintPath>$(DvManaged)/DV.UI.dll</HintPath><Private>false</Private></Reference>
               <Reference Include="DV.UIFramework"><HintPath>$(DvManaged)/DV.UIFramework.dll</HintPath><Private>false</Private></Reference>
               <Reference Include="DV.Interaction"><HintPath>$(DvManaged)/DV.Interaction.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="DV.WeatherSystem"><HintPath>$(DvManaged)/DV.WeatherSystem.dll</HintPath><Private>false</Private></Reference>
+              <Reference Include="DV.BrakeSystem"><HintPath>$(DvManaged)/DV.BrakeSystem.dll</HintPath><Private>false</Private></Reference>
             </ItemGroup>
           </Project>
           EOF
