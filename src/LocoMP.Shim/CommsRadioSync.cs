@@ -77,6 +77,12 @@ public sealed class CommsRadioSync : IDisposable
         CommsRadioHook.RerailConfirm = OnRerailConfirm;
         CommsRadioHook.DeleteConfirm = OnDeleteConfirm;
         CommsRadioHook.SummonConfirm = OnSummonConfirm;
+        // R3-3 scan assist: let the deleter highlight exactly the cars OnDeleteConfirm would route —
+        // hardened replicas we track. Without it the native scan refuses them before highlight and
+        // the D21 delete-as-retire is unreachable from the local radio (adopt-then-delete was the
+        // only path). The server still owns the verdict; an ineligible target gets its refusal toast.
+        CommsRadioHook.DeleteScanAssist = car =>
+            car != null && !_trains.IsLocallySimulated(car) && _trains.TryResolveCarId(car, out _);
 
         // Every client executes comms actions the server routes to it for cars it simulates —
         // the host for its world, and any claimer for an adopted set (D21). OnCommanded guards
@@ -352,6 +358,7 @@ public sealed class CommsRadioSync : IDisposable
         CommsRadioHook.RerailConfirm = null;
         CommsRadioHook.DeleteConfirm = null;
         CommsRadioHook.SummonConfirm = null;
+        CommsRadioHook.DeleteScanAssist = null;
         _client.Trains.CommsActionCommanded -= OnCommanded;
         if (_eventsHooked)
         {

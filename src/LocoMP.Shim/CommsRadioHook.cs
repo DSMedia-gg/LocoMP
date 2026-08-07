@@ -1,6 +1,7 @@
 using System;
 using DV;
 using HarmonyLib;
+using UnityEngine;
 
 namespace LocoMP.Shim;
 
@@ -28,6 +29,16 @@ public static class CommsRadioHook
     /// client is never intercepted here). Always returns true.</summary>
     public static Func<CommsRadioCrewVehicle, bool>? SummonConfirm;
 
+    /// <summary>Delete scan assist (R3-3): may the deleter point at this <c>preventDelete</c> car?
+    /// The native scan refuses hardened cars BEFORE highlight, so without this the D21 delete-as-retire
+    /// confirm filter is unreachable from the local radio — a hardened parked replica simply never
+    /// glows. Answer true only for cars whose delete the session would route (a replica we track).</summary>
+    public static Func<TrainCar, bool>? DeleteScanAssist;
+
+    // The car we softened for the current OnUpdate pass. Re-hardened in the postfix; ALSO re-hardened
+    // at the top of the next prefix, so a skipped postfix (original threw) heals within a frame.
+    private static TrainCar? _softened;
+
     public static void Install(Harmony harmony, Action<string> log)
     {
         harmony.Patch(AccessTools.Method(typeof(RerailController), nameof(RerailController.OnUse)),
@@ -36,7 +47,37 @@ public static class CommsRadioHook
             prefix: new HarmonyMethod(typeof(CommsRadioHook), nameof(DeleteOnUsePrefix)));
         harmony.Patch(AccessTools.Method(typeof(CommsRadioCrewVehicle), nameof(CommsRadioCrewVehicle.OnUse)),
             prefix: new HarmonyMethod(typeof(CommsRadioHook), nameof(SummonOnUsePrefix)));
-        log("[comms] comms-radio hook installed (rerail/delete/summon fees + remote routing)");
+        harmony.Patch(AccessTools.Method(typeof(CommsRadioCarDeleter), nameof(CommsRadioCarDeleter.OnUpdate)),
+            prefix: new HarmonyMethod(typeof(CommsRadioHook), nameof(DeleteOnUpdatePrefix)),
+            postfix: new HarmonyMethod(typeof(CommsRadioHook), nameof(DeleteOnUpdatePostfix)));
+        log("[comms] comms-radio hook installed (rerail/delete/summon fees + remote routing + scan assist)");
+    }
+
+    /// <summary>Softens <c>preventDelete</c> for exactly one native OnUpdate pass when the player is
+    /// aiming at an assisted car, so the NATIVE scan points/highlights it (own debounce, own audio).
+    /// Re-pointing from a postfix instead would fight the native <c>PointToCar(null)</c> every frame —
+    /// highlight flicker plus the hover sound per frame. The flag is restored in the postfix below,
+    /// so every other consumer of <c>preventDelete</c> still sees the car as hardened.</summary>
+    private static void DeleteOnUpdatePrefix(CommsRadioCarDeleter __instance)
+    {
+        if (_softened != null) { _softened.preventDelete = true; _softened = null; }
+        Func<TrainCar, bool>? assist = DeleteScanAssist;
+        if (assist == null || __instance == null ||
+            __instance.CurrentState != CommsRadioCarDeleter.State.ScanCarToDelete ||
+            __instance.carToDelete != null)
+            return;
+        if (!Physics.Raycast(__instance.signalOrigin.position, __instance.signalOrigin.forward,
+                out RaycastHit hit, 100f, __instance.trainCarMask))
+            return;
+        TrainCar car = TrainCar.Resolve(hit.transform.root);
+        if (car == null || car == PlayerManager.Car || !car.preventDelete || !assist(car)) return;
+        car.preventDelete = false;
+        _softened = car;
+    }
+
+    private static void DeleteOnUpdatePostfix()
+    {
+        if (_softened != null) { _softened.preventDelete = true; _softened = null; }
     }
 
     private static bool RerailOnUsePrefix(RerailController __instance)

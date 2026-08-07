@@ -105,6 +105,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   train's visible lag collapses toward zero, with no protocol change.
 
 ### Fixed
+- **The radio's clear mode can now target other players' parked trains directly.** Remote trains are
+  protected from the local game deleting them, and the radio's scanner honoured that protection so
+  hard it refused to even highlight them — the only way to clear one was to board it and claim it
+  first. The scanner now highlights remote cars the session can retire properly; confirming still
+  routes the action through the server (with the usual fee and refusal rules), never a raw local
+  delete. Genuinely protected native cars stay unselectable.
+- **A remote train that can't spawn yet no longer writes the same log line forever.** A parked
+  remote consist whose spawn is blocked (for example, its track is occupied) used to announce
+  "spawning on first snapshot" every recovery poll, a line every ~20 seconds for as long as it stayed
+  blocked. The attempt is still made — the set appears as soon as it can — but it's announced once.
 - **Test rig: a relaunched claimant bot no longer goes silent on its restored job.** When a
   `--claim-first` bot reconnected with the same player key, the server correctly restored its job
   claim — but the bot only noticed via a network event that could land before its handlers were
