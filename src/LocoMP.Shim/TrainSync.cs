@@ -62,6 +62,7 @@ public sealed class TrainSync : IDisposable
     private double _scanAccum;
     private double _cargoAccum;
     private readonly HashSet<int> _pendingNewSets = new();
+    private readonly HashSet<int> _spawnAnnounced = new(); // R3-1: sets whose spawn attempt is already logged
     private readonly Dictionary<int, (string cargo, float amount)> _lastCargo = new();
 
     private sealed class Binding
@@ -520,7 +521,10 @@ public sealed class TrainSync : IDisposable
         if (def.OwnerId != _client.LocalId)
         {
             _remote.EnsureSet(def);
-            _log($"[trains] remote consist {def.Id} ({def.Cars.Count} car(s), owner {def.OwnerId}) — spawning on first snapshot");
+            // R3-1: baseline replays re-deliver TrainsetAdded for a set we still can't spawn
+            // (owner-0, spawn-blocked) — keep the EnsureSet attempt every time, log it once.
+            if (_spawnAnnounced.Add(def.Id))
+                _log($"[trains] remote consist {def.Id} ({def.Cars.Count} car(s), owner {def.OwnerId}) — spawning on first snapshot");
         }
     }
 
@@ -561,6 +565,7 @@ public sealed class TrainSync : IDisposable
     private void OnTrainsetRemoved(int trainsetId)
     {
         _bindings.Remove(trainsetId);
+        _spawnAnnounced.Remove(trainsetId); // a genuine later re-add announces again
         _remote.Remove(trainsetId);
         RebuildCarSetIndex();
     }
