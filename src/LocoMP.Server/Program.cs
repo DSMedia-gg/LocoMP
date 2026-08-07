@@ -298,8 +298,10 @@ while (!stopping)
 Console.WriteLine(admin.RestorePerformed
     ? "[server] shutting down — final save SKIPPED (a backup was just restored; saving would overwrite it)…"
     : "[server] shutting down — saving world…");
-server.AnnounceSessionEnd("server shutting down"); // clean-end notice; flushes while the save runs below
+server.AnnounceSessionEnd("server shutting down"); // clean-end notice — pumped below BEFORE the links die
 bool finalSaved = admin.RestorePerformed || autosaver.SaveNow(); // capture reads live registries — save BEFORE disposing
+server.Poll();                     // pump the announce into the transport while every link is still up
+Thread.Sleep(150);                 // let LiteNetLib flush the notice (mirror SaveAndStop's grace)
 server.Dispose();
 udp.Dispose();
 Thread.Sleep(150);                 // let LiteNetLib flush the disconnects

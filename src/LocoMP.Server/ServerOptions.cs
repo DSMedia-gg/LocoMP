@@ -199,7 +199,7 @@ Usage: LocoMP.Server [options]
                          unattended soak — a bounded run stops + saves cleanly on its own
   --help                 this text
 
-Console commands (type at the prompt while running): status | save | stop | help
+Console commands (type at the prompt while running): status | save | say <text> | backups | restore <n> | stop | help
 
 Unattended soak (M6-B): the server + a bot swarm run for hours, leaks surface in the health line:
   LocoMP.Server --spawn-trains 4 --soak-report 30 --duration 86400   (24 h; exit code 2 if unhealthy)

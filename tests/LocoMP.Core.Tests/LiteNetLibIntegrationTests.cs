@@ -175,6 +175,42 @@ public class LiteNetLibIntegrationTests
         Assert.Null(serverT.RttMs(9999));
     }
 
+    /// <summary>
+    /// R4-D (2026-08-07 gauntlet): the dedicated server queued the SessionEnded announce and then
+    /// disposed the transport with no pump in between — the notice sat in LiteNetLib's send queue
+    /// and died with the manager, so every client saw a dead link instead of the clean end. The fix
+    /// is the SaveAndStop grace transplanted into Program.cs: announce → Poll → 150 ms → dispose.
+    /// This drives that exact sequence over real UDP and asserts the notice survives the teardown.
+    /// (Loopback can't catch this — its Send delivers straight into the peer inbox, so the ordering
+    /// bug is invisible there; SessionEndTests stays green either way.)
+    /// </summary>
+    [Fact]
+    public void The_dedicated_shutdown_ordering_lands_the_clean_end_notice_before_the_link_dies()
+    {
+        using var serverT = LiteNetLibTransport.StartServer(0, Key);
+        var server = new NetServer(serverT, new ServerConfig(Identity), new ManualClock());
+
+        using var aT = LiteNetLibTransport.ConnectClient("127.0.0.1", serverT.Port, Key);
+        using var a = new NetClient(aT, Identity, "Alice", new ManualClock());
+        Action[] pumps = { server.Poll, a.Poll };
+        Assert.True(SpinUntil(() => a.Joined, 5000, pumps), "the client should join over UDP");
+
+        (AdminNoticeKind Kind, string Arg)? notice = null;
+        a.AdminNotice += (k, arg) => notice ??= (k, arg);
+
+        // Program.cs's shutdown tail, verbatim: the final save runs between announce and pump in the
+        // real thing (state must still be live for it), then the pump + grace, THEN the teardown.
+        server.AnnounceSessionEnd("server shutting down");
+        server.Poll();
+        Thread.Sleep(150);
+        server.Dispose();
+        serverT.Dispose();
+
+        Assert.True(SpinUntil(() => notice != null, 5000, () => a.Poll()),
+            "the clean-end notice must reach the client even though the server is already gone");
+        Assert.Equal((AdminNoticeKind.SessionEnded, "server shutting down"), notice);
+    }
+
     [Fact]
     public void A_wrong_connect_key_is_refused_by_the_transport()
     {

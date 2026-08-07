@@ -169,6 +169,13 @@ public sealed class BotClient : IDisposable
                 _log($"[{_name}] world time JUMPED to {DateTime.FromOADate(oa):HH:mm} (day length {dayLength:F0} min)");
             _lastWorldOa = oa;
         };
+        // R4-B: without this line a clean session end (Save & Stop, dedicated `stop`) and a dead
+        // link look identical from the bot console — the entire point of the SessionEnded notice is
+        // lost on the one observer a solo rig has. Every kind logs; SessionEnded gets its own wording
+        // so a runbook row can grep for it.
+        _client.AdminNotice += (kind, arg) => _log(kind == AdminNoticeKind.SessionEnded
+            ? $"[{_name}] SESSION ENDED by the host{(arg.Length > 0 ? " — " + arg : "")}"
+            : $"[{_name}] admin notice: {kind.ToString().ToLowerInvariant()}{(arg.Length > 0 ? " — " + arg : "")}");
         // M5.4 chat: every committed line logs, so a live row can read the whole conversation —
         // including this bot's own echo, which proves the round trip — from the bot console alone.
         _client.ChatReceived += e => _log(e.Kind switch
