@@ -1,9 +1,10 @@
 name: Canary (game-build watcher)
 
 # The B100 early-warning system (05 §4/§8). Nightly: read Derail Valley's current buildid from Steam;
-# on first run, RECORD it (M0 exit criterion); on a change, open a PR bumping the pinned manifest and
-# post an itemized breakage heads-up. The game is frozen on B99.7 (~into 2027), so this mostly idles —
-# which is exactly the point: it fires the drill the moment B100 lands.
+# on first run, RECORD it (M0 exit criterion); on a change, open a PR recording the new buildid with
+# the refs-refresh runbook (re-export the private stash from an updated licensed install, bump
+# .ci/gamerefs.json — see tools/refs-export, D26). The game is frozen on B99.7 (~into 2027), so this
+# mostly idles — which is exactly the point: it fires the drill the moment B100 lands.
 on:
   schedule:
     - cron: '0 15 * * *'   # 15:00 UTC nightly (~01:00 AEST)
@@ -72,7 +73,7 @@ jobs:
             echo "$BUILDID" > .ci/dv-buildid.txt
           fi
 
-      - name: Open manifest-bump PR on change
+      - name: Open buildid-change PR on change
         if: steps.cmp.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
@@ -86,8 +87,10 @@ jobs:
             - Old buildid: `${{ steps.cmp.outputs.old }}`
             - New buildid: `${{ steps.cmp.outputs.new }}`
 
-            Next steps (05 §8 runbook): update the pinned manifest in `.ci/depot.json`, let `build.yml`
-            run the API-compat check, and triage any Shim breakage. Game-free tests stay green throughout.
+            Next steps (05 §8 runbook, D26): let Steam update the local licensed install, run
+            `tools/refs-export/export.ps1`, commit + tag the private stash (`b<version>-<buildid>`),
+            bump `.ci/gamerefs.json` on this branch, then let `build.yml` run the API-compat check
+            and triage any Shim breakage. Game-free tests stay green throughout.
 
       - name: Discord heads-up on change
         if: steps.cmp.outputs.changed == 'true' && env.DISCORD_WEBHOOK != ''

@@ -1,11 +1,13 @@
 name: Build (full)
 
-# Full solution build INCLUDING the game-touching Shim + mod. Needs the CI Steam account (owns only
-# Derail Valley) to fetch game assemblies via DepotDownloader, plus the UMM distribution for the
-# UnityModManager + Harmony reference DLLs (NOT in the Steam depot). See 05 §4.
+# Full solution build INCLUDING the game-touching Shim + mod. Compiles against metadata-only,
+# method-body-stripped reference assemblies (NStrip ThrowNull — generated from a licensed Derail
+# Valley install by tools/refs-export, UMM + Harmony included) held in the PRIVATE
+# DSMedia-gg/dv-gamerefs repo, checked out at the tag pinned in .ci/gamerefs.json. See 05 §4, D26.
+# No Steam account is involved: anonymous depot access is unavailable for DV (verified 2026-08-08)
+# and full game binaries never leave the licensed install.
 #
-# Requires: secrets STEAM_USERNAME / STEAM_PASSWORD / STEAM_SHARED_SECRET
-#           repo variable UMM_ZIP_URL (a direct link to a UnityModManager release zip)
+# Requires: secret GAMEREFS_TOKEN (fine-grained PAT, read-only Contents on dv-gamerefs only)
 on:
   push:
     branches: [ main ]
@@ -18,13 +20,9 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  DV_APP: "588030"
-  DV_DEPOT: "588031"
-
 jobs:
   full-build:
-    name: DepotDownloader + full build + API-compat
+    name: refs stash + full build + API-compat
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,71 +38,21 @@ jobs:
           key: nuget-${{ runner.os }}-${{ hashFiles('**/Directory.Packages.props') }}
           restore-keys: nuget-${{ runner.os }}-
 
-      - name: Read pinned depot manifest
+      - name: Read pinned game-refs tag
         id: pin
-        run: echo "manifest=$(jq -r '.manifest' .ci/depot.json)" >> "$GITHUB_OUTPUT"
+        run: echo "ref=$(jq -r '.ref' .ci/gamerefs.json)" >> "$GITHUB_OUTPUT"
 
-      - name: Cache Derail Valley managed assemblies
-        uses: actions/cache@v4
+      - name: Fetch reference assemblies (private stash, D26)
+        # Metadata-only NStrip'd assemblies incl. the UnityModManager subfolder (UMM + Harmony) —
+        # ~27 MB, so no cache layer needed. Reference/compile use only; never packaged.
+        uses: actions/checkout@v4
         with:
+          repository: DSMedia-gg/dv-gamerefs
+          ref: ${{ steps.pin.outputs.ref }}
+          token: ${{ secrets.GAMEREFS_TOKEN }}
           path: game
-          key: dv-${{ env.DV_DEPOT }}-${{ steps.pin.outputs.manifest }}-${{ hashFiles('.ci/depot-filelist.txt') }}
 
-      - name: Install DepotDownloader
-        # Pinned GitHub release binary. The NuGet tool package line (2.7.x, 2022-era) is abandoned
-        # and its install crashes under current SDKs (the .store tools-path bug) — it took this
-        # workflow down on every run since 2026-07-20. Same CLI flags in 3.x; the zip ships a
-        # self-contained linux-x64 executable.
-        run: |
-          curl -fsSL -o /tmp/depotdownloader.zip \
-            https://github.com/SteamRE/DepotDownloader/releases/download/DepotDownloader_3.4.0/DepotDownloader-linux-x64.zip
-          mkdir -p "$HOME/depotdownloader"
-          unzip -qo /tmp/depotdownloader.zip -d "$HOME/depotdownloader"
-          chmod +x "$HOME/depotdownloader/DepotDownloader"
-          echo "$HOME/depotdownloader" >> "$GITHUB_PATH"
-
-      - name: Generate Steam TOTP
-        id: totp
-        uses: CyberAndrii/steam-totp@v1
-        with:
-          shared_secret: ${{ secrets.STEAM_SHARED_SECRET }}
-
-      - name: Download game assemblies (Managed DLLs only)
-        env:
-          STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
-          STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
-          STEAM_TOTP: ${{ steps.totp.outputs.code }}
-          MANIFEST: ${{ steps.pin.outputs.manifest }}
-        run: |
-          set -euo pipefail
-          if [ -f game/DerailValley_Data/Managed/Assembly-CSharp.dll ]; then
-            echo "Depot restored from cache — skipping download."
-            exit 0
-          fi
-          args=(-app "$DV_APP" -depot "$DV_DEPOT" -dir game \
-                -filelist .ci/depot-filelist.txt \
-                -username "$STEAM_USERNAME" -password "$STEAM_PASSWORD")
-          # Reproducible when a real manifest is pinned; latest during first bring-up.
-          if [ "$MANIFEST" != "REPLACE_WITH_PINNED_MANIFEST" ]; then
-            args+=(-manifest "$MANIFEST")
-          fi
-          # DepotDownloader reads the Steam Guard code from stdin.
-          echo "$STEAM_TOTP" | DepotDownloader "${args[@]}"
-
-      - name: Fetch UnityModManager + Harmony reference DLLs
-        env:
-          UMM_ZIP_URL: ${{ vars.UMM_ZIP_URL }}
-        run: |
-          set -euo pipefail
-          test -n "$UMM_ZIP_URL" || { echo "::error::set the UMM_ZIP_URL repo variable (05 §4)"; exit 1; }
-          curl -fsSL "$UMM_ZIP_URL" -o umm.zip
-          unzip -oq umm.zip -d umm
-          dest="game/DerailValley_Data/Managed/UnityModManager"
-          mkdir -p "$dest"
-          cp "$(find umm -name UnityModManager.dll | head -1)" "$dest/"
-          cp "$(find umm -name 0Harmony.dll | head -1)" "$dest/"
-
-      - name: Point the build at the downloaded assemblies
+      - name: Point the build at the reference assemblies
         run: |
           cat > Directory.Build.targets <<'EOF'
           <Project>

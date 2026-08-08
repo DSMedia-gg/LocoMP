@@ -4,17 +4,13 @@ name: Release
 # exact DownloadUrl repository.json points to, updates repository.json, and pushes to Nexus.
 # Validated end-to-end by the v0.0.2 dry-run once secrets are wired (05 §7 item 4).
 #
-# Requires: STEAM_* secrets + UMM_ZIP_URL (to build the mod), NEXUS_API_KEY secret.
+# Requires: secrets GAMEREFS_TOKEN (private refs stash, D26 — see build.yml) + NEXUS_API_KEY.
 on:
   push:
     tags: [ 'v*' ]
 
 permissions:
   contents: write
-
-env:
-  DV_APP: "588030"
-  DV_DEPOT: "588031"
 
 jobs:
   release:
@@ -43,46 +39,18 @@ jobs:
           fi
           echo "version=$tag" >> "$GITHUB_OUTPUT"
 
-      # --- Acquire game + UMM assemblies (same mechanism as build.yml) ---
-      - name: Read pinned depot manifest
+      # --- Acquire reference assemblies (same mechanism as build.yml; D26) ---
+      - name: Read pinned game-refs tag
         id: pin
-        run: echo "manifest=$(jq -r '.manifest' .ci/depot.json)" >> "$GITHUB_OUTPUT"
-      - name: Install DepotDownloader
-        # Pinned GitHub release binary — see build.yml's twin step for why NuGet is unusable.
-        run: |
-          curl -fsSL -o /tmp/depotdownloader.zip \
-            https://github.com/SteamRE/DepotDownloader/releases/download/DepotDownloader_3.4.0/DepotDownloader-linux-x64.zip
-          mkdir -p "$HOME/depotdownloader"
-          unzip -qo /tmp/depotdownloader.zip -d "$HOME/depotdownloader"
-          chmod +x "$HOME/depotdownloader/DepotDownloader"
-          echo "$HOME/depotdownloader" >> "$GITHUB_PATH"
-      - name: Generate Steam TOTP
-        id: totp
-        uses: CyberAndrii/steam-totp@v1
+        run: echo "ref=$(jq -r '.ref' .ci/gamerefs.json)" >> "$GITHUB_OUTPUT"
+      - name: Fetch reference assemblies (private stash)
+        uses: actions/checkout@v4
         with:
-          shared_secret: ${{ secrets.STEAM_SHARED_SECRET }}
-      - name: Download game assemblies
-        env:
-          STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
-          STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
-          STEAM_TOTP: ${{ steps.totp.outputs.code }}
-          MANIFEST: ${{ steps.pin.outputs.manifest }}
-        run: |
-          set -euo pipefail
-          args=(-app "$DV_APP" -depot "$DV_DEPOT" -dir game -filelist .ci/depot-filelist.txt \
-                -username "$STEAM_USERNAME" -password "$STEAM_PASSWORD")
-          [ "$MANIFEST" != "REPLACE_WITH_PINNED_MANIFEST" ] && args+=(-manifest "$MANIFEST")
-          echo "$STEAM_TOTP" | DepotDownloader "${args[@]}"
-      - name: Fetch UnityModManager + Harmony
-        env:
-          UMM_ZIP_URL: ${{ vars.UMM_ZIP_URL }}
-        run: |
-          set -euo pipefail
-          curl -fsSL "$UMM_ZIP_URL" -o umm.zip && unzip -oq umm.zip -d umm
-          dest="game/DerailValley_Data/Managed/UnityModManager"; mkdir -p "$dest"
-          cp "$(find umm -name UnityModManager.dll | head -1)" "$dest/"
-          cp "$(find umm -name 0Harmony.dll | head -1)" "$dest/"
-      - name: Point the build at the downloaded assemblies
+          repository: DSMedia-gg/dv-gamerefs
+          ref: ${{ steps.pin.outputs.ref }}
+          token: ${{ secrets.GAMEREFS_TOKEN }}
+          path: game
+      - name: Point the build at the reference assemblies
         run: |
           cat > Directory.Build.targets <<'EOF'
           <Project>

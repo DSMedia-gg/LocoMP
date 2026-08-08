@@ -9,7 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **The multiplayer screens grew up.** One filled action per screen, outlined secondary and red
+  destructive buttons, an underline on the active tab, role and session-state chips, ping colours,
+  zebra rows, a staged join checklist with a progress bar, a status pill with a live spinner, and
+  shorter, plainer copy throughout. Same palette and font as before - hierarchy and state, not a
+  repaint. The title now reads Multiplayer with the LocoMP version beside it, so screenshots
+  identify the build.
+- **You can leave a session from the screens now.** A Leave session button sits in the header
+  whenever you are in a session - including after a session is lost, whose banner finally points
+  at a real button. Hosts still end sessions with Save & Stop in the Host Menu.
+- **CI no longer needs a Steam account.** Full builds and releases now compile against
+  metadata-only, method-body-stripped reference assemblies generated from a licensed install
+  (`tools/refs-export`) and held privately — nothing playable, nothing shipped, gone on request.
+  Local builds are unchanged and still use your own game install.
+
 ### Fixed
+- **Typing in the host menu no longer loses your draft.** The panel used to rebuild every
+  control on any session change - a ping update while you typed a new password wiped the field.
+  Only the live lists (roster, bans, backups, diagnostics) refresh now.
 - **A hose you parted stays visibly parted after you rejoin.** The disconnect was always applied
   to the brake simulation, but the visible hose model listens to a different seam — so a rejoin
   re-rigged the rope and it stayed rendered connected over correctly-parted pneumatics (the

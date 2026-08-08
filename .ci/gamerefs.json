@@ -1,0 +1,5 @@
+{
+  "repository": "DSMedia-gg/dv-gamerefs",
+  "ref": "b99.7-20251481",
+  "_note": "The pinned tag of the PRIVATE reference-assembly stash CI compiles against (05 §4, D26). Regenerate with tools/refs-export/export.ps1 after a game update, tag the stash b<version>-<buildid>, and bump 'ref' here — build.yml's API-compat check then itemizes any Shim breakage. canary.yml opens a PR walking through exactly this when the game buildid changes."
+}

@@ -55,9 +55,12 @@ dotnet test LocoMP.NoGame.slnf
 dotnet build LocoMP.sln -c Release
 ```
 
-Game assemblies are **never** committed or redistributed (there is no game EULA license to do so;
-norm-compliance is the posture). `LocoMP.Core`, `LocoMP.Transport`, and `LocoMP.Api` never reference
-the game or Unity — only `LocoMP.Shim` and the `LocoMP` mod do.
+Game assemblies are **never** committed to this repository or redistributed publicly. Local builds
+resolve them from *your* install; CI compiles against metadata-only, method-body-stripped reference
+assemblies (see `tools/refs-export`) generated from a licensed copy and held privately — reference
+use only, never shipped in any artifact, removed on Altfuture's request. `LocoMP.Core`,
+`LocoMP.Transport`, and `LocoMP.Api` never reference the game or Unity — only `LocoMP.Shim` and the
+`LocoMP` mod do.
 
 ## Project layout
 

@@ -1,1 +1,0 @@
-regex:DerailValley_Data[\\/]Managed[\\/].*\.dll$

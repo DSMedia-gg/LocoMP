@@ -3,8 +3,10 @@
   <!-- ============================================================================================
        LocoMP — game assembly resolution (Derail Valley community norm; 05 §1 + CLAUDE.md hard rule 2)
 
-       Game assemblies are NEVER committed or redistributed. Each contributor copies this file to
-       'Directory.Build.targets' (git-ignored) and points DvInstallDir at their own LEGAL DV install.
+       Game assemblies are NEVER committed to this repo or redistributed publicly. Each contributor
+       copies this file to 'Directory.Build.targets' (git-ignored) and points DvInstallDir at their
+       own LEGAL DV install. CI builds against private metadata-only reference assemblies instead
+       (tools/refs-export, D26) — same layout, so the same reference list below serves both.
 
        Only projects that opt in with <LocoMpGameProject>true</LocoMpGameProject> (the Shim and the
        UMM mod) receive these references. Core / Transport / Api / Server stay game-free by
