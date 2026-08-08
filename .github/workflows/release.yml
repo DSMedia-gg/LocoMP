@@ -155,7 +155,8 @@ jobs:
           version: ${{ steps.ver.outputs.version }}
           archive_existing_version: 'true'
           update_mod_version: 'true'
-          changelog: See CHANGELOG.md on GitHub for the v${{ steps.ver.outputs.version }} section.
+          # No changelog input: it requires mod_id as Nexus's GLOBAL mod UID (per-game id 1598
+          # 404s at /mods/<id>/changelogs - proven v0.0.2). CHANGELOG.md on GitHub is canonical.
 
       - name: Rebuild site changelog
         run: |
