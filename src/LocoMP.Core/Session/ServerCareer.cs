@@ -547,6 +547,36 @@ public sealed class ServerCareer
         return false;
     }
 
+    // ── the comms-path charge seam (R5-3/R5-10) ──
+
+    /// <summary>Charge a server-priced fee (the comms paths in <see cref="ServerTrains"/>) WITH the
+    /// notifications the direct registry call skips: the wallet push keeps the client's mirror
+    /// honest (Round 5's "fees don't work" was every charge landing silently) and the economy
+    /// event is the client-side audit line.</summary>
+    internal bool TryChargeFee(string playerKey, long amountCents, string label, out string? reason)
+    {
+        if (!Registry.TryChargeExternalFee(playerKey, amountCents, out reason)) return false;
+        SendWalletUpdate(playerKey);
+        SendEconomyEvent(playerKey, EconomyEventKind.ExternalFee, amountCents, label);
+        return true;
+    }
+
+    /// <summary>Hand a charged fee back after its action failed to commit — the mint keeps
+    /// conservation exact (burn + mint, both audited), and the same notifications fire so the
+    /// wallet never silently jumps back up.</summary>
+    internal void RefundFee(string playerKey, long amountCents, string label)
+    {
+        Registry.Ledger.Mint(Registry.Policy.WalletAccountFor(playerKey), amountCents);
+        SendWalletUpdate(playerKey);
+        SendEconomyEvent(playerKey, EconomyEventKind.Refund, amountCents, label);
+    }
+
+    /// <summary>Send a refusal from OUTSIDE the career handlers (ServerTrains' comms proposals) to
+    /// the peer over the same CareerRejected wire the client already surfaces. Round 5 found the
+    /// trains-side ProposalRejected event had no subscriber at all — every comms refusal died
+    /// server-side while the player watched nothing happen.</summary>
+    internal void RejectExternal(int peerId, string reason) => Reject(peerId, reason);
+
     // ── routed sends (the policy decides who a wallet/license change is FOR) ──
 
     private void SendWalletUpdate(string playerKey)

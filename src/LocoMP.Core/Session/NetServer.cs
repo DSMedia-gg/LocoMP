@@ -74,6 +74,10 @@ public sealed class NetServer : IDisposable
         Trains = new ServerTrains(_transport, _clock, () => _players.Keys);
         Career = new ServerCareer(_transport, _clock, _config.Career, () => _players.Keys, restore?.Career, poseOf);
         Trains.BindCareer(Career, _config.CommsFees); // parked-set comms fees bill the initiator (R4-M)
+        // R5-10: comms proposal refusals must reach the PLAYER, not just a server-side event —
+        // Round 5 found this event had no subscriber, so every refusal died silently while the
+        // initiator kept paying/retrying. CareerRejected is the wire the client already surfaces.
+        Trains.ProposalRejected += (peer, why) => Career.RejectExternal(peer, why);
         Items = new ServerItems(_transport, () => _players.Keys, _config.Items, poseOf, Career, restore?.Items);
         if (restore != null) Trains.Restore(restore.Trains);
 

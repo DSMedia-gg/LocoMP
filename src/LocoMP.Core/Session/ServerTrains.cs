@@ -100,12 +100,14 @@ public sealed class ServerTrains
     /// <summary>Burn a server-priced comms fee from the initiator's policy wallet. True when billed
     /// (or when fees are unbound/zero — tests without a career stay fee-free); false with a reason
     /// when the fee REFUSES the action (no profile, insufficient funds — never an overdraft).</summary>
-    private bool TryChargeCommsFee(int peerId, long cents, out string? reason)
+    private bool TryChargeCommsFee(int peerId, long cents, string label, out string? reason)
     {
         reason = null;
         if (_career == null || cents <= 0) return true;
         if (_career.KeyOf(peerId) is not string key) { reason = "no career profile"; return false; }
-        return _career.Registry.TryChargeExternalFee(key, cents, out reason);
+        // Through the career seam, not the raw registry — the wallet push + economy event are the
+        // difference between a charge and a SILENT charge (R5-3).
+        return _career.TryChargeFee(key, cents, label, out reason);
     }
 
     /// <summary>Last admitted snapshot per trainset — the position the join burst replays and, since
@@ -849,7 +851,14 @@ public sealed class ServerTrains
 
         if (!Registry.TryFindCar(carId, out TrainsetDef set)) { ProposalRejected?.Invoke(peerId, $"comms: unknown car {carId}"); return; }
         if (set.OwnerId == 0) { HandleParkedCommsAction(peerId, (CommsActionKind)kind, carId, set, dest); return; }
-        if (set.OwnerId == peerId) return; // the requester simulates it — they act locally, nothing to route
+        if (set.OwnerId == peerId)
+        {
+            // The requester simulates this car — they act locally, nothing to route. But a client
+            // that ROUTED the request believes it is NOT the owner, so a bare return here hides an
+            // ownership desync from both sides (R5-10). Name it.
+            ProposalRejected?.Invoke(peerId, $"comms: you own car {carId} — the action runs locally, not routed");
+            return;
+        }
 
         // D24: fees are honoured whoever executes. The embedded host bills the native price after
         // executing (the richer number — distance-scaled rerail, free player-spawned deletes); any
@@ -869,7 +878,7 @@ public sealed class ServerTrains
             };
             if (fee > 0)
             {
-                if (!TryChargeCommsFee(peerId, fee, out string? feeWhy))
+                if (!TryChargeCommsFee(peerId, fee, $"{(CommsActionKind)kind} car {carId} (routed)", out string? feeWhy))
                 {
                     ProposalRejected?.Invoke(peerId, $"comms: {feeWhy}");
                     return;
@@ -914,7 +923,7 @@ public sealed class ServerTrains
                 // R4-M: the server executes this retire itself, so the server bills it — the native
                 // fee only ever ran on the (now bypassed) adopt-then-delete path. Fee gates first:
                 // an unaffordable retire refuses outright, exactly like DV's own register would.
-                if (_fees != null && !TryChargeCommsFee(peerId, _fees.DeleteCarCents, out string? feeWhy))
+                if (_fees != null && !TryChargeCommsFee(peerId, _fees.DeleteCarCents, $"delete car {carId}", out string? feeWhy))
                 {
                     ProposalRejected?.Invoke(peerId, $"retire: {feeWhy}");
                     return;
@@ -922,9 +931,9 @@ public sealed class ServerTrains
                 if (!CommitCarDelete(carId, out string? reason))
                 {
                     // The charge landed but the commit refused (defensive — existence was validated
-                    // above). Refund by mint so conservation stays exact and nobody pays for nothing.
+                    // above). Refund so conservation stays exact and nobody pays for nothing.
                     if (_fees != null && _career?.KeyOf(peerId) is string refundKey)
-                        _career.Registry.Ledger.Mint(_career.Registry.Policy.WalletAccountFor(refundKey), _fees.DeleteCarCents);
+                        _career.RefundFee(refundKey, _fees.DeleteCarCents, $"delete car {carId} failed");
                     ProposalRejected?.Invoke(peerId, $"retire: {reason}");
                 }
                 return;
@@ -933,7 +942,7 @@ public sealed class ServerTrains
                 // Flat server-priced rerail fee, billed at claim time (no native executor price
                 // exists for a parked wreck; the executor skips its own report for self-initiated
                 // commands, so nothing double-bills). Unaffordable → no claim, no command.
-                if (_fees != null && !TryChargeCommsFee(peerId, _fees.RerailFlatCents, out string? rerailFeeWhy))
+                if (_fees != null && !TryChargeCommsFee(peerId, _fees.RerailFlatCents, $"rerail car {carId}", out string? rerailFeeWhy))
                 {
                     ProposalRejected?.Invoke(peerId, $"rerail claim: {rerailFeeWhy}");
                     return;
@@ -941,7 +950,7 @@ public sealed class ServerTrains
                 if (!Registry.TryClaim(peerId, set.Id, out _, out string? claimReason))
                 {
                     if (_fees != null && _career?.KeyOf(peerId) is string rerailRefundKey)
-                        _career.Registry.Ledger.Mint(_career.Registry.Policy.WalletAccountFor(rerailRefundKey), _fees.RerailFlatCents);
+                        _career.RefundFee(rerailRefundKey, _fees.RerailFlatCents, $"rerail car {carId} claim failed");
                     ProposalRejected?.Invoke(peerId, $"rerail claim: {claimReason}");
                     return;
                 }

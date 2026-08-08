@@ -88,6 +88,18 @@ public sealed class CommsRadioSync : IDisposable
         // the host for its world, and any claimer for an adopted set (D21). OnCommanded guards
         // to own cars, so a stray command can never act on a replica.
         _client.Trains.CommsActionCommanded += OnCommanded;
+        // R5-10: the server's comms refusals ride CareerRejected — without this line a refused
+        // delete/rerail looks like nothing happened (Round 5: 9 invisible insufficient-funds
+        // rejects while the player kept pressing the button).
+        _client.Career.RequestRejected += OnServerRejected;
+    }
+
+    private void OnServerRejected(string reason, int _)
+    {
+        if (reason.StartsWith("comms:", StringComparison.Ordinal)
+            || reason.StartsWith("retire:", StringComparison.Ordinal)
+            || reason.StartsWith("rerail", StringComparison.Ordinal))
+            _log($"[comms] server refused: {reason}");
     }
 
     /// <summary>Pump from the session loop: once the comms radio exists (world loaded), subscribe to
@@ -390,6 +402,7 @@ public sealed class CommsRadioSync : IDisposable
         CommsRadioHook.SummonConfirm = null;
         CommsRadioHook.DeleteScanAssist = null;
         _client.Trains.CommsActionCommanded -= OnCommanded;
+        _client.Career.RequestRejected -= OnServerRejected;
         if (_eventsHooked)
         {
             if (_rerail != null) _rerail.CarRerailed -= OnHostRerailed;

@@ -27,6 +27,10 @@ public enum EconomyEventKind : byte
 
     /// <summary>M4: a shop item purchase burned from the policy wallet.</summary>
     ShopPurchase = 5,
+
+    /// <summary>R5: a charged fee handed back because the action it paid for could not commit —
+    /// minted back to the payer, so conservation reads it as new money with this event as audit.</summary>
+    Refund = 6,
 }
 
 /// <summary>

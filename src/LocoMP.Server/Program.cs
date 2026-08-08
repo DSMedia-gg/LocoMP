@@ -135,6 +135,9 @@ using var server = new NetServer(udp, config, clock, restore, interestTopology);
 server.PlayerAdmitted += p => Console.WriteLine($"[server] admitted {p.Name} (id {p.Id}) — {server.PlayerCount} player(s)");
 server.PlayerRemoved += id => Console.WriteLine($"[server] removed id {id} — {server.PlayerCount} player(s)");
 server.ProfileEvicted += key => Console.WriteLine($"[career] evicted pristine profile {key} at grace lapse");
+// R5-10: refusals are part of the operator's audit trail — Round 5's silent-drop diagnosis took
+// ledger forensics because the console never showed the 9 insufficient-funds rejects.
+server.Career.RequestRejected += (peer, why) => Console.WriteLine($"[server] rejected peer {peer}: {why}");
 // M5.4: the committed chat feed (player lines + system events) mirrors to the operator's console.
 server.Chat += e => Console.WriteLine(e.Kind switch
 {

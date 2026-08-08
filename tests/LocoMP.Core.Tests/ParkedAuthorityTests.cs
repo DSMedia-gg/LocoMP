@@ -247,4 +247,75 @@ public class ParkedAuthorityTests
         Assert.Equal(2, server.Trains.Registry.Sets.Count);   // nothing moved, nothing claimed
         Assert.All(server.Trains.Registry.Sets.Values, s => Assert.Equal(0, s.OwnerId));
     }
+
+    [Fact]
+    public void A_comms_fee_charge_reaches_the_initiators_wallet_display()
+    {
+        // R5-3: every Round 5 fee billed correctly server-side and the CLIENT never heard — the
+        // wallet display only read the server at join mount. A charge must push WalletState (the
+        // mirror's refresh trigger) and an ExternalFee economy event to the payer.
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        using var server = new NetServer(hub.Server, new ServerConfig(Identity), clock);
+        (TrainsetDef head, TrainsetDef _) = ParkedSplit(hub, clock, server, out NetClient guest);
+        using NetClient g = guest;
+
+        long before = g.Career.BalanceCents;
+        var events = new List<(EconomyEventKind kind, long amount)>();
+        g.Career.EconomyEventReceived += (kind, amount, _) => events.Add((kind, amount));
+
+        g.Trains.RequestCommsAction(CommsActionKind.Delete, head.Cars[0].Id, Pose.Identity);
+        Pump(server, g);
+
+        Assert.Equal(before - 100_00, g.Career.BalanceCents); // the CLIENT's number moved, not just the ledger
+        Assert.Contains(events, e => e.kind == EconomyEventKind.ExternalFee && e.amount == 100_00);
+    }
+
+    [Fact]
+    public void A_comms_refusal_reaches_the_initiating_client()
+    {
+        // R5-10: the trains-side ProposalRejected event had NO subscriber — 9 insufficient-funds
+        // refusals died server-side while the player kept pressing delete. The refusal must ride
+        // CareerRejected to the initiator.
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        var config = new ServerConfig(Identity, career: new CareerConfig { StartingBalanceCents = 50_00 });
+        using var server = new NetServer(hub.Server, config, clock);
+        (TrainsetDef head, TrainsetDef _) = ParkedSplit(hub, clock, server, out NetClient guest);
+        using NetClient g = guest;
+
+        var rejects = new List<string>();
+        g.Career.RequestRejected += (reason, _) => rejects.Add(reason);
+
+        g.Trains.RequestCommsAction(CommsActionKind.Delete, head.Cars[0].Id, Pose.Identity);
+        Pump(server, g);
+
+        Assert.Contains(rejects, r => r.Contains("insufficient funds"));
+        Assert.Equal(50_00, g.Career.BalanceCents); // nothing charged, and the client knows it
+    }
+
+    [Fact]
+    public void A_routed_action_on_your_own_car_is_refused_by_name()
+    {
+        // R5-10: a client that ROUTES a request believes it is not the owner — the old bare return
+        // hid that desync from both sides. Now the mismatch is named to the initiator.
+        var hub = new LoopbackNetwork();
+        var clock = new ManualClock();
+        using var server = new NetServer(hub.Server, new ServerConfig(Identity), clock);
+        var owner = new NetClient(hub.Connect(out _), Identity, "Driver", clock, playerKey: "kOwner");
+        Pump(server, owner);
+        using NetClient o = owner;
+        o.Trains.RegisterTrainset(token: 9, Cars(2));
+        Pump(server, o);
+        TrainsetDef set = Assert.Single(server.Trains.Registry.Sets.Values);
+
+        var rejects = new List<string>();
+        o.Career.RequestRejected += (reason, _) => rejects.Add(reason);
+
+        o.Trains.RequestCommsAction(CommsActionKind.Delete, set.Cars[0].Id, Pose.Identity);
+        Pump(server, o);
+
+        Assert.Contains(rejects, r => r.Contains("you own car"));
+        Assert.Contains(set.Id, (IDictionary<int, TrainsetDef>)server.Trains.Registry.Sets); // nothing deleted
+    }
 }
