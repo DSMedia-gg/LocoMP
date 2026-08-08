@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **A hose you parted stays visibly parted after you rejoin.** The disconnect was always applied
+  to the brake simulation, but the visible hose model listens to a different seam — so a rejoin
+  re-rigged the rope and it stayed rendered connected over correctly-parted pneumatics (the
+  matching anglecock never had this problem). Hose changes now drive the seam the visuals follow,
+  so what you see is what the air does.
+- **Parked remote cars no longer erupt while you idle.** The game's pause handling could quietly
+  hand a remote replica back to local physics after an unpause — and a replica woken like that is
+  a wound spring (compressed buffers, coupler joint, gravity): a parked pair could shove itself
+  apart, derail and flip with nobody near it. Replicas are now kept frozen permanently, with a log
+  line whenever something tries to un-freeze one.
 - **Your wallet updates the moment a fee is charged.** Server-priced radio fees (delete, rerail)
   billed correctly but the in-game money display only refreshed when you joined — every charge
   looked like it never happened. Charges and refunds now push the new balance (and an audit
