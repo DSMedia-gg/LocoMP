@@ -1,6 +1,6 @@
 name: PR
 
-# The game-free gate that runs on every PR. Never needs Steam or a game install — that is the whole
+# The game-free gate that runs on every PR. Never needs Steam or a game install - that is the whole
 # reason LocoMP.Core/Transport/Api carry no Unity/DV references (03 §2, hard rule 8).
 on:
   pull_request:
@@ -66,7 +66,7 @@ jobs:
           missing=0
           for c in $(git rev-list "$BASE_SHA..$HEAD_SHA"); do
             if ! git show -s --format=%B "$c" | grep -qE '^Signed-off-by: .+ <.+@.+>'; then
-              echo "::error::commit ${c:0:12} is missing a Signed-off-by line — run 'git commit -s'."
+              echo "::error::commit ${c:0:12} is missing a Signed-off-by line - run 'git commit -s'."
               missing=1
             fi
           done

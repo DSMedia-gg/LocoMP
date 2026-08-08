@@ -9,7 +9,7 @@
     <RootNamespace>LocoMP.Server</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
 
-    <!-- GC mode is PINNED, not left to the runtime's defaults, so a dev PC and the SVHost container
+    <!-- GC mode is PINNED, not left to the runtime's defaults, so a dev PC and the container
          behave identically. Without this the mode is environment-dependent, and under Docker with a
          memory limit the GC's heap hard limit becomes a percentage of that limit — so heap sizing
          differs and any leak threshold calibrated on a workstation would not transfer (the soak

@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for the report. LocoMP is pre-alpha — please include logs; they are almost always the fastest path to a fix.
+        Thanks for the report. LocoMP is pre-alpha - please include logs; they are almost always the fastest path to a fix.
   - type: input
     id: locomp-version
     attributes:

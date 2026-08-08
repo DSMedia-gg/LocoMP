@@ -96,7 +96,7 @@ public sealed class SoakReporter
     private const double MemoryLeakFactor = 2.0;
 
     // A ratio alone is meaningless against a tiny floor — found by the first containerized soak
-    // (2026-08-03): a BARE server (no topology, the SVHost compose default) baselines at ~0.1 MB
+    // (2026-08-03): a BARE server (no topology, the compose default) baselines at ~0.1 MB
     // retained on its empty first report, so the ~0.4 MB of ordinary roster/transport state that
     // 8 connecting bots add read as ">2× baseline" and latched a false UNHEALTHY. So a runaway
     // needs BOTH: the ratio (drift against a meaningful floor) and an absolute rise no amount of

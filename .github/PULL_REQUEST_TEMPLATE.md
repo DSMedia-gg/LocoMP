@@ -6,9 +6,9 @@
 
 ## Checklist
 
-- [ ] Commits are **signed off** (`git commit -s`) — DCO required, CI enforces it.
-- [ ] **Clean-room:** no code copied from other Derail Valley multiplayer mods (studying is fine; copying is not).
+- [ ] Commits are **signed off** (`git commit -s`) - DCO required, CI enforces it.
+- [ ] No code copied from other Derail Valley multiplayer mods (studying is fine; copying is not).
 - [ ] `CHANGELOG.md` updated under `## [Unreleased]` (for any user-visible change).
-- [ ] `dotnet test LocoMP.NoGame.slnf` passes locally (game-free — no install needed).
+- [ ] `dotnet test LocoMP.NoGame.slnf` passes locally (game-free - no install needed).
 - [ ] Layering respected: `Core`/`Transport`/`Api` stay free of UnityEngine and `DV.*`.
 - [ ] No game assemblies or assets committed.

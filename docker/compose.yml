@@ -1,9 +1,8 @@
-# LocoMP dedicated server (M6-B Track B).
+# LocoMP dedicated server.
 #
-# This is a RAW-UDP game server, so — unlike the HTTP services on SVHost — it is NOT fronted by Traefik
-# or Cloudflare (neither proxies arbitrary game UDP). It needs a direct UDP port plus a router
-# port-forward, exactly like the other SVHost game servers (Palworld 8211/udp, ARK 7777/udp, Minecraft).
-# 25701 sits in the Helm port pool (25700–25899), so it's a natural fit for eventual Helm packaging.
+# This is a RAW-UDP game server, so it is NOT fronted by a reverse proxy or CDN (neither proxies
+# arbitrary game UDP). It needs a direct UDP port plus a router port-forward, exactly like any other
+# self-hosted game server.
 #
 #   docker compose -f docker/compose.yml up -d --build     # build + start
 #   docker compose -f docker/compose.yml logs -f           # follow the [soak] health line
@@ -13,7 +12,7 @@
 services:
   locomp:
     build:
-      context: ..                 # repo root — the Dockerfile needs src/ + build props + tests/data
+      context: ..                 # repo root - the Dockerfile needs src/ + build props + tests/data
       dockerfile: docker/Dockerfile
     image: locomp-server:dev
     container_name: locomp-server
@@ -24,6 +23,6 @@ services:
     volumes:
       - ./data:/data
     # The baked CMD runs a BARE server (presence + job board + persistence) with a health line every
-    # 5 min — no topology needed. Uncomment to add server-owned trains (mount a real extracted world.lmpw
-    # in ./data) and/or a real career (career.lmpc). Args are space-separated tokens — "--flag" then value:
+    # 5 min - no topology needed. Uncomment to add server-owned trains (mount a real extracted world.lmpw
+    # in ./data) and/or a real career (career.lmpc). Args are space-separated tokens - "--flag" then value:
     # command: ["--port", "25701", "--save", "/data/locomp-server.save", "--config", "/data/career.lmpc", "--world", "/data/world.lmpw", "--spawn-trains", "3", "--soak-report", "300"]

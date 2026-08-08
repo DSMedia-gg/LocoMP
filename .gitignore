@@ -5,10 +5,10 @@
 dist/
 artifacts/
 
-## Per-contributor game paths — only the .EXAMPLE is committed (05 §1, hard rule 2)
+## Per-contributor game paths - only the .EXAMPLE is committed
 Directory.Build.targets
 
-## Never commit game assemblies (safety net for hard rule 2)
+## Never commit game assemblies (safety net)
 Assembly-CSharp.dll
 DV.*.dll
 UnityEngine*.dll
@@ -19,10 +19,10 @@ Facepunch.*.dll
 ## Packaging output
 *.zip
 
-## Extracted world topology — per-build derived data from a local game run (M2.2); re-extract, don't commit
+## Extracted world topology - per-build derived data from a local game run; re-extract, don't commit
 tests/data/*.lmpw
 
-## Local scratch (mint tools, extracted worlds, throwaway rigs) — derived/experimental, never commit
+## Local scratch (mint tools, extracted worlds, throwaway rigs) - derived/experimental, never commit
 scratch/
 
 ## DepotDownloader / CI scratch
@@ -44,10 +44,9 @@ Thumbs.db
 Desktop.ini
 .DS_Store
 
-## Internal planning/session docs — kept in the private parent corpus, never in the public repo
+## Maintainer-local session notes - never committed
 SESSION.md
 STATE.md
-AGENTS.md
 A1-*-HANDOFF.md
 RUNBOOK-*.md
 

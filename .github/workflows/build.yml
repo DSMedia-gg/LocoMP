@@ -1,7 +1,7 @@
 name: Build (full)
 
 # Full solution build INCLUDING the game-touching Shim + mod. Compiles against metadata-only,
-# method-body-stripped reference assemblies (NStrip ThrowNull — generated from a licensed Derail
+# method-body-stripped reference assemblies (NStrip ThrowNull - generated from a licensed Derail
 # Valley install by tools/refs-export, UMM + Harmony included) held in the PRIVATE
 # DSMedia-gg/dv-gamerefs repo, checked out at the tag pinned in .ci/gamerefs.json. See 05 §4, D26.
 # No Steam account is involved: anonymous depot access is unavailable for DV (verified 2026-08-08)
@@ -43,7 +43,7 @@ jobs:
         run: echo "ref=$(jq -r '.ref' .ci/gamerefs.json)" >> "$GITHUB_OUTPUT"
 
       - name: Fetch reference assemblies (private stash, D26)
-        # Metadata-only NStrip'd assemblies incl. the UnityModManager subfolder (UMM + Harmony) —
+        # Metadata-only NStrip'd assemblies incl. the UnityModManager subfolder (UMM + Harmony) -
         # ~27 MB, so no cache layer needed. Reference/compile use only; never packaged.
         uses: actions/checkout@v4
         with:
@@ -101,4 +101,4 @@ jobs:
           # TODO (05 §4, WalkerSim2 model): diff the game-facing member list the Shim depends on against
           # the freshly downloaded assemblies; fail naming exactly which members changed. Lands with the
           # Shim's real patch targets (post-M0). For now the full build above is the compat smoke test.
-          echo "API-compat check: placeholder — see 05 §4."
+          echo "API-compat check: placeholder - see 05 §4."

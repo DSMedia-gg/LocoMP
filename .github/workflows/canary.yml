@@ -3,8 +3,8 @@ name: Canary (game-build watcher)
 # The B100 early-warning system (05 §4/§8). Nightly: read Derail Valley's current buildid from Steam;
 # on first run, RECORD it (M0 exit criterion); on a change, open a PR recording the new buildid with
 # the refs-refresh runbook (re-export the private stash from an updated licensed install, bump
-# .ci/gamerefs.json — see tools/refs-export, D26). The game is frozen on B99.7 (~into 2027), so this
-# mostly idles — which is exactly the point: it fires the drill the moment B100 lands.
+# .ci/gamerefs.json - see tools/refs-export, D26). The game is frozen on B99.7 (~into 2027), so this
+# mostly idles - which is exactly the point: it fires the drill the moment B100 lands.
 on:
   schedule:
     - cron: '0 15 * * *'   # 15:00 UTC nightly (~01:00 AEST)

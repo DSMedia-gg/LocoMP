@@ -4,7 +4,7 @@ name: Release
 # exact DownloadUrl repository.json points to, updates repository.json, and pushes to Nexus.
 # Validated end-to-end by the v0.0.2 dry-run once secrets are wired (05 §7 item 4).
 #
-# Requires: secrets GAMEREFS_TOKEN (private refs stash, D26 — see build.yml) + NEXUS_API_KEY.
+# Requires: secrets GAMEREFS_TOKEN (private refs stash, D26 - see build.yml) + NEXUS_API_KEY.
 on:
   push:
     tags: [ 'v*' ]
@@ -107,10 +107,10 @@ jobs:
           cp src/LocoMP/Info.json "$stage/"
           cp LICENSE "$stage/"
           cat > "$stage/SOURCE.txt" <<EOF
-          LocoMP — Multiplayer for Derail Valley
+          LocoMP - Multiplayer for Derail Valley
           Source: https://github.com/DSMedia-gg/LocoMP
           License: MIT (see LICENSE)
-          Independent, fan-made project — not affiliated with or endorsed by Altfuture.
+          Independent, fan-made project - not affiliated with or endorsed by Altfuture.
           EOF
           (cd dist && zip -r "LocoMP_v${V}.zip" LocoMP)
           echo "zip=dist/LocoMP_v${V}.zip" >> "$GITHUB_OUTPUT"

@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1
 #
-# LocoMP dedicated server — headless, game-free (M6-B Track B). Builds ONLY LocoMP.Server and its
-# game-free dependencies (Core + Transport). The Shim and the machine-specific Directory.Build.targets
-# (Derail Valley assembly resolution) are deliberately absent from the build — a server image never
-# touches the game install, the same discipline that keeps pr.yml off Steam (hard rules 2, 3, 8).
+# LocoMP dedicated server - headless, game-free. Builds ONLY LocoMP.Server and its game-free
+# dependencies (Core + Transport). The Shim and the machine-specific Directory.Build.targets
+# (Derail Valley assembly resolution) are deliberately absent from the build - a server image never
+# touches the game install, the same discipline that keeps the PR pipeline off Steam.
 #
 # Build from the REPO ROOT (the context must include src/ + the build props + tests/data):
 #   docker build -f docker/Dockerfile -t locomp-server:dev .
@@ -28,14 +28,14 @@ FROM mcr.microsoft.com/dotnet/runtime:8.0 AS runtime
 WORKDIR /opt/locomp
 COPY --from=build /app ./
 
-# The world save — and any operator-supplied world/career — live on a volume so they survive rebuilds.
-# No topology is baked in: the extracted .lmpw is a game artifact (gitignored, produced by the in-game
+# The world save - and any operator-supplied world/career - live on a volume so they survive rebuilds.
+# No topology is baked in: the extracted .lmpw is a game artefact (gitignored, produced by the in-game
 # mod panel), so for server-owned trains you mount a real one and add `--world /data/world.lmpw
-# --spawn-trains N` (see docker/compose.yml). Out of the box the server runs bare — presence + the job
-# board + persistence — which needs no topology.
+# --spawn-trains N` (see docker/compose.yml). Out of the box the server runs bare - presence + the job
+# board + persistence - which needs no topology.
 VOLUME ["/data"]
 
-# Raw game UDP. 25701 sits in the SVHost Helm port pool (25700–25899). Remap in compose if you like.
+# Raw game UDP. Remap in compose if you like.
 EXPOSE 25701/udp
 
 # ENTRYPOINT is the exe; CMD is the default arguments (override in compose). docker stop sends SIGTERM,

@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   metadata-only, method-body-stripped reference assemblies generated from a licensed install
   (`tools/refs-export`) and held privately — nothing playable, nothing shipped, gone on request.
   Local builds are unchanged and still use your own game install.
+- **Docs reworked for a public audience.** The README is now split into player and contributor
+  sections, a public `AGENTS.md` covers AI-assisted contributions, and the internal CI runbook
+  is gone. Internal infrastructure references and shorthand were scrubbed from the docs,
+  container files and templates along the way.
 
 ### Fixed
 - **Typing in the host menu no longer loses your draft.** The panel used to rebuild every
