@@ -100,6 +100,7 @@ public sealed class RealCarSync
         public bool Spawned;
         public bool CouplingChecked;
         public float HardenUntil;
+        public float NextRehardenLogAllowed; // R5-5 enforcement log throttle (10 s per set)
         public float NextMaterializeAllowed;
         public bool FarLogged;
         public float LastSnapshotAt;    // when Apply last saw this set (seeded at creation)
@@ -527,6 +528,25 @@ public sealed class RealCarSync
             {
                 if (entry.Car == null || !entry.HasTarget) continue;
                 if (harden) HardenCar(entry.Car);
+                else if (IsUnhardened(entry.Car))
+                {
+                    // R5-5: DV's PausePhysicsHandler snapshots every registered rigidbody at pause
+                    // and RESTORES that snapshot on unpause. A pause overlapping the spawn window
+                    // (where DV's cross-frame init briefly leaves a replica dynamic — the whole
+                    // reason HardenSeconds exists) captures isKinematic=false and faithfully
+                    // un-freezes the replica whenever the unpause lands — minutes later, long after
+                    // the harden window closed. A dynamic replica is R4-F's wound spring with no
+                    // pre-settle: gravity + the coupler joint + flush buffers flipped R5's parked
+                    // pair while nobody touched it. Replicas never simulate locally — re-assert on
+                    // sight, forever (D19 makes pause cycles routine, so this WILL keep firing).
+                    HardenCar(entry.Car);
+                    if (now >= set.NextRehardenLogAllowed)
+                    {
+                        set.NextRehardenLogAllowed = now + 10f;
+                        _log($"[trains] re-hardened replica car {entry.Def.Id} — the game un-froze it " +
+                             "(pause cycle / late init); replicas never simulate locally");
+                    }
+                }
                 if (entry.Railed) ResolveRailTarget(entry, map, now - entry.SnapAt); // 03 §5 dead reckoning
                 Transform tr = entry.Car.transform;
                 if ((entry.TargetPos - tr.position).sqrMagnitude > SnapDistance * SnapDistance)
@@ -773,6 +793,25 @@ public sealed class RealCarSync
         // local-simulation concern this car doesn't have.
         if (car.FrontBogie != null) car.FrontBogie.DistanceTrackingEnabled = false;
         if (car.RearBogie != null) car.RearBogie.DistanceTrackingEnabled = false;
+    }
+
+    /// <summary>R5-5's cheap per-frame probe (three bool reads) for a replica something un-froze —
+    /// the full <see cref="HardenCar"/> sweep allocates, so it only runs on a violation. The main
+    /// rb and both bogie rbs are exactly the bodies DV registers with PausePhysicsHandler, whose
+    /// pause-snapshot restore is the known un-freezer.</summary>
+    private static bool IsUnhardened(TrainCar car)
+    {
+        try
+        {
+            if (car.rb != null && !car.rb.isKinematic) return true;
+            Bogie front = car.FrontBogie, rear = car.RearBogie;
+            if (front != null && front.rb != null && !front.rb.isKinematic) return true;
+            return rear != null && rear.rb != null && !rear.rb.isKinematic;
+        }
+        catch
+        {
+            return false; // mid-destroy — the destroy hook is about to unmap it
+        }
     }
 
     /// <summary>The inverse of <see cref="HardenCar"/>, for adoption (D21): everything local
