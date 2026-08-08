@@ -58,6 +58,8 @@ public sealed class CosmeticSync : IDisposable
     private readonly Action<string> _log;
     private readonly Dictionary<int, CarPorts> _cars = new();  // serverCarId → resolved ports
     private readonly List<(byte kind, byte value)> _batch = new();
+    private readonly HashSet<int> _dumped = new();             // one port-id dump per car (R5 diagnosis)
+    private readonly HashSet<int> _noFlowLogged = new();       // one "sim not ready" note per car
     private float _sampleAccum;
     private float _reconcileAccum;
 
@@ -157,20 +159,31 @@ public sealed class CosmeticSync : IDisposable
         SimulationFlow? flow;
         try { flow = car.SimController != null ? car.SimController.simFlow : null; }
         catch { flow = null; }
-        entry = new CarPorts(car);
-        if (flow != null)
+        if (flow is null)
         {
-            foreach (Port port in flow.AllPorts)
-            {
-                if (port == null || string.IsNullOrEmpty(port.id)) continue;
-                foreach ((byte kind, string suffix) in PortMap)
-                    if (!entry.Ports.ContainsKey(kind) && port.id.EndsWith(suffix, StringComparison.Ordinal))
-                    {
-                        entry.Ports[kind] = port;
-                        break;
-                    }
-            }
+            // Sim components initialise frames after spawn (the R4-G ordering trap). Caching an
+            // empty entry here made that window PERMANENT — the R5-8 lifeless-replica bug. Not
+            // caching means the 1 Hz reconcile keeps retrying until the sim exists.
+            if (_noFlowLogged.Add(carId))
+                _log($"[trains] cosmetic: car {carId} has no simFlow yet — retrying on the reconcile tick");
+            return null;
         }
+        entry = new CarPorts(car);
+        var ids = _dumped.Contains(carId) ? null : new List<string>();
+        foreach (Port port in flow.AllPorts)
+        {
+            if (port == null || string.IsNullOrEmpty(port.id)) continue;
+            ids?.Add(port.id);
+            foreach ((byte kind, string suffix) in PortMap)
+                if (!entry.Ports.ContainsKey(kind) && port.id.EndsWith(suffix, StringComparison.Ordinal))
+                {
+                    entry.Ports[kind] = port;
+                    break;
+                }
+        }
+        if (ids != null && _dumped.Add(carId))
+            _log($"[trains] cosmetic ports car {carId}: matched {entry.Ports.Count}/{PortMap.Length} kinds; " +
+                 $"sim ports: {string.Join(", ", ids)}");
         _cars[carId] = entry; // cached even when empty — unpowered stock resolves once, not per tick
         return entry;
     }
@@ -186,5 +199,7 @@ public sealed class CosmeticSync : IDisposable
     {
         _client.Trains.CosmeticReceived -= OnCosmetic;
         _cars.Clear();
+        _dumped.Clear();
+        _noFlowLogged.Clear();
     }
 }
