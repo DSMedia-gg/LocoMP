@@ -232,7 +232,7 @@ public sealed class SessionController
         // otherwise say why instead of silently eating the click.
         if (SteamPresence.TryTakeJoinRequest(out ulong overlayHost))
         {
-            if (_mode == Mode.Idle && PresenceShim.WorldAlive)
+            if (_mode == Mode.Idle && PresenceShim.WorldReady)
                 JoinSteamSession(overlayHost, _playerName, password: null);
             else
                 _log(_mode == Mode.Idle
@@ -621,6 +621,15 @@ public sealed class SessionController
     /// field state so the two UIs can never drift about what the live session was started with.</summary>
     public void HostSession(HostOptions o)
     {
+        // R5-9/R5-6: the multiplayer screens are reachable during the save-load interstitial, and a
+        // session started there crashes the game AND corrupts the wallet stash (the mirror reads
+        // Inventory before the save populates it). Refuse until the world is genuinely playable.
+        if (!PresenceShim.WorldReady)
+        {
+            SetError("world still loading — wait for the load to finish, then host");
+            _log("[session] " + _lastError);
+            return;
+        }
         try
         {
             _lastError = "";
@@ -841,6 +850,13 @@ public sealed class SessionController
     /// same as HostSession.</summary>
     public void JoinSession(JoinOptions o)
     {
+        // Same world-ready gate as HostSession — R5-9's crash was exactly this entry mid-load.
+        if (!PresenceShim.WorldReady)
+        {
+            SetError("world still loading — wait for the load to finish, then join");
+            _log("[session] " + _lastError);
+            return;
+        }
         try
         {
             _lastError = "";
@@ -871,6 +887,14 @@ public sealed class SessionController
     /// difference ends at the seam.</summary>
     public void JoinSteamSession(ulong hostSteamId, string playerName, string? password)
     {
+        // Same world-ready gate as the UDP entries (R5-9/R5-6) — the Friends tab is reachable
+        // from the same screens.
+        if (!PresenceShim.WorldReady)
+        {
+            SetError("world still loading — wait for the load to finish, then join");
+            _log("[session] " + _lastError);
+            return;
+        }
         try
         {
             _lastError = "";

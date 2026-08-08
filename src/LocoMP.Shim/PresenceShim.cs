@@ -103,4 +103,11 @@ public static class PresenceShim
     /// call sites each answering "is the world alive?" their own way.
     /// </summary>
     public static bool WorldAlive => RailTrackRegistryBase.Instance != null;
+
+    /// <summary>World fully loaded AND playable — the save's data (money, cars, the player) has been
+    /// applied. <see cref="WorldAlive"/> alone goes true mid-interstitial (tracks stream in early),
+    /// which is how R5-9's join-during-load crashed the game and R5-6's wallet mirror stashed the
+    /// PRE-LOAD default balance as the player's "real" money and later restored it over the career.
+    /// Every session entry gates on THIS, never on WorldAlive.</summary>
+    public static bool WorldReady => WorldAlive && WorldStreamingInit.IsLoaded;
 }
