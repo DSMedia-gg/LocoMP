@@ -142,16 +142,20 @@ jobs:
           git push origin main
 
       - name: Upload to Nexus Mods
-        uses: Nexus-Mods/upload-action@v1
+        # Pinned to the exact tag - no stable v1 exists (verified 2026-08-08). Inputs match this
+        # tag's action.yml: file_id targets the existing file entry (05 SS7), filename is the zip,
+        # archive_existing_version retires the old file per the bootstrap plan.
+        uses: Nexus-Mods/upload-action@v1.0.0-beta.10
         with:
-          # Confirm exact input names against the pinned action's README (05 §4).
           api_key: ${{ secrets.NEXUS_API_KEY }}
-          game_domain: derailvalley
           mod_id: 1598
           file_id: 7674930
+          filename: ${{ steps.pkg.outputs.zip }}
+          display_name: LocoMP v${{ steps.ver.outputs.version }}
           version: ${{ steps.ver.outputs.version }}
-          name: LocoMP v${{ steps.ver.outputs.version }}
-          file_path: ${{ steps.pkg.outputs.zip }}
+          archive_existing_version: 'true'
+          update_mod_version: 'true'
+          changelog: See CHANGELOG.md on GitHub for the v${{ steps.ver.outputs.version }} section.
 
       - name: Rebuild site changelog
         run: |

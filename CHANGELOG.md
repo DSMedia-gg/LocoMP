@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.0.2] - 2026-08-08
+
 ### Changed
 - **The multiplayer screens grew up.** One filled action per screen, outlined secondary and red
   destructive buttons, an underline on the active tab, role and session-state chips, ping colours,
@@ -721,11 +725,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   joins a live session over UDP, streams synthetic avatar poses (orbit/wander/idle), supports
   swarms (`--count`), join/leave churn (`--churn`), and mismatch testing (`--build`/`--password`).
 
-## [0.0.2] - 2026-07-18
-
-Walking skeleton (milestone M0). Not a playable release.
-
-### Added
+### Added (the M0 walking skeleton, 2026-07-18, folded in - 0.0.2 was never released on its own)
 - Repository scaffold per the pipeline design: layered projects (`Core`/`Transport`/`Api`/`Shim`/
   `LocoMP`/`Server`) with the game-free vs game-touching split enforced by target frameworks.
 - Single version source (`Directory.Build.props`) and central package pinning
