@@ -82,7 +82,7 @@ for (int i = 0; i < opts.Count; i++)
         driver = new ConsistDriver(world, opts.ConsistCars, opts.ConsistSpeed, opts.Seed + i, name, Console.WriteLine,
             startEdge, opts.Liveries, opts.CargoId, opts.CargoAmount,
             derailCarIndex: opts.DerailCar - 1, derailPose: derailPose, carGeometry: opts.ConsistGeometry(),
-            coupledGap: opts.CoupledGap);
+            coupledGap: opts.CoupledGap, cosmetics: opts.Cosmetics);
     }
     ClaimDriver? claimDriver = (opts.ClaimServerTrain && world != null)
         ? new ClaimDriver(world, opts.ConsistSpeed, opts.DriveSeconds, opts.Seed + i, name, Console.WriteLine, startEdge)

@@ -84,10 +84,18 @@ public sealed class ConsistDriver
     private bool _registerSent;
     private bool _streaming;
 
+    // A1.1 rig (--cosmetics): a scripted pattern streamed from the lead car so a watching client
+    // can verify the replica's rendered effects against this console's transition lines. The bot
+    // has no sim, so the values are synthesized — which is exactly what the wire carries anyway.
+    private readonly bool _cosmetics;
+    private double _cosmeticClock;  // pattern time — survives re-registration so the cycle reads continuously
+    private double _cosmeticAccum;  // 4 Hz send gate (the Shim's owner cadence)
+    private int _lastOn = -1, _lastSand = -1, _lastRpm = -1, _lastSmoke = -1; // -1 = never sent → full first send
+
     public ConsistDriver(WorldTopology topology, int carCount, double speed, int seed, string name, Action<string> log,
                          uint? startEdgeId = null, string[]? liveries = null, string cargoId = "", float cargoAmount = 0f,
                          int derailCarIndex = -1, Pose derailPose = default, CarGeometry[]? carGeometry = null,
-                         double? coupledGap = null)
+                         double? coupledGap = null, bool cosmetics = false)
     {
         _carCount = Math.Max(1, carCount);
         _coupledGap = coupledGap ?? DefaultCoupledCouplerGap;
@@ -110,6 +118,10 @@ public sealed class ConsistDriver
         }
         double totalLength = _offsets[_carCount - 1] + _lengths[_carCount - 1];
         _walker = new TopologyWalker(topology, seed, tailCapacityM: totalLength + 100, startEdgeId);
+        // Speed 0 = a stationary prop (the A1.1 cosmetic rig). Behind() serves from trail history,
+        // which only builds by advancing — without this pre-roll a parked consist never streams a
+        // single snapshot (the bot-side twin of R4-H's server-walker pre-roll).
+        if (speed == 0) _walker.Advance(totalLength + 1);
         _speed = speed;
         _baseSpeed = speed;
         _name = name;
@@ -120,6 +132,7 @@ public sealed class ConsistDriver
         _derailCarIndex = derailCarIndex;
         _derailPose = derailPose;
         _token = (uint)Interlocked.Increment(ref _nextToken);
+        _cosmetics = cosmetics;
         _walker.JunctionCrossed += (id, branch) => _pendingThrows.Enqueue((id, branch));
     }
 
@@ -205,6 +218,40 @@ public sealed class ConsistDriver
 
         client.Trains.SendSnapshot(new TrainsetSnapshot(_trainsetId, def.Epoch, client.EstimatedServerTimeMs, cars));
         SnapshotsSent++;
+
+        if (_cosmetics && _leadCarId >= 0) CosmeticTick(client, dt);
+    }
+
+    /// <summary>The --cosmetics pattern: engine 40 s ON / 15 s OFF; while running, the sander
+    /// toggles every 10 s and rpm sweeps a 12 s sine (smoke follows rpm). Change-gated at 4 Hz —
+    /// the same cadence the Shim's owner sampler uses — with transitions logged for the watcher.</summary>
+    private void CosmeticTick(NetClient client, double dt)
+    {
+        _cosmeticClock += dt;
+        _cosmeticAccum += dt;
+        if (_cosmeticAccum < 0.25) return;
+        _cosmeticAccum = 0;
+
+        double t = _cosmeticClock;
+        bool on = t % 55 < 40;
+        bool sand = on && t % 20 < 10;
+        double rpm = on ? 0.55 + 0.35 * Math.Sin(Math.PI * 2 * t / 12) : 0;
+        int bOn = on ? 255 : 0;
+        int bSand = sand ? 255 : 0;
+        int bRpm = (int)Math.Round(rpm * 255);
+        int bSmoke = bRpm;
+
+        var entries = new List<(byte kind, byte value)>(4);
+        if (bOn != _lastOn) entries.Add(((byte)CosmeticKind.EngineOn, (byte)bOn));
+        if (bSand != _lastSand) entries.Add(((byte)CosmeticKind.SandFlow, (byte)bSand));
+        if (bRpm != _lastRpm) entries.Add(((byte)CosmeticKind.EngineRpm, (byte)bRpm));
+        if (bSmoke != _lastSmoke) entries.Add(((byte)CosmeticKind.SmokeIntensity, (byte)bSmoke));
+        if (entries.Count == 0) return;
+
+        client.Trains.SendCosmetic(_leadCarId, entries);
+        if (bOn != _lastOn) _log($"[{_name}] cosmetics car {_leadCarId}: engine {(on ? "ON" : "OFF")}");
+        if (bSand != _lastSand) _log($"[{_name}] cosmetics car {_leadCarId}: sander {(sand ? "ON" : "OFF")}");
+        _lastOn = bOn; _lastSand = bSand; _lastRpm = bRpm; _lastSmoke = bSmoke;
     }
 
     private string KindFor(int carIndex)
@@ -220,6 +267,7 @@ public sealed class ConsistDriver
         _trainsetId = -1;
         _registerSent = false;
         _streaming = false;
+        _lastOn = _lastSand = _lastRpm = _lastSmoke = -1; // new session/car id → full cosmetic resend
         client.Trains.TrainsetRegistered += (token, def) =>
         {
             if (token != _token) return;
