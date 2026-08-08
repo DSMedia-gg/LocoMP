@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Your wallet updates the moment a fee is charged.** Server-priced radio fees (delete, rerail)
+  billed correctly but the in-game money display only refreshed when you joined — every charge
+  looked like it never happened. Charges and refunds now push the new balance (and an audit
+  event) to your client immediately.
+- **Refused radio actions say so.** A delete or rerail the server refuses — can't afford it, you
+  already own the car, unsupported target — now shows up in your log and on the server console
+  instead of silently doing nothing.
+- **No more joining (or hosting) while your save is still loading.** The multiplayer screens
+  refused nothing during the load screen; starting a session there crashed the game and could
+  corrupt your career money (the mod captured your balance before the save had loaded it, then
+  "restored" that wrong number later). Every session entry now waits for the world to finish
+  loading and says so.
+- **Remote locos' effects render again.** Sand plumes, exhaust and engine state streamed from
+  another player could stay lifeless forever if their car's simulation wasn't built the instant
+  the first packet arrived; the mod now retries until the car is ready.
+- **Steam presence installs without the mod toggle.** The overlay-join hook and the "Derail
+  Valley with LocoMP" marker used to miss on every launch because Steam comes up a few frames
+  after mods load; they now install as soon as Steam is ready.
+
 ### Added
 - **On-time job bonuses are paid.** Completing a job inside its time limit now pays the same ×1.5
   the singleplayer game would — the bonus window runs on a clock that freezes whenever the host
