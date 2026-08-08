@@ -14,8 +14,12 @@ namespace LocoMP.UI;
 /// The M5.2 in-game host menu — the four utility groups (10-plan §5), host-only, pushed over the
 /// root screen while hosting. Every command binds the <see cref="SessionViewModel"/> only; the
 /// backend beneath is the same server-authorised path a remote admin uses, so nothing here is a
-/// host-side back door. Retained-mode like every screen: the section body rebuilds on section
-/// switch and on <see cref="SessionViewModel.Changed"/> — cheap at friend-session scale.
+/// host-side back door.
+///
+/// <para>D25 refresh discipline (10-plan §10.5): the section SHELL (form fields, static rows)
+/// builds once per section switch; <see cref="SessionViewModel.Changed"/> refreshes only the
+/// DYNAMIC containers (roster, bans, backups, diagnostics) and display labels. Pre-D25 this screen
+/// rebuilt everything on every change — a ping tick could wipe a half-typed password.</para>
 /// </summary>
 public sealed class HostMenuScreen : IScreen
 {
@@ -29,9 +33,11 @@ public sealed class HostMenuScreen : IScreen
 
     private WidgetKit? _kit;
     private RectTransform? _body;
-    private TMP_Text? _status;
+    private RectTransform? _statusRow;
+    private readonly Button?[] _sectionButtons = new Button?[Sections.Length];
     private int _section;
     private string _lastAction = "";
+    private Action? _refreshDynamic;
 
     public HostMenuScreen(SessionViewModel vm, UiPrefs prefs, Action<string> log, Action back, Func<string>? extractTopology)
     {
@@ -59,13 +65,14 @@ public sealed class HostMenuScreen : IScreen
         title.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
         kit.Button(header, "Back", _back, width: 120f);
 
-        _status = kit.Label(panel, "", dim: true);
+        _statusRow = kit.Row(panel, "Status");
 
         RectTransform tabs = kit.Row(panel, "Sections");
         for (int i = 0; i < Sections.Length; i++)
         {
             int index = i;
-            kit.Button(tabs, Sections[i], () => { _section = index; RebuildBody(); }, width: 190f);
+            _sectionButtons[i] = kit.TabButton(tabs, Sections[i],
+                () => { _section = index; RebuildBody(); }, width: 190f);
         }
 
         RectTransform bodyHost = kit.Panel(panel, name: "Body");
@@ -90,27 +97,51 @@ public sealed class HostMenuScreen : IScreen
 
     public void OnHide() => _vm.Changed -= OnChanged;
 
-    private void OnChanged() => RebuildBody();
+    /// <summary>Targeted refresh (D25): status + dynamic containers only — never the form shell,
+    /// so in-progress typing survives roster/ping/ban events.</summary>
+    private void OnChanged()
+    {
+        RefreshStatus();
+        _refreshDynamic?.Invoke();
+    }
 
     private void Note(string line)
     {
         _lastAction = line;
         _log("[ui] " + line);
-        RebuildBody();
+        OnChanged();
+    }
+
+    private void RefreshStatus()
+    {
+        if (_kit is not { } kit || _statusRow == null) return;
+        RectTransform row = _statusRow;
+        for (int i = row.childCount - 1; i >= 0; i--)
+            UnityEngine.Object.Destroy(row.GetChild(i).gameObject);
+        if (_vm.IsHost)
+        {
+            kit.Chip(row, "Hosting", ChipKind.Success);
+            if (_vm.JoinsPaused) kit.Chip(row, "Joins paused", ChipKind.Warning);
+            string players = _vm.ServerPlayerCount == 1 ? "1 player" : _vm.ServerPlayerCount + " players";
+            kit.Label(row, $"{players} · preset {_vm.PresetName}", dim: true);
+        }
+        else
+        {
+            kit.Chip(row, "Read-only", ChipKind.Neutral);
+            kit.Label(row, "Not hosting.", dim: true);
+        }
+        if (_lastAction.Length > 0) kit.Label(row, "· " + _lastAction, dim: true);
     }
 
     private void RebuildBody()
     {
         if (_body == null || _kit == null) return;
+        for (int i = 0; i < Sections.Length; i++)
+            if (_sectionButtons[i] is { } button) _kit.SetTabActive(button, i == _section);
         for (int i = _body.childCount - 1; i >= 0; i--)
             UnityEngine.Object.Destroy(_body.GetChild(i).gameObject);
-
-        if (_status != null)
-            _status.text = (_vm.IsHost
-                ? $"Hosting — {_vm.ServerPlayerCount} player(s), preset {_vm.PresetName}" +
-                  (_vm.JoinsPaused ? " — JOINS PAUSED" : "")
-                : "Not hosting — the host menu is read-only.") +
-                (_lastAction.Length > 0 ? $"   • {_lastAction}" : "");
+        RefreshStatus();
+        _refreshDynamic = null;
 
         RectTransform column = _kit.Column(_body, "Section " + Sections[_section]);
         switch (_section)
@@ -120,44 +151,65 @@ public sealed class HostMenuScreen : IScreen
             case 2: BuildWorldSave(column, _kit); break;
             case 3: BuildDiagnostics(column, _kit); break;
         }
+        _refreshDynamic?.Invoke();
     }
 
-    // ── Players: live roster with role badges, ping, and the moderation verbs ──
+    // ── Players: live roster with role chips, ping ramp, and the moderation verbs ──
 
     private void BuildPlayers(RectTransform column, WidgetKit kit)
     {
+        RectTransform dynamic = kit.Column(column, "Roster");
+        _refreshDynamic = () => RefreshPlayers(dynamic, kit);
+    }
+
+    private void RefreshPlayers(RectTransform host, WidgetKit kit)
+    {
+        if (host == null) return;
+        for (int i = host.childCount - 1; i >= 0; i--)
+            UnityEngine.Object.Destroy(host.GetChild(i).gameObject);
+
         int selfId = _vm.LocalId;
-        kit.Label(column,
-            $"you — {Badge(_vm.RoleOf(selfId))}{Ping(selfId)}", dim: true);
+        RectTransform selfRow = kit.StripedRow(host, odd: true, "Player self");
+        string selfName = _prefs.PlayerName.Length > 0 ? _prefs.PlayerName : "you";
+        TMP_Text selfLabel = kit.Label(selfRow, selfName + " (you)");
+        selfLabel.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
+        RoleChip(kit, selfRow, _vm.RoleOf(selfId));
+        PingBits(kit, selfRow, selfId);
 
         PlayerState[] players = _vm.Players;
         if (players.Length == 0)
-            kit.Label(column, "No other players connected.", dim: true);
+            kit.Subline(host, "No other players connected.");
 
+        bool odd = false;
         foreach (PlayerState p in players)
         {
             int id = p.Id;
-            RectTransform row = kit.Row(column, "Player " + id);
-            TMP_Text line = kit.Label(row, $"{p.Name}  (id {id}) — {Badge(_vm.RoleOf(id))}{Ping(id)}");
+            RectTransform row = kit.StripedRow(host, odd, "Player " + id);
+            odd = !odd;
+            TMP_Text line = kit.Label(row, p.Name);
             line.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
+            RoleChip(kit, row, _vm.RoleOf(id));
+            PingBits(kit, row, id);
             bool admin = _vm.RoleOf(id) == PlayerRole.Admin;
             kit.Button(row, admin ? "Demote" : "Promote",
                 () => { if (admin) _vm.Demote(id); else _vm.Promote(id); Note($"{(admin ? "demoted" : "promoted")} {p.Name}"); },
                 width: 110f);
-            kit.Button(row, "Kick", () => { _vm.Kick(id); Note($"kicked {p.Name}"); }, width: 90f);
-            kit.Button(row, "Ban", () => { _vm.Ban(id); Note($"banned {p.Name} for this session"); }, width: 90f);
+            kit.Button(row, "Kick", () => { _vm.Kick(id); Note($"kicked {p.Name}"); },
+                ButtonTier.Danger, width: 90f);
+            kit.Button(row, "Ban", () => { _vm.Ban(id); Note($"banned {p.Name}"); },
+                ButtonTier.Danger, width: 90f);
         }
 
         // R4-A: the session-ban list + unban — entries are (name, opaque id); the server never
         // shares keys. The request below refreshes the snapshot; an unchanged reply is deduped
-        // upstream, so this rebuild-triggered re-request cannot repaint-loop.
-        kit.Label(column, "Session bans (die with the session — U3)", dim: true);
+        // upstream, so this refresh-triggered re-request cannot repaint-loop.
+        kit.SectionLabel(host, "Session bans (cleared at session end)");
         if (_vm.Bans.Count == 0)
-            kit.Label(column, "No session bans.", dim: true);
+            kit.Subline(host, "No session bans.");
         foreach (SessionBan b in _vm.Bans)
         {
-            RectTransform row = kit.Row(column, "Ban " + b.Id);
-            TMP_Text line = kit.Label(row, $"{b.Name}  (ban {b.Id})");
+            RectTransform row = kit.Row(host, "Ban " + b.Id);
+            TMP_Text line = kit.Label(row, b.Name);
             line.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
             SessionBan entry = b;
             kit.Button(row, "Unban", () => { _vm.Unban(entry.Id); Note($"unbanned {entry.Name}"); }, width: 110f);
@@ -165,21 +217,27 @@ public sealed class HostMenuScreen : IScreen
         _vm.RequestBanList();
     }
 
-    private string Badge(PlayerRole role) => role switch
+    private void RoleChip(WidgetKit kit, RectTransform row, PlayerRole role)
     {
-        PlayerRole.Owner => "[host]",
-        PlayerRole.Admin => "[admin]",
-        _ => "player",
-    };
+        if (role == PlayerRole.Owner) kit.Chip(row, "Host", ChipKind.Warning);
+        else if (role == PlayerRole.Admin) kit.Chip(row, "Admin", ChipKind.Info);
+    }
 
-    private string Ping(int id) => _vm.PingOf(id) is int ms ? $", {ms} ms" : "";
+    private void PingBits(WidgetKit kit, RectTransform row, int id)
+    {
+        if (_vm.PingOf(id) is not int ms) return;
+        kit.PingDot(row, kit.PingColor(ms));
+        TMP_Text value = kit.Label(row, ms + " ms", dim: true, size: kit.Theme.MetaSize);
+        value.alignment = TextAlignmentOptions.MidlineRight;
+        value.gameObject.AddComponent<LayoutElement>().preferredWidth = 64f;
+    }
 
     // ── Session control: password, cap, hold-the-door, Save & Stop ──
 
     private void BuildSession(RectTransform column, WidgetKit kit)
     {
         RectTransform pwRow = kit.Row(column, "Password");
-        TMP_InputField pw = kit.LabeledField(pwRow, "Password", "empty = open session");
+        TMP_InputField pw = kit.LabeledField(pwRow, "Password", "(open session)");
         kit.Button(pwRow, "Apply", () =>
         {
             string value = pw.text.Trim();
@@ -192,101 +250,171 @@ public sealed class HostMenuScreen : IScreen
         }, width: 110f);
 
         RectTransform capRow = kit.Row(column, "Max players");
-        TMP_InputField cap = kit.LabeledField(capRow, "Max players", "1-99");
+        TMP_InputField cap = kit.LabeledField(capRow, "Max players", "1–99");
         kit.Button(capRow, "Apply", () =>
         {
             if (int.TryParse(cap.text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) && n is >= 1 and <= 99)
             {
                 _vm.SetMaxPlayers(n);
-                Note($"max players set to {n} (raising admits the queue immediately)");
+                Note($"max players set to {n}");
             }
-            else Note("max players must be 1-99");
+            else Note("max players must be 1–99");
         }, width: 110f);
 
-        kit.Toggle(column, "Pause new joins (present players and reconnects are unaffected)",
+        Toggle joins = kit.Toggle(column, "Pause new joins",
             _vm.JoinsPaused, on => { _vm.SetJoinsPaused(on); Note(on ? "joins paused" : "joins resumed"); });
+        TMP_Text preset = kit.Label(column, "", dim: true);
 
-        kit.Label(column, $"Career preset: {_vm.PresetName}", dim: true);
-
-        kit.Label(column, "", dim: true); // spacer
+        kit.Separator(column, kit.Theme.DangerDim);
         RectTransform stopRow = kit.Row(column, "Save & Stop");
-        kit.Label(stopRow, "End the session cleanly: every player is told, the career saves, your world restores.", dim: true)
+        kit.Subline(stopRow, "Saves and ends the session for all players.")
             .gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
-        kit.Button(stopRow, "Save & Stop", () => { Note("session ended by Save & Stop"); _vm.SaveAndStop(); }, width: 140f);
+        kit.Button(stopRow, "Save & Stop", () => { Note("session ended by Save & Stop"); _vm.SaveAndStop(); },
+            ButtonTier.Danger, width: 150f);
+
+        _refreshDynamic = () =>
+        {
+            if (preset != null) preset.text = $"Career preset: {_vm.PresetName}";
+            if (joins != null) joins.SetIsOnWithoutNotify(_vm.JoinsPaused);
+        };
     }
 
-    // ── World/save: save-now, autosave cadence, backup rotation, the extractor ──
+    // ── World/save: save-now, autosave cadence, backup rotation, the exporter ──
 
     private void BuildWorldSave(RectTransform column, WidgetKit kit)
     {
         RectTransform saveRow = kit.Row(column, "Save now");
-        kit.Label(saveRow, $"Autosave every {_vm.AutosaveSeconds}s.", dim: true)
-            .gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
+        TMP_Text autosaveLine = kit.Label(saveRow, "", dim: true);
+        autosaveLine.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
         kit.Button(saveRow, "Save now", () => { _vm.SaveNow(); Note("save requested"); }, width: 120f);
 
         RectTransform intervalRow = kit.Row(column, "Autosave interval");
-        TMP_InputField interval = kit.LabeledField(intervalRow, "Autosave (s)", "5-3600");
+        TMP_InputField interval = kit.LabeledField(intervalRow, "Autosave (s)", "5–3600");
         kit.Button(intervalRow, "Apply", () =>
         {
             if (int.TryParse(interval.text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int s) && s is >= 5 and <= 3600)
             {
                 _vm.SetAutosaveInterval(s);
-                Note($"autosave interval set to {s}s");
+                Note($"autosave interval set to {s} s");
             }
-            else Note("autosave interval must be 5-3600 seconds");
+            else Note("autosave interval must be 5–3600 seconds");
         }, width: 110f);
 
-        kit.Label(column, "Backups (newest first) — restoring ends the session so the rollback sticks; " +
-                          "the career you roll away from becomes backup 1.", dim: true);
+        kit.SectionLabel(column, "Backups (newest first)");
+        kit.Subline(column, "Restoring ends the session.");
+        RectTransform backups = kit.Column(column, "Backup Rows");
+
+        RectTransform exportRow = kit.Row(column, "Exporter");
+        kit.Subline(exportRow, "Export world topology (.lmpw).")
+            .gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
+        kit.Button(exportRow, "Export",
+            () => Note(_extractTopology?.Invoke() ?? "exporter unavailable"),
+            ButtonTier.Secondary, enabled: _extractTopology != null, width: 120f);
+
+        _refreshDynamic = () => RefreshBackups(backups, kit, autosaveLine);
+    }
+
+    private void RefreshBackups(RectTransform host, WidgetKit kit, TMP_Text autosaveLine)
+    {
+        if (autosaveLine != null) autosaveLine.text = $"Autosave every {_vm.AutosaveSeconds} s.";
+        if (host == null) return;
+        for (int i = host.childCount - 1; i >= 0; i--)
+            UnityEngine.Object.Destroy(host.GetChild(i).gameObject);
         var backups = _vm.Backups;
         if (backups.Count == 0)
-            kit.Label(column, "No backups yet — one rotates in at each save.", dim: true);
+        {
+            kit.Subline(host, "No backups yet — one rotates in at each save.");
+            return;
+        }
+        bool odd = false;
         foreach (SaveBackupInfo b in backups)
         {
             SaveBackupInfo backup = b;
-            RectTransform row = kit.Row(column, "Backup " + backup.Index);
+            RectTransform row = kit.StripedRow(host, odd, "Backup " + backup.Index);
+            odd = !odd;
+            TMP_Text name = kit.Label(row, "Backup " + backup.Index);
+            name.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
             double age = (DateTime.UtcNow - backup.LastWriteUtc).TotalMinutes;
-            kit.Label(row, $"backup {backup.Index}: {backup.SizeBytes:N0} bytes, {age:F0} min old")
-                .gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
-            kit.Button(row, "Restore + end session", () =>
+            kit.Label(row, $"{Bytes(backup.SizeBytes)} · {age:F0} min ago", dim: true, size: kit.Theme.MetaSize);
+            kit.Button(row, "Restore", () =>
             {
                 if (_vm.RestoreBackupAndStop(backup.Index, out string? why))
                     Note($"restored backup {backup.Index} — session ended, host again to load it");
                 else
                     Note($"restore failed: {why}");
-            }, width: 210f);
+            }, ButtonTier.Danger, width: 120f);
         }
-
-        kit.Label(column, "", dim: true); // spacer
-        RectTransform extractRow = kit.Row(column, "Extractor");
-        kit.Label(extractRow, "Extract the world topology (.lmpw) for the dedicated server.", dim: true)
-            .gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
-        kit.Button(extractRow, "Extract topology",
-            () => Note(_extractTopology?.Invoke() ?? "extractor unavailable"),
-            enabled: _extractTopology != null, width: 170f);
     }
 
     // ── Diagnostics: the CaptureDiagnostics snapshot + copy-report ──
 
     private void BuildDiagnostics(RectTransform column, WidgetKit kit)
     {
+        RectTransform dynamic = kit.Column(column, "Diag");
+        _refreshDynamic = () => RefreshDiagnostics(dynamic, kit);
+    }
+
+    private void RefreshDiagnostics(RectTransform host, WidgetKit kit)
+    {
+        if (host == null) return;
+        for (int i = host.childCount - 1; i >= 0; i--)
+            UnityEngine.Object.Destroy(host.GetChild(i).gameObject);
         if (_vm.Diagnostics is not ServerDiagnostics diag)
         {
-            kit.Label(column, "Diagnostics are host-only.", dim: true);
+            kit.Subline(host, "Diagnostics are host-only.");
             return;
         }
-        string report = DiagnosticsReport(diag);
-        foreach (string line in report.Split('\n'))
-            kit.Label(column, line);
 
-        RectTransform row = kit.Row(column, "Copy");
-        kit.Label(row, "", dim: true).gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
-        kit.Button(row, "Copy report", () =>
+        KvRow(kit, host, "Players", $"{diag.Players}" + (diag.Queued > 0 ? $" (+{diag.Queued} queued)" : ""));
+        KvRow(kit, host, "Trainsets", diag.Trainsets.ToString(CultureInfo.InvariantCulture));
+        KvRow(kit, host, "Jobs", diag.Jobs.ToString(CultureInfo.InvariantCulture));
+        KvRow(kit, host, "Items", diag.Items.ToString(CultureInfo.InvariantCulture));
+        KvRow(kit, host, "Stale snapshots dropped", diag.StaleSnapshotsDropped.ToString(CultureInfo.InvariantCulture));
+        KvRow(kit, host, "Admins · bans", $"{diag.Admins} · {diag.BannedKeys}");
+        KvRow(kit, host, "Traffic sent", $"{Bytes(diag.BytesSent)} · {diag.MessagesSent:N0} msgs");
+        KvRow(kit, host, "Traffic received", $"{Bytes(diag.BytesReceived)} · {diag.MessagesReceived:N0} msgs");
+
+        RectTransform verdicts = kit.Row(host, "Verdicts");
+        kit.Label(verdicts, "Money", dim: true, size: kit.Theme.MetaSize);
+        kit.Chip(verdicts, diag.MoneyConservationHolds ? "OK" : "Broken",
+            diag.MoneyConservationHolds ? ChipKind.Success : ChipKind.Danger);
+        kit.Label(verdicts, "Items", dim: true, size: kit.Theme.MetaSize);
+        kit.Chip(verdicts, diag.ItemConservationHolds ? "OK" : "Broken",
+            diag.ItemConservationHolds ? ChipKind.Success : ChipKind.Danger);
+        kit.Label(verdicts, "Interest", dim: true, size: kit.Theme.MetaSize);
+        kit.Chip(verdicts, diag.InterestEnabled ? "On" : "Off",
+            diag.InterestEnabled ? ChipKind.Info : ChipKind.Neutral);
+        kit.Label(verdicts, "Joins", dim: true, size: kit.Theme.MetaSize);
+        kit.Chip(verdicts, diag.JoinsPaused ? "Paused" : "Open",
+            diag.JoinsPaused ? ChipKind.Warning : ChipKind.Info);
+
+        RectTransform row2 = kit.Row(host, "Copy");
+        kit.Label(row2, "", dim: true).gameObject.AddComponent<LayoutElement>().flexibleWidth = 1f;
+        string report = DiagnosticsReport(diag);
+        kit.Button(row2, "Copy report", () =>
         {
             GUIUtility.systemCopyBuffer = report;
             Note("diagnostics copied to the clipboard");
         }, width: 140f);
     }
+
+    private void KvRow(WidgetKit kit, RectTransform host, string key, string value)
+    {
+        RectTransform row = kit.Row(host, "Kv " + key);
+        row.GetComponent<LayoutElement>().preferredHeight = 30f;
+        TMP_Text k = kit.Label(row, key, dim: true);
+        k.gameObject.AddComponent<LayoutElement>().preferredWidth = 320f;
+        kit.Label(row, value);
+    }
+
+    /// <summary>Humanised byte counts (D25 §10.3) — panel display only; the clipboard report keeps
+    /// raw numbers (it is FOR bug reports).</summary>
+    private static string Bytes(long bytes) => bytes switch
+    {
+        >= 1024 * 1024 => (bytes / (1024.0 * 1024.0)).ToString("0.#", CultureInfo.InvariantCulture) + " MB",
+        >= 1024 => (bytes / 1024.0).ToString("0.#", CultureInfo.InvariantCulture) + " KB",
+        _ => bytes.ToString(CultureInfo.InvariantCulture) + " B",
+    };
 
     private string DiagnosticsReport(ServerDiagnostics d)
     {

@@ -18,6 +18,7 @@ public sealed class SettingsTab
     private readonly UiPrefs _prefs;
     private readonly Action<string> _log;
 
+    private WidgetKit? _kit;
     private TMP_InputField? _name;
     private TMP_InputField? _uiScale;
     private TMP_InputField? _smoothing;
@@ -50,12 +51,13 @@ public sealed class SettingsTab
             "Return", _prefs.ChatKey.ToString(), fieldWidth: 200f);
         _menuKey = kit.LabeledField(column, "Menu hotkey",
             "None", _prefs.MenuKey.ToString(), fieldWidth: 200f);
-        kit.Label(column,
+        kit.Subline(column,
             "Keys use Unity KeyCode names (Return, T, F6, None…). UI scale applies to newly " +
-            "opened LocoMP panels; everything else applies immediately.", dim: true);
+            "opened LocoMP panels; everything else applies immediately.");
 
         RectTransform actions = kit.Row(column, "Actions");
-        kit.Button(actions, "Apply & save", OnApply, width: 220f);
+        _kit = kit;
+        kit.Button(actions, "Apply & save", OnApply, ButtonTier.Primary, width: 220f);
         _hint = kit.Label(column, "", dim: true);
     }
 
@@ -68,27 +70,27 @@ public sealed class SettingsTab
 
         if (!TryFloat(_uiScale.text, UiPrefs.MinUiScale, UiPrefs.MaxUiScale, out float scale))
         {
-            _hint!.text = $"⚠ UI scale must be {F(UiPrefs.MinUiScale)}–{F(UiPrefs.MaxUiScale)}.";
+            SetHint($"⚠ UI scale must be {F(UiPrefs.MinUiScale)}–{F(UiPrefs.MaxUiScale)}.");
             return;
         }
         if (!TryFloat(_smoothing.text, UiPrefs.MinSmoothing, UiPrefs.MaxSmoothing, out float smoothing))
         {
-            _hint!.text = $"⚠ Train smoothing must be {F(UiPrefs.MinSmoothing)}–{F(UiPrefs.MaxSmoothing)}.";
+            SetHint($"⚠ Train smoothing must be {F(UiPrefs.MinSmoothing)}–{F(UiPrefs.MaxSmoothing)}.");
             return;
         }
         if (!TryFloat(_chatFade.text, UiPrefs.MinChatFade, UiPrefs.MaxChatFade, out float fade))
         {
-            _hint!.text = $"⚠ Chat fade must be {F(UiPrefs.MinChatFade)}–{F(UiPrefs.MaxChatFade)} seconds.";
+            SetHint($"⚠ Chat fade must be {F(UiPrefs.MinChatFade)}–{F(UiPrefs.MaxChatFade)} seconds.");
             return;
         }
         if (!TryKey(_chatKey.text, out KeyCode chatKey) || chatKey == KeyCode.None)
         {
-            _hint!.text = "⚠ Chat key: use a Unity KeyCode name (e.g. Return, T).";
+            SetHint("⚠ Chat key: use a Unity KeyCode name (e.g. Return, T).");
             return;
         }
         if (!TryKey(_menuKey.text, out KeyCode menuKey))
         {
-            _hint!.text = "⚠ Menu hotkey: use a Unity KeyCode name, or None for menu buttons only.";
+            SetHint("⚠ Menu hotkey: use a Unity KeyCode name, or None for menu buttons only.");
             return;
         }
 
@@ -102,7 +104,15 @@ public sealed class SettingsTab
         _prefs.MenuKey = menuKey;
         _prefs.NotifyChanged();   // live-apply fan-out (composition root + chat overlay)
         _prefs.Save(_log);
-        _hint!.text = "Settings applied and saved.";
+        SetHint("Settings applied and saved.");
+    }
+
+    private void SetHint(string text)
+    {
+        if (_hint == null || _kit == null) return;
+        _hint.text = text;
+        _hint.color = text.StartsWith("⚠", StringComparison.Ordinal)
+            ? _kit.Theme.Danger : _kit.Theme.TextDim;
     }
 
     private static string F(float value) => value.ToString("0.###", CultureInfo.InvariantCulture);

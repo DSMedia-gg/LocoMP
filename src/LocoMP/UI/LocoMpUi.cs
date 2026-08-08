@@ -96,6 +96,7 @@ public sealed class LocoMpUi
         // to the transport, whose disconnect path tears the gate down through phase changes.
         if (Gate.Active && _vm.QueuePosition > 0) Gate.Nudge(30.0);
         Gate.Tick(dt);
+        Hud.Tick(dt); // D25: the pill's spinner rides the same pump (no coroutines to leak)
         if (_pendingLeave)
         {
             // A reject's Leave is deferred here: the Rejected event fires from inside the client's
@@ -225,7 +226,8 @@ public sealed class LocoMpUi
         // Joined/Hosting do NOT clear the gate — admission precedes the burst's end; only the
         // sentinel (via done()) or Idle may take the cover down.
 
-        if (phase == SessionPhase.SessionLost) Hud.Show("SESSION LOST — leave to restore your world");
+        if (phase == SessionPhase.SessionLost)
+            Hud.Show("Session lost — leave to restore your world", alert: true);
         else if (_lastPhase == SessionPhase.SessionLost) Hud.Hide();
         _lastPhase = phase;
     }
@@ -245,7 +247,7 @@ public sealed class LocoMpUi
     private void OnQueueChanged(int position, int total)
     {
         if (!Gate.Active || position <= 0) return;
-        Gate.SetDetail($"server full — waiting for a free slot (position {position} of {total})");
+        Gate.SetDetail($"Waiting for a free slot — position {position} of {total}");
         Gate.Nudge(30.0);
     }
 
@@ -287,6 +289,7 @@ public sealed class LocoMpUi
                 ? LocoMpCanvas.CreateUnder(MenuHook.MainMenuCanvas)
                 : LocoMpCanvas.CreateOverlay();
             _theme.Font ??= MenuHook.HarvestedFont;
+            _theme.AdoptDvPalette(); // D25: semantic colours from UIColors where the build has them
             var kit = new WidgetKit(_theme);
             _router = new ScreenRouter(_canvas.Root, kit);
             _router.Push(new RootScreen(_vm, _prefs, _log, Close, openHostMenu: () =>

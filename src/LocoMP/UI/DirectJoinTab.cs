@@ -21,6 +21,7 @@ public sealed class DirectJoinTab
     private readonly UiPrefs _prefs;
     private readonly Action<string> _log;
 
+    private WidgetKit? _kit;
     private TMP_InputField? _name;
     private TMP_InputField? _address;
     private TMP_InputField? _port;
@@ -47,10 +48,12 @@ public sealed class DirectJoinTab
 
         if (_prefs.Recent.Count > 0)
         {
-            kit.Label(column, "Recent", dim: true);
+            kit.SectionLabel(column, "Recent");
             RectTransform recentRow = kit.Row(column, "Recent Endpoints");
+            int shown = 0;
             foreach ((string address, int port) in _prefs.Recent)
             {
+                if (shown++ == 3) break; // D25 §10.5: the row overflows past ~3 chips
                 string a = address;
                 int p = port;
                 kit.Button(recentRow, $"{a}:{p}", () =>
@@ -62,20 +65,31 @@ public sealed class DirectJoinTab
         }
 
         RectTransform actions = kit.Row(column, "Actions");
-        _join = kit.Button(actions, "Join", OnJoin, width: 220f);
+        _kit = kit;
+        _join = kit.Button(actions, "Join", OnJoin, ButtonTier.Primary, width: 220f);
         _hint = kit.Label(column, "", dim: true);
         Refresh();
     }
 
     public void Refresh()
     {
-        if (_join == null || _hint == null) return;
+        if (_kit == null || _join == null || _hint == null) return;
         bool worldAlive = PresenceShim.WorldAlive;
         bool idle = _vm.Phase == SessionPhase.Idle;
-        _join.interactable = idle && worldAlive;
-        _hint.text = !worldAlive
-            ? "Load your world first, then join from the pause menu (ESC → MULTIPLAYER)."
-            : idle ? "" : "Already in a session — leave it before joining another.";
+        _kit.SetEnabled(_join, idle && worldAlive, ButtonTier.Primary);
+        SetHint(!worldAlive
+            ? "Join from the pause menu once your world is loaded."
+            : idle ? "" : "Already in a session.");
+    }
+
+    /// <summary>Hints stay dim; a ⚠ validation message turns Danger (D25 §10.3: errors are red
+    /// and separate from status).</summary>
+    private void SetHint(string text)
+    {
+        if (_hint == null || _kit == null) return;
+        _hint.text = text;
+        _hint.color = text.StartsWith("⚠", StringComparison.Ordinal)
+            ? _kit.Theme.Danger : _kit.Theme.TextDim;
     }
 
     private void OnJoin()
@@ -84,13 +98,13 @@ public sealed class DirectJoinTab
         string address = _address.text.Trim();
         if (address.Length == 0)
         {
-            if (_hint != null) _hint.text = "⚠ Enter a server address.";
+            SetHint("⚠ Enter a server address.");
             return;
         }
         if (!int.TryParse(_port.text.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int port)
             || port is <= 0 or >= 65536)
         {
-            if (_hint != null) _hint.text = "⚠ Port must be 1–65535.";
+            SetHint("⚠ Port must be 1–65535.");
             return;
         }
 

@@ -40,12 +40,12 @@ public sealed class FriendsTab
         RectTransform column = kit.Column(parent, "Friends");
 
         RectTransform header = kit.Row(column, "Friends Header");
-        TMP_Text title = kit.Label(header, "Steam friends running LocoMP", dim: true);
+        TMP_Text title = kit.Label(header, "Steam friends in LocoMP", dim: true);
         var titleElement = title.gameObject.AddComponent<UnityEngine.UI.LayoutElement>();
         titleElement.flexibleWidth = 1f;
         kit.Button(header, "Refresh", Rescan, width: 140f);
 
-        _password = kit.LabeledField(column, "Password (if their session has one)", "(none)", masked: true);
+        _password = kit.LabeledField(column, "Password", "(none)", masked: true);
         _rowsHost = kit.Column(column, "Friend Rows");
         _hint = kit.Label(column, "", dim: true);
     }
@@ -56,21 +56,22 @@ public sealed class FriendsTab
     /// <summary>Cheap re-evaluation on every view-model change: button gates only, no Steam calls.</summary>
     public void Refresh()
     {
-        if (_hint == null) return;
+        if (_hint == null || _kit == null) return;
         bool idle = _vm.Phase == SessionPhase.Idle;
         bool worldAlive = PresenceShim.WorldAlive;
         foreach ((FriendEntry entry, UnityEngine.UI.Button? join, UnityEngine.UI.Button? invite) in _rows)
         {
-            if (join != null) join.interactable = entry.JoinableHost != null && idle && worldAlive;
-            if (invite != null) invite.interactable = _vm.IsHost;
+            if (join != null)
+                _kit.SetEnabled(join, entry.JoinableHost != null && idle && worldAlive, ButtonTier.Primary);
+            if (invite != null) _kit.SetEnabled(invite, _vm.IsHost);
         }
         _hint.text = !SteamPresence.Available
-            ? "Steam isn't available — launch Derail Valley through Steam."
+            ? "Launch Derail Valley through Steam to use Friends."
             : !worldAlive
-                ? "Load your world first, then join from the pause menu (ESC → MULTIPLAYER)."
+                ? "Load your world first."
                 : _rows.Count == 0
-                    ? "No friends in LocoMP right now. Invite appears here while you host."
-                    : _vm.IsHost ? "Invite opens the Steam overlay's confirmation on their side." : "";
+                    ? "No friends in LocoMP right now."
+                    : "";
     }
 
     private void Rescan()
@@ -80,9 +81,11 @@ public sealed class FriendsTab
             UnityEngine.Object.Destroy(_rowsHost.GetChild(i).gameObject);
         _rows.Clear();
 
+        bool odd = false;
         foreach (FriendEntry entry in SteamPresence.ActiveFriends())
         {
-            RectTransform row = _kit.Row(_rowsHost, "Friend " + entry.Id);
+            RectTransform row = _kit.StripedRow(_rowsHost, odd, "Friend " + entry.Id);
+            odd = !odd;
             string status = entry.JoinableHost != null ? "in a session" : "in Derail Valley";
             TMP_Text label = _kit.Label(row, $"{entry.Name} — {status}");
             var labelElement = label.gameObject.AddComponent<UnityEngine.UI.LayoutElement>();
@@ -91,7 +94,7 @@ public sealed class FriendsTab
             FriendEntry captured = entry;
             UnityEngine.UI.Button? join = null;
             if (entry.JoinableHost != null)
-                join = _kit.Button(row, "Join", () => OnJoin(captured), width: 120f);
+                join = _kit.Button(row, "Join", () => OnJoin(captured), ButtonTier.Primary, width: 120f);
             UnityEngine.UI.Button invite = _kit.Button(row, "Invite", () => OnInvite(captured),
                 enabled: _vm.IsHost, width: 120f);
             _rows.Add((entry, join, invite));

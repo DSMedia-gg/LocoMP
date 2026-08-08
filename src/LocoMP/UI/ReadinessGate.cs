@@ -17,8 +17,10 @@ public readonly struct GateFailure
 
 /// <summary>
 /// The readiness-gate primitive (M5.0 step 5, plan §5): a full-screen input-blocking cover with
-/// staged progress text, used at every coherence boundary (join snapshot, world handover,
-/// reconnect restore, Save &amp; Stop teardown — wired per boundary at their own slices, U5).
+/// staged progress, used at every coherence boundary (join snapshot, world handover, reconnect
+/// restore, Save &amp; Stop teardown — wired per boundary at their own slices, U5). D25 renders the
+/// stages as a checklist (done · current · pending dots) with a slim display-only bar — the paint
+/// changed, the doctrine did not.
 ///
 /// <b>The invariant is structural: the timer can only FAIL, never clear.</b> The one clear path
 /// is the real completion signal (<c>done()</c>); the failsafe resolves to an explanatory state
@@ -31,6 +33,7 @@ public sealed class ReadinessGate
     private readonly Action<string> _log;
     private readonly LocoMpTheme _theme;
     private readonly List<string> _stages = new();
+    private readonly List<(Image dot, TMP_Text label)> _stageRows = new();
     private int _stage;
     private string? _detail;
     private Func<bool>? _done;
@@ -39,10 +42,12 @@ public sealed class ReadinessGate
     private Action? _onGiveUp;
     private bool _failed;
     private bool _explainPinned; // player-summoned explain (ESC) — Nudge must not auto-dismiss it
+    private double _pulse;
 
     private GameObject? _coverGo;
     private TMP_Text? _titleText;
     private TMP_Text? _stageText;
+    private RectTransform? _barFill;
     private GameObject? _explainGo;
 
     public ReadinessGate(LocoMpTheme theme, Action<string> log)
@@ -80,16 +85,16 @@ public sealed class ReadinessGate
     {
         _stage = Mathf.Clamp(index, 0, _stages.Count - 1);
         _detail = null;
-        RefreshStageText();
+        RefreshStages();
     }
 
-    /// <summary>Replace the stage line with a live detail ("waiting for a free slot — position 2
+    /// <summary>Replace the detail line with live context ("waiting for a free slot — position 2
     /// of 3", D18). Display only, like SetStage; the next real stage transition clears it, and a
     /// failsafe fired over a detail names IT as the stalled stage — honest either way.</summary>
     public void SetDetail(string text)
     {
         _detail = text;
-        RefreshStageText();
+        RefreshStages();
     }
 
     /// <summary>"Keep waiting" — from the explain screen, or programmatically.</summary>
@@ -101,7 +106,7 @@ public sealed class ReadinessGate
         {
             _failed = false;
             if (_explainGo != null) _explainGo.SetActive(false);
-            RefreshStageText();
+            RefreshStages();
         }
     }
 
@@ -117,7 +122,7 @@ public sealed class ReadinessGate
         {
             _failed = false;
             if (_explainGo != null) _explainGo.SetActive(false);
-            RefreshStageText();
+            RefreshStages();
         }
     }
 
@@ -145,6 +150,7 @@ public sealed class ReadinessGate
             Clear();
             return;
         }
+        PulseCurrentStage(dt);
         if (_failed) return; // explain screen is up — the clock stops until the player decides
         if ((_failsafe -= dt) <= 0)
         {
@@ -163,6 +169,8 @@ public sealed class ReadinessGate
         _explainGo = null;
         _titleText = null;
         _stageText = null;
+        _barFill = null;
+        _stageRows.Clear();
         _stages.Clear();
         _detail = null;
         _done = null;
@@ -213,7 +221,7 @@ public sealed class ReadinessGate
         dim.raycastTarget = true; // the input barrier — clicks stop here
 
         var kit = new WidgetKit(_theme);
-        RectTransform column = kit.Panel(dimRect, vertical: true, name: "Center");
+        RectTransform column = kit.Panel(dimRect, vertical: true, name: "Center", framed: false);
         column.anchorMin = new Vector2(0.5f, 0.5f);
         column.anchorMax = new Vector2(0.5f, 0.5f);
         column.pivot = new Vector2(0.5f, 0.5f);
@@ -224,40 +232,108 @@ public sealed class ReadinessGate
 
         _titleText = kit.Label(column, title, dim: false, size: _theme.TitleSize);
         _titleText.alignment = TextAlignmentOptions.Center;
-        _stageText = kit.Label(column, "", dim: true);
+
+        // D25 §10.2: the staged checklist — every stage visible, state = colour (done · current ·
+        // pending). Glyph-free (dots) so a font-harvest miss can't blank it.
+        foreach (string stage in _stages)
+        {
+            RectTransform row = kit.Row(column, "Stage " + stage);
+            row.GetComponent<LayoutElement>().preferredHeight = 30f;
+            var spacer = new GameObject("Indent", typeof(RectTransform));
+            spacer.transform.SetParent(row, worldPositionStays: false);
+            spacer.AddComponent<LayoutElement>().preferredWidth = 200f;
+            Image dot = kit.PingDot(row, _theme.TextDisabled, size: 10f);
+            TMP_Text label = kit.Label(row, stage, dim: true, size: _theme.Size - 2);
+            _stageRows.Add((dot, label));
+        }
+
+        var barGo = new GameObject("Bar", typeof(RectTransform), typeof(Image));
+        var barRect = (RectTransform)barGo.transform;
+        barRect.SetParent(column, worldPositionStays: false);
+        barGo.GetComponent<Image>().color = _theme.Hairline;
+        barGo.GetComponent<Image>().raycastTarget = false;
+        barGo.AddComponent<LayoutElement>().preferredHeight = 4f;
+        var fillGo = new GameObject("Fill", typeof(RectTransform), typeof(Image));
+        _barFill = (RectTransform)fillGo.transform;
+        _barFill.SetParent(barRect, worldPositionStays: false);
+        _barFill.anchorMin = Vector2.zero;
+        _barFill.anchorMax = new Vector2(0f, 1f);
+        _barFill.offsetMin = Vector2.zero;
+        _barFill.offsetMax = Vector2.zero;
+        fillGo.GetComponent<Image>().color = _theme.Accent;
+        fillGo.GetComponent<Image>().raycastTarget = false;
+
+        _stageText = kit.Label(column, "", dim: true, size: _theme.MetaSize + 2);
         _stageText.alignment = TextAlignmentOptions.Center;
-        RefreshStageText();
+        RefreshStages();
 
         // The explain state, hidden until the failsafe fires: name the stalled stage, offer
         // keep-waiting / give-up. Built up front so failure needs no construction work.
-        var explainKit = kit;
-        RectTransform explain = explainKit.Panel(column, vertical: true, name: "Explain");
+        RectTransform explain = kit.Panel(column, vertical: true, name: "Explain");
         explain.GetComponent<Image>().color = _theme.PanelLight;
+        if (explain.Find("Border") is { } frame && frame.TryGetComponent(out Image frameImage))
+            frameImage.color = _theme.DangerDim; // red-framed break-glass surface (D25)
         _explainGo = explain.gameObject;
-        explainKit.Label(explain, "This is taking longer than expected.", dim: false);
-        var buttons = explainKit.Row(explain, "ExplainButtons");
-        explainKit.Button(buttons, "Keep waiting (+30 s)", () => ExtendFailsafe(30), width: 260f);
-        explainKit.Button(buttons, "Give up", () =>
+        kit.Label(explain, "This is taking longer than expected.", dim: false);
+        var buttons = kit.Row(explain, "ExplainButtons");
+        kit.Button(buttons, "Keep waiting", () => ExtendFailsafe(30), ButtonTier.Primary, width: 200f);
+        kit.Button(buttons, "Give up", () =>
         {
             Action? giveUp = _onGiveUp;
             _log("[ui] readiness gate abandoned by the player");
             Clear();
             giveUp?.Invoke();
-        }, width: 160f);
+        }, ButtonTier.Danger, width: 160f);
         _explainGo.SetActive(false);
     }
 
     private void ShowExplain(GateFailure failure)
     {
         if (_explainGo == null) return;
-        if (_stageText != null) _stageText.text = $"stalled at: {failure.StalledStage}";
+        if (_stageText != null) _stageText.text = $"Stalled at: {failure.StalledStage}";
         _explainGo.SetActive(true);
     }
 
-    private void RefreshStageText()
+    private void RefreshStages()
     {
-        if (_stageText == null || _stages.Count == 0) return;
-        _stageText.text = _detail
-            ?? $"{_stages[Math.Min(_stage, _stages.Count - 1)]}  ({_stage + 1}/{_stages.Count})";
+        if (_stages.Count == 0) return;
+        int current = Math.Min(_stage, _stages.Count - 1);
+        for (int i = 0; i < _stageRows.Count; i++)
+        {
+            (Image dot, TMP_Text label) = _stageRows[i];
+            if (dot == null || label == null) continue;
+            if (i < current)
+            {
+                dot.color = _theme.Success;
+                label.color = _theme.Success;
+            }
+            else if (i == current)
+            {
+                dot.color = _theme.Accent;
+                label.color = _theme.Text;
+            }
+            else
+            {
+                dot.color = _theme.TextDisabled;
+                label.color = _theme.TextDisabled;
+            }
+        }
+        if (_barFill != null)
+            _barFill.anchorMax = new Vector2((current + 0.5f) / _stages.Count, 1f); // display only
+        if (_stageText != null) _stageText.text = _detail ?? "";
+    }
+
+    /// <summary>The current stage's dot breathes (display only; driven from the existing Tick —
+    /// no coroutines, nothing survives Clear()).</summary>
+    private void PulseCurrentStage(double dt)
+    {
+        _pulse += dt;
+        int current = Math.Min(_stage, _stages.Count - 1);
+        if (current < 0 || current >= _stageRows.Count) return;
+        Image dot = _stageRows[current].dot;
+        if (dot == null) return;
+        Color c = _theme.Accent;
+        c.a = 0.55f + 0.45f * Mathf.Sin((float)(_pulse * 4.0));
+        dot.color = c;
     }
 }

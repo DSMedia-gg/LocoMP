@@ -43,6 +43,7 @@ public sealed class ChatOverlay
     private TMP_InputField? _input;
     private string _accentHex = "5FA8E0";
     private string _dimHex = "8C99A6";
+    private string _warnHex = "D9A33B";
     private bool _wasInSession;
     private float _nextRepaint;
     private int _openedFrame = -1;
@@ -229,6 +230,8 @@ public sealed class ChatOverlay
 
     private void AppendLine(StringBuilder sb, ChatEntry e)
     {
+        // D25 §10.2: three voices, three weights — players carry the accent, the server is
+        // amber-tagged, system events go italic-dim. Our own markup; player text stays escaped.
         switch (e.Kind)
         {
             case ChatMessageKind.Player:
@@ -236,11 +239,11 @@ public sealed class ChatOverlay
                   .Append(":</color> ").Append(Escape(e.Text));
                 break;
             case ChatMessageKind.Server:
-                sb.Append("<color=#").Append(_accentHex).Append(">[server]</color> ").Append(Escape(e.Text));
+                sb.Append("<color=#").Append(_warnHex).Append(">[server]</color> ").Append(Escape(e.Text));
                 break;
             default:
-                sb.Append("<color=#").Append(_dimHex).Append(">* ").Append(Escape(e.SenderName))
-                  .Append(' ').Append(SystemVerb(e.Kind)).Append("</color>");
+                sb.Append("<color=#").Append(_dimHex).Append("><i>* ").Append(Escape(e.SenderName))
+                  .Append(' ').Append(SystemVerb(e.Kind)).Append("</i></color>");
                 break;
         }
     }
@@ -265,6 +268,8 @@ public sealed class ChatOverlay
         _theme.Font ??= MenuHook.HarvestedFont;
         _accentHex = ColorUtility.ToHtmlStringRGB(_theme.Accent);
         _dimHex = ColorUtility.ToHtmlStringRGB(_theme.TextDim);
+        var kit = new WidgetKit(_theme); // also generates the rounded sprites (D25)
+        _warnHex = ColorUtility.ToHtmlStringRGB(_theme.Warning);
 
         _go = new GameObject("LocoMP ChatOverlay", typeof(RectTransform));
         var canvas = _go.AddComponent<Canvas>();
@@ -293,6 +298,11 @@ public sealed class ChatOverlay
         backgroundRect.offsetMax = Vector2.zero;
         _background = backgroundGo.GetComponent<Image>();
         _background.raycastTarget = false; // the feed never eats clicks aimed at the world
+        if (_theme.RoundedFill != null)
+        {
+            _background.sprite = _theme.RoundedFill; // soft corners (D25); flat fallback otherwise
+            _background.type = Image.Type.Sliced;
+        }
 
         var feedGo = new GameObject("Feed", typeof(RectTransform));
         var feedRect = (RectTransform)feedGo.transform;
@@ -317,15 +327,22 @@ public sealed class ChatOverlay
         rowRect.pivot = new Vector2(0.5f, 0f);
         rowRect.anchoredPosition = Vector2.zero;
         rowRect.sizeDelta = new Vector2(0f, InputHeight);
+        var rowLayout = rowGo.AddComponent<UnityEngine.UI.HorizontalLayoutGroup>();
+        rowLayout.spacing = 6f;
+        rowLayout.childControlWidth = true;
+        rowLayout.childControlHeight = true;
+        rowLayout.childForceExpandWidth = false;
+        rowLayout.childAlignment = TextAnchor.MiddleLeft;
         _inputRow = rowGo;
 
-        var kit = new WidgetKit(_theme);
+        // D25: a prompt glyph anchors the open input row; the field's own focus ring (kit-owned
+        // accent border) marks it live.
+        TMP_Text prompt = kit.Label(rowRect, ">", dim: false, size: 20);
+        prompt.color = _theme.Accent;
+        prompt.alignment = TextAlignmentOptions.Midline;
+        prompt.gameObject.AddComponent<UnityEngine.UI.LayoutElement>().preferredWidth = 18f;
         _input = kit.Field(rowRect, "press Enter to chat");
-        var inputRect = (RectTransform)_input.transform;
-        inputRect.anchorMin = Vector2.zero;   // manual rect — no layout group out here
-        inputRect.anchorMax = Vector2.one;
-        inputRect.offsetMin = Vector2.zero;
-        inputRect.offsetMax = Vector2.zero;
+        _input.GetComponent<UnityEngine.UI.LayoutElement>().flexibleWidth = 1f;
         _input.characterLimit = ChatPolicy.MaxLength;
         _input.onSubmit.AddListener(Submit);
         // Clicking away while typing deselects the field: the keyboard is released by the kit's

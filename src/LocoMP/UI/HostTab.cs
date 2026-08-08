@@ -20,6 +20,7 @@ public sealed class HostTab
     private readonly UiPrefs _prefs;
     private readonly Action<string> _log;
 
+    private WidgetKit? _kit;
     private TMP_InputField? _name;
     private TMP_InputField? _port;
     private TMP_InputField? _password;
@@ -50,26 +51,35 @@ public sealed class HostTab
         _maxPlayers = kit.LabeledField(column, "Max players", "32", "32", fieldWidth: 140f);
         _autosave = kit.LabeledField(column, "Autosave (seconds)", "120", "120", fieldWidth: 140f);
 
-        kit.Toggle(column, "Shared career (classic co-op)", _sharedCareer, v => _sharedCareer = v);
-        kit.Toggle(column, "Fresh career (ignore saved)", _freshCareer, v => _freshCareer = v);
-        kit.Toggle(column, "Auto-grant my licenses to joining players", _autoGrant, v => _autoGrant = v);
-        kit.Toggle(column, "Only stream nearby trains/players (saves bandwidth)", _interest, v => _interest = v);
+        kit.Toggle(column, "Shared career", _sharedCareer, v => _sharedCareer = v);
+        kit.Toggle(column, "Fresh career", _freshCareer, v => _freshCareer = v);
+        kit.Toggle(column, "Auto-grant licenses", _autoGrant, v => _autoGrant = v);
+        kit.Toggle(column, "Only sync nearby trains and players", _interest, v => _interest = v);
 
         RectTransform actions = kit.Row(column, "Actions");
-        _host = kit.Button(actions, "Host session", OnHost, width: 220f);
+        _kit = kit;
+        _host = kit.Button(actions, "Host session", OnHost, ButtonTier.Primary, width: 220f);
         _hint = kit.Label(column, "", dim: true);
         Refresh();
     }
 
     public void Refresh()
     {
-        if (_host == null || _hint == null) return;
+        if (_kit == null || _host == null || _hint == null) return;
         bool worldAlive = PresenceShim.WorldAlive;
         bool idle = _vm.Phase == SessionPhase.Idle;
-        _host.interactable = idle && worldAlive;
-        _hint.text = !worldAlive
-            ? "Load your world first — your world is the session's world (ESC → MULTIPLAYER)."
-            : idle ? "" : "Already in a session — leave it before hosting.";
+        _kit.SetEnabled(_host, idle && worldAlive, ButtonTier.Primary);
+        SetHint(!worldAlive
+            ? "Host from the pause menu once your world is loaded."
+            : idle ? "" : "Already in a session.");
+    }
+
+    private void SetHint(string text)
+    {
+        if (_hint == null || _kit == null) return;
+        _hint.text = text;
+        _hint.color = text.StartsWith("⚠", StringComparison.Ordinal)
+            ? _kit.Theme.Danger : _kit.Theme.TextDim;
     }
 
     private void OnHost()
@@ -77,17 +87,17 @@ public sealed class HostTab
         if (_name == null || _port == null || _password == null || _maxPlayers == null || _autosave == null) return;
         if (!TryParse(_port.text, 1, 65535, out int port))
         {
-            _hint!.text = "⚠ Port must be 1–65535.";
+            SetHint("⚠ Port must be 1–65535.");
             return;
         }
         if (!TryParse(_maxPlayers.text, 1, 256, out int maxPlayers))
         {
-            _hint!.text = "⚠ Max players must be 1–256.";
+            SetHint("⚠ Max players must be 1–256.");
             return;
         }
         if (!TryParse(_autosave.text, 15, 3600, out int autosaveSeconds))
         {
-            _hint!.text = "⚠ Autosave must be 15–3600 seconds.";
+            SetHint("⚠ Autosave must be 15–3600 seconds.");
             return;
         }
 
