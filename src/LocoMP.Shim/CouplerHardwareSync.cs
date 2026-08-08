@@ -151,13 +151,13 @@ public sealed class CouplerHardwareSync : IDisposable
                     HoseAndCock? b = LiveEnd(report.CarB, report.EndB);
                     if (a == null || b == null) return; // not spawned yet — the reconcile tick imposes later
                     if (a.IsHoseConnected || b.IsHoseConnected) return; // DV settles first; reconcile retries
-                    a.Connect(b);
+                    ConnectHose(report.CarA, report.EndA, report.CarB, report.EndB, a, b, playAudio: true);
                     break;
                 }
                 case CouplerHardwareKind.HoseDisconnect:
                 {
                     HoseAndCock? a = LiveEnd(report.CarA, report.EndA);
-                    if (a != null && a.IsHoseConnected) a.Disconnect();
+                    if (a != null && a.IsHoseConnected) DisconnectHose(report.CarA, report.EndA, a, playAudio: true);
                     break;
                 }
                 case CouplerHardwareKind.CockSet:
@@ -222,7 +222,7 @@ public sealed class CouplerHardwareSync : IDisposable
                         if (mirror.HoseParted(carId, end) || mirror.HoseParted(pc, pe))
                         {
                             _applying = true;
-                            try { hose.Disconnect(); } finally { _applying = false; }
+                            try { DisconnectHose(carId, end, hose, playAudio: false); } finally { _applying = false; }
                         }
                         else if (mirrored is null)
                         {
@@ -236,7 +236,7 @@ public sealed class CouplerHardwareSync : IDisposable
                     if (partner != null && !partner.IsHoseConnected)
                     {
                         _applying = true;
-                        try { hose.Connect(partner); } finally { _applying = false; }
+                        try { ConnectHose(carId, end, mc, me, hose, partner, playAudio: false); } finally { _applying = false; }
                     }
                 }
 
@@ -410,6 +410,43 @@ public sealed class CouplerHardwareSync : IDisposable
             MultipleUnitModule? mu = car != null ? car.muModule : null;
             if (mu == null) return null;
             return end == CoupleEnd.Front ? mu.FrontCable : mu.RearCable;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>R5-4: brake-hose changes must go through the COUPLER seam, never raw HoseAndCock.
+    /// The visual hose rope (CouplingHoseCouplerAdapter) subscribes to the Coupler INSTANCE event
+    /// <c>HoseConnectionChanged</c>, which only <c>ConnectAirHose</c>/<c>DisconnectAirHose</c> fire;
+    /// <c>HoseAndCock.Connect/Disconnect</c> fires only the static Brakeset event (our capture seam).
+    /// A raw-sim impose therefore leaves the rope model behind — R5's "parted hose re-rigged
+    /// connected by the rejoin" was the respawn re-rig's rope surviving a CORRECT sim-side impose
+    /// (the cock lever held because its visual follows <c>CockChanged</c>, which SetCock does fire).
+    /// Falls back to the raw path when a coupler is unresolvable, so sim truth never regresses.</summary>
+    private void ConnectHose(int carA, CoupleEnd endA, int carB, CoupleEnd endB,
+                             HoseAndCock a, HoseAndCock b, bool playAudio)
+    {
+        Coupler? mine = LiveCoupler(carA, endA);
+        Coupler? theirs = LiveCoupler(carB, endB);
+        if (mine != null && theirs != null) mine.ConnectAirHose(theirs, playAudio);
+        else a.Connect(b);
+    }
+
+    private void DisconnectHose(int carId, CoupleEnd end, HoseAndCock hose, bool playAudio)
+    {
+        Coupler? coupler = LiveCoupler(carId, end);
+        if (coupler != null) coupler.DisconnectAirHose(playAudio);
+        else hose.Disconnect();
+    }
+
+    private Coupler? LiveCoupler(int carId, CoupleEnd end)
+    {
+        try
+        {
+            if (!_trains.TryGetLiveCar(carId, out TrainCar car) || car == null) return null;
+            return end == CoupleEnd.Front ? car.frontCoupler : car.rearCoupler;
         }
         catch
         {
