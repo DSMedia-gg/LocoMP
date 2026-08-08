@@ -44,6 +44,11 @@ internal static class SteamPresence
     private static ulong? _pendingJoin;
     private static bool _installed;
 
+    /// <summary>True once the overlay-join hook is live. False after a too-early Install — the
+    /// retry loop in Main.OnUpdate keys off this (R5-1: DV initialises Steamworks ASYNC, frames
+    /// AFTER mods load, so the load-time Install silently missed on every normal launch).</summary>
+    public static bool Installed => _installed;
+
     /// <summary>Steam up (game launched through it) AND the Facepunch layer initialized. False on a
     /// Steam-less launch — every caller degrades to the UDP-only behaviour.</summary>
     public static bool Available

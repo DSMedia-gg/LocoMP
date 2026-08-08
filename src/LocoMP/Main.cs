@@ -21,6 +21,8 @@ public static class Main
     private static SessionViewModel? _viewModel;
     private static LocoMpUi? _ui;
     private static bool _active;
+    private static double _presenceRetryAccum;
+    private static int _presenceRetries;
     private static string _extractStatus = "";
     private static string _careerStatus = "";
     private static bool _demoSignal;
@@ -112,6 +114,21 @@ public static class Main
         modEntry.OnUpdate = (_, dt) =>
         {
             if (!_active) return;
+            // R5-1: DV brings Steamworks up ASYNC a few frames after mods load, so the load-time
+            // Install above silently missed on every normal Steam launch (live-proven: the mod
+            // toggle was the only thing that ever installed presence). Retry on a slow cadence
+            // until it lands; a Steam-less launch stops trying after ~90 s.
+            if (!LocoMP.Net.SteamPresence.Installed && _presenceRetries < 45)
+            {
+                _presenceRetryAccum += dt;
+                if (_presenceRetryAccum >= 2)
+                {
+                    _presenceRetryAccum = 0;
+                    _presenceRetries++;
+                    LocoMP.Net.SteamPresence.Install(log);
+                    if (LocoMP.Net.SteamPresence.Installed) LocoMP.Net.SteamPresence.SetIdlePresence();
+                }
+            }
             _session?.Update(dt);
             _ui?.Tick(dt);
         };
